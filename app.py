@@ -28,6 +28,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -40,6 +41,32 @@ from fpdf.fonts import FontFace
 
 TITULO_APP = "Panel Oportunidades"
 SUBTITULO_APP = "Convenio Marco · Comercial Emergenza"
+
+# Enlaces que trae la app cargados de fabrica. Los dos campos son editables:
+# se pueden reemplazar por los de otra institucion o de otra carpeta.
+URL_HOJA_POR_DEFECTO = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1p21tCkxOOgdW9LU-5p6lD8FhY7SdSMc5Ee1zYoofH4A/edit"
+)
+URL_OFERTAS_POR_DEFECTO = (
+    "https://drive.google.com/drive/folders/1jpbagaEvCcHyrssATVe-CwdXXQOTLwN3"
+)
+
+# En esa carpeta de Drive siempre hay un archivo cuyo nombre contiene esta
+# palabra: es el catalogo de ofertas de la semana (misma regla que usa el
+# Panel Armada en Code.gs con CONFIG.OFERTAS_PATRON).
+PATRON_OFERTAS = "OFERTAS"
+
+# Datos de la empresa que van en la cabecera del PDF.
+EMPRESA = {
+    "razon": "Comercial Emergenza SpA",
+    "rut": "77.082.051-0",
+    "direccion": "Bodega: Av. Calera de Tango, Paradero 9 Parcela 11A, Bodega 1C",
+}
+
+# Azules del formato de cotizacion (los del documento que ya usa Serling).
+AZUL_BARRA = (11, 99, 176)
+AZUL_TABLA = (47, 134, 203)
 
 CARPETA = Path(__file__).parent
 RUTA_LOGO = CARPETA / "LogoVec.png"
@@ -72,7 +99,10 @@ ESTADOS = ["CON STOCK", "SIN STOCK", "NO LO TENGO", "TODOS"]
 # Variantes aceptadas de cada encabezado. Se comparan normalizadas (sin tildes,
 # sin espacios, sin puntos), asi que "p. min", "P.MIN" y " P Min " son lo mismo.
 ALIAS_COLUMNAS: dict[str, list[str]] = {
-    "ID":                 ["ID", "IDPRODUCTO", "CODIGO", "COD", "SKU", "IDCONVENIO"],
+    # "ID REGIÓN CM" e "ID CONVENIO REGIÓN" son los nombres que usa el catalogo
+    # de ofertas semanales; el resto vienen de la hoja de compras.
+    "ID":                 ["ID", "IDPRODUCTO", "CODIGO", "COD", "SKU", "IDCONVENIO",
+                           "IDREGIONCM", "IDCONVENIOREGION", "IDREGION", "IDCM"],
     "PRODUCTO":           ["PRODUCTO", "PRODUCTOS", "NOMBREPRODUCTO", "DESCRIPCION", "DETALLE", "ARTICULO"],
     "MONTO":              ["MONTO", "MONTOTOTAL", "MONTOVENDIDO", "VENTA", "TOTAL"],
     "P.MIN":              ["PMIN", "PRECIOMIN", "PMINIMO", "PRECIOMINIMO"],
@@ -98,7 +128,11 @@ FIRMA = {
     "empresa": "Comercial Emergenza",
     "fono": "+56 9 8126 5224",
     "correo": "svera@emergenza.cl",
+    "correo_alt": "serlingvera@gmail.com",
 }
+
+# Cuentas desde las que Serling puede enviar el correo.
+CORREOS_ENVIO = ["svera@emergenza.cl", "serlingvera@gmail.com"]
 
 ASUNTO_CORREO = "ID disponibles en Convenio Marco | Comercial Emergenza"
 
@@ -177,6 +211,15 @@ def mapear_columnas(df: pd.DataFrame) -> dict[str, int]:
         canonico = INDICE_ALIAS.get(normalizar(nombre))
         if canonico and canonico not in encontradas:   # gana la primera aparicion
             encontradas[canonico] = posicion
+
+    # Respaldo para el ID: cualquier encabezado que empiece con "ID" sirve
+    # ("ID REGIÓN CM", "ID CONVENIO REGIÓN", "ID producto"...).
+    if "ID" not in encontradas:
+        for posicion, nombre in enumerate(df.columns):
+            if normalizar(nombre).startswith("ID"):
+                encontradas["ID"] = posicion
+                break
+
     return encontradas
 
 
@@ -235,8 +278,13 @@ def extraer_gid(url: str) -> str | None:
     return coincidencia.group(1) if coincidencia else None
 
 
-def _descargar(url: str) -> bytes:
-    """Descarga bytes desde una URL y traduce los errores a mensajes claros."""
+def _descargar(url: str, permitir_html: bool = False) -> bytes:
+    """Descarga bytes desde una URL y traduce los errores a mensajes claros.
+
+    `permitir_html=True` para las paginas que SI son HTML (el listado de una
+    carpeta de Drive); en el resto, recibir HTML significa que Google devolvio
+    la pantalla de inicio de sesion.
+    """
     peticion = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(peticion, timeout=60) as respuesta:
@@ -255,7 +303,7 @@ def _descargar(url: str) -> bytes:
         raise ConnectionError(f"No se pudo conectar con Google: {error.reason}") from error
 
     # Si la hoja es privada, Google devuelve la pagina HTML de inicio de sesion.
-    if contenido[:200].lstrip().lower().startswith((b"<html", b"<!doctype")):
+    if not permitir_html and contenido[:200].lstrip().lower().startswith((b"<html", b"<!doctype")):
         raise PermissionError(
             "La hoja no es pública: Google devolvió la pantalla de inicio de sesión. "
             "Compártela con 'Cualquier persona con el enlace'."
@@ -337,15 +385,90 @@ def cargar_libro_por_api(credenciales_json: str, url_o_id: str) -> dict[str, pd.
 # 4. CATALOGO DE OFERTAS SEMANALES
 # ===========================================================================
 
-@st.cache_data(ttl=300, show_spinner="Leyendo el catálogo de ofertas...")
-def cargar_ofertas(url: str) -> dict[str, float]:
-    """Devuelve {ID de producto: precio oferta} leyendo el catalogo de la semana.
+def extraer_id_carpeta(url: str) -> str | None:
+    """Saca el ID de una carpeta de Drive, si el enlace es de una carpeta."""
+    coincidencia = re.search(r"/folders/([a-zA-Z0-9_-]+)", url or "")
+    return coincidencia.group(1) if coincidencia else None
 
-    Recorre TODAS las pestañas del catalogo (suelen venir separadas por rubro o
-    region) y se queda con las que tengan una columna de ID y una de precio.
+
+def fecha_del_nombre(nombre: str) -> tuple[int, int, int]:
+    """Ultima fecha dd-mm-aaaa escrita en el nombre del archivo, para ordenar.
+
+    "OFERTAS 11-08 AL 14-08-2026 (...)" -> (2026, 8, 14)
     """
+    fechas = re.findall(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", nombre)
+    if not fechas:
+        return (0, 0, 0)
+    dia, mes, año = max(fechas, key=lambda f: (int(f[2]), int(f[1]), int(f[0])))
+    return (int(año), int(mes), int(dia))
+
+
+@st.cache_data(ttl=300, show_spinner="Buscando el catálogo de ofertas más reciente...")
+def descargar_ofertas_de_carpeta(id_carpeta: str) -> tuple[str, bytes]:
+    """Busca en la carpeta de Drive el archivo de ofertas mas nuevo y lo baja.
+
+    La carpeta debe estar compartida como "cualquiera con el enlace". Se listan
+    sus archivos con la vista publica de Drive (no hace falta cuenta ni API).
+    """
+    html = _descargar(
+        f"https://drive.google.com/embeddedfolderview?id={id_carpeta}#list",
+        permitir_html=True,
+    ).decode("utf-8", "replace")
+
+    entradas = re.findall(
+        r'<div class="flip-entry" id="entry-([^"]+)".*?flip-entry-title">([^<]+)</div>',
+        html, re.S,
+    )
+    if not entradas:
+        raise FileNotFoundError(
+            "No se pudo ver el contenido de la carpeta. Compártela con "
+            "'Cualquier persona con el enlace' (Lector)."
+        )
+
+    candidatos = [(fid, nombre) for fid, nombre in entradas
+                  if PATRON_OFERTAS in normalizar(nombre)]
+    if not candidatos:
+        disponibles = ", ".join(nombre for _, nombre in entradas[:6])
+        raise FileNotFoundError(
+            f"En la carpeta no hay ningún archivo con la palabra «{PATRON_OFERTAS}» "
+            f"en el nombre. Encontré: {disponibles}"
+        )
+
+    candidatos.sort(key=lambda par: fecha_del_nombre(par[1]), reverse=True)
+    id_archivo, nombre_archivo_ofertas = candidatos[0]
+    contenido = _descargar(
+        f"https://drive.google.com/uc?export=download&id={id_archivo}", permitir_html=True
+    )
+
+    # Si Drive devolvio HTML es porque el archivo es una hoja de calculo de
+    # Google (no un .xlsx subido): esas se bajan por el enlace de exportacion.
+    if contenido[:4] != b"PK\x03\x04":
+        contenido = _descargar(
+            f"https://docs.google.com/spreadsheets/d/{id_archivo}/export?format=xlsx"
+        )
+    return nombre_archivo_ofertas, contenido
+
+
+@st.cache_data(ttl=300, show_spinner="Leyendo el catálogo de ofertas...")
+def cargar_ofertas(url: str) -> tuple[dict[str, float], str]:
+    """Devuelve ({ID de producto: precio oferta}, nombre de la fuente).
+
+    Acepta las dos formas: el enlace de la CARPETA de Drive (busca sola el
+    archivo de ofertas mas reciente) o el enlace directo de una hoja.
+    Recorre TODAS las pestañas (ALIMENTOS, ASEO, EMERGENCIAS...) y se queda con
+    las que tengan una columna de ID y una de precio.
+    """
+    id_carpeta = extraer_id_carpeta(url)
+    if id_carpeta:
+        fuente, contenido = descargar_ofertas_de_carpeta(id_carpeta)
+        hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None, dtype=str)
+        hojas = {nombre: hoja.fillna("") for nombre, hoja in hojas.items()}
+    else:
+        hojas = cargar_libro_por_enlace(url)
+        fuente = "catálogo compartido por enlace"
+
     precios: dict[str, float] = {}
-    for grilla in cargar_libro_por_enlace(url).values():
+    for grilla in hojas.values():
         datos = aplicar_encabezado(grilla)
         if datos.empty:
             continue
@@ -359,7 +482,7 @@ def cargar_ofertas(url: str) -> dict[str, float]:
             valor = a_numero(precio)
             if clave and valor:
                 precios.setdefault(clave, valor)
-    return precios
+    return precios, fuente
 
 
 # ===========================================================================
@@ -541,78 +664,112 @@ def _limpiar_pdf(texto) -> str:
     return salida.encode("latin-1", "replace").decode("latin-1")
 
 
-class _Cotizacion(FPDF):
-    """PDF con la cabecera y el pie de Comercial Emergenza."""
-
-    def header(self) -> None:
-        if RUTA_LOGO.exists():
-            self.image(str(RUTA_LOGO), x=14, y=9, w=38)
-        self.set_xy(60, 12)
-        self.set_font("Helvetica", "B", 15)
-        self.set_text_color(36, 51, 63)                       # azul pizarra
-        self.cell(0, 8, _limpiar_pdf("ID DISPONIBLES EN CONVENIO MARCO"), align="R")
-        self.set_xy(60, 20)
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(120, 130, 140)
-        self.cell(0, 5, _limpiar_pdf(f"Emitido el {datetime.now():%d-%m-%Y}"), align="R")
-        self.set_draw_color(193, 48, 63)                      # rojo Emergenza
-        self.set_line_width(0.8)
-        self.line(14, 30, 196, 30)
-        self.set_y(36)
-
-    def footer(self) -> None:
-        self.set_y(-20)
-        self.set_draw_color(210, 216, 222)
-        self.set_line_width(0.2)
-        self.line(14, self.get_y(), 196, self.get_y())
-        self.set_y(-16)
-        self.set_font("Helvetica", "", 8)
-        self.set_text_color(120, 130, 140)
-        pie = (f"{FIRMA['nombre']} · {FIRMA['cargo']} · {FIRMA['empresa']} · "
-               f"{FIRMA['fono']} · {FIRMA['correo']}")
-        self.cell(0, 4, _limpiar_pdf(pie), align="C")
-        self.ln(4)
-        self.cell(0, 4, _limpiar_pdf(f"Página {self.page_no()}"), align="C")
+TITULO_PDF = "ID DISPONIBLE SEGÚN HISTÓRICO"
 
 
-def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str,
-          precios_oferta: dict[str, float]) -> bytes:
-    """Genera la cotizacion: ID, producto y precio de oferta de la semana."""
-    pdf = _Cotizacion()
-    pdf.set_auto_page_break(auto=True, margin=25)
+def numero_cotizacion_sugerido() -> str:
+    """Correlativo con el mismo formato que usa Serling: 3007-001 (dia+mes)."""
+    return f"{datetime.now():%d%m}-001"
+
+
+def _barra(pdf: FPDF, texto: str, alto: float = 9, tamaño: float = 11,
+           alineacion: str = "C") -> None:
+    """Franja azul de ancho completo con el texto en blanco."""
+    pdf.set_fill_color(*AZUL_BARRA)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", tamaño)
+    pdf.cell(0, alto, _limpiar_pdf(texto), align=alineacion, fill=True,
+             new_x="LMARGIN", new_y="NEXT")
+
+
+def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str, linea_producto: str,
+          numero: str, precios_oferta: dict[str, float]) -> bytes:
+    """Genera el documento 'ID disponible según histórico'.
+
+    Respeta el formato de cotizacion que Comercial Emergenza ya usa (franja
+    azul con el titulo, datos de la empresa, bloque ENVIAR A y franja de
+    despacho), pero SIN cantidades, precios totales ni totalizacion: es un
+    listado de ID disponibles, no una cotizacion cerrada.
+    """
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(12, 10, 12)
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # --- Datos del destinatario ------------------------------------------
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(40, 40, 40)
-    encabezado = []
-    if institucion.strip():
-        encabezado.append(f"Institución: {institucion.strip()}")
-    if contacto.strip():
-        encabezado.append(f"Contacto: {contacto.strip()}")
-    for linea in encabezado:
-        pdf.cell(0, 5, _limpiar_pdf(linea), new_x="LMARGIN", new_y="NEXT")
-    if encabezado:
-        pdf.ln(2)
-
-    pdf.set_font("Helvetica", "", 9.5)
-    pdf.multi_cell(0, 5, _limpiar_pdf(
-        "Detalle de los ID que Comercial Emergenza tiene disponibles para su compra "
-        "en Convenio Marco, seleccionados según sus últimas compras."
-    ))
+    # --- 1) Franja del titulo ---------------------------------------------
+    _barra(pdf, TITULO_PDF, alto=10, tamaño=13)
     pdf.ln(3)
 
-    # --- Tabla -------------------------------------------------------------
+    # --- 2) Datos de la empresa (izquierda) y del documento (derecha) ------
+    y_bloque = pdf.get_y()
+    if RUTA_LOGO.exists():
+        pdf.image(str(RUTA_LOGO), x=12, y=y_bloque, w=34)
+
+    # El logo mide ~19 mm de alto con w=34: el texto arranca despues de eso.
+    pdf.set_xy(12, y_bloque + 21)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(60, 60, 60)
+    for linea in (EMPRESA["razon"], EMPRESA["rut"], EMPRESA["direccion"],
+                  f"Contacto: {FIRMA['fono']}",
+                  f"{FIRMA['correo']} / {FIRMA['correo_alt']}"):
+        pdf.set_x(12)
+        pdf.cell(120, 3.8, _limpiar_pdf(linea), new_x="LMARGIN", new_y="NEXT")
+
+    validez = datetime.now() + pd.Timedelta(days=60)
+    datos_documento = [
+        ("N° Cotización", numero.strip() or numero_cotizacion_sugerido()),
+        ("Fecha", f"{datetime.now():%d-%m-%Y}"),
+        ("Validez", f"{validez:%d-%m-%Y}"),
+    ]
+    pdf.set_font("Helvetica", "", 8)
+    for i, (etiqueta, valor) in enumerate(datos_documento):
+        pdf.set_xy(135, y_bloque + 21 + i * 4.5)
+        pdf.set_text_color(60, 60, 60)
+        pdf.cell(32, 4, _limpiar_pdf(etiqueta))
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(31, 4, _limpiar_pdf(valor), align="R")
+
+    # Linea de sangria entre los correos y la franja ENVIAR A.
+    pdf.set_y(max(pdf.get_y() + 5, y_bloque + 45))
+
+    # --- 3) A quien va dirigido -------------------------------------------
+    _barra(pdf, "  ENVIAR A:", alto=6, tamaño=8.5, alineacion="L")
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(60, 60, 60)
+    for etiqueta, valor in (("CLIENTE:", institucion), ("PRODUCTO", linea_producto)):
+        if not str(valor).strip():
+            continue
+        pdf.set_x(20)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.set_text_color(90, 90, 90)
+        pdf.cell(40, 5, _limpiar_pdf(etiqueta))
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(0, 5, _limpiar_pdf(str(valor).strip().upper()),
+                 new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- 4) Tabla de productos --------------------------------------------
+    # Solo ID, articulo y el precio cuando el producto esta en la oferta de la
+    # semana: este documento muestra disponibilidad, no cotiza cantidades.
+    pdf.set_fill_color(255, 255, 255)      # si no, las filas heredan el azul de las franjas
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_font("Helvetica", "", 8)
     with pdf.table(
-        col_widths=(20, 62, 18),
+        col_widths=(24, 132, 30),
         text_align=("CENTER", "LEFT", "RIGHT"),
-        headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=(36, 51, 63)),
-        line_height=5,
-        padding=1.5,
+        headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=AZUL_TABLA),
+        cell_fill_color=(238, 243, 248),
+        cell_fill_mode="ROWS",
+        line_height=4.5,
+        padding=1.2,
+        borders_layout="MINIMAL",
     ) as tabla_pdf:
         fila = tabla_pdf.row()
-        for titulo in ("ID", "PRODUCTO", "PRECIO OFERTA"):
-            fila.cell(titulo)
+        for titulo in ("ID", "ARTÍCULO", "PRECIO OFERTA"):
+            fila.cell(_limpiar_pdf(titulo))
+
         for _, registro in tabla.iterrows():
             id_producto = str(registro.get("ID", "")).strip()
             precio = precios_oferta.get(id_producto)
@@ -621,13 +778,18 @@ def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str,
             fila.cell(_limpiar_pdf(registro.get("PRODUCTO", "")))
             fila.cell(_limpiar_pdf(pesos(precio) if precio else "-"))
 
-    # --- Nota al pie -------------------------------------------------------
+    # --- 5) Pie ------------------------------------------------------------
     pdf.ln(4)
-    pdf.set_font("Helvetica", "I", 8)
+    _barra(pdf, "DESPACHO INCLUIDO", alto=7, tamaño=9.5)
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 7.5)
     pdf.set_text_color(120, 130, 140)
-    pdf.multi_cell(0, 4, _limpiar_pdf(
-        "Precios de la oferta semanal vigente, sujetos a disponibilidad de stock. "
-        "Los productos sin precio se cotizan a solicitud."
+    pdf.multi_cell(0, 3.6, _limpiar_pdf(
+        "ID disponibles en Convenio Marco seleccionados según el histórico de compras "
+        f"de {institucion.strip() or 'la institución'}. Precios de la oferta semanal "
+        "vigente, sujetos a disponibilidad de stock; los productos sin precio se "
+        f"cotizan a solicitud. Contacto: {FIRMA['nombre']}, {FIRMA['cargo']}, "
+        f"{FIRMA['fono']}."
     ))
 
     return bytes(pdf.output())
@@ -643,6 +805,25 @@ def nombre_archivo(informe: str, pestana: str, estado: str, extension: str) -> s
 # ===========================================================================
 # 8. CORREO LISTO PARA COPIAR
 # ===========================================================================
+
+def enlace_gmail(remitente: str, para: str, copia: str, asunto: str, cuerpo: str) -> str:
+    """Enlace que abre Gmail con el correo ya redactado en la cuenta elegida.
+
+    `authuser` es lo que hace que Gmail lo abra desde svera@emergenza.cl o
+    desde serlingvera@gmail.com. El PDF se adjunta a mano: ninguna pagina web
+    puede adjuntar archivos a Gmail por seguridad del navegador.
+    """
+    partes = [
+        f"authuser={quote(remitente)}",
+        "view=cm", "fs=1",
+        f"to={quote(para.strip())}",
+        f"su={quote(asunto)}",
+        f"body={quote(cuerpo)}",
+    ]
+    if copia.strip():
+        partes.append(f"cc={quote(copia.strip())}")
+    return "https://mail.google.com/mail/u/?" + "&".join(partes)
+
 
 def texto_correo(contacto: str, institucion: str, cantidad: int) -> str:
     """Redacta el correo con el mismo tono de los envios semanales."""
@@ -746,15 +927,18 @@ def origen_de_datos() -> tuple[str, str]:
         izquierda, derecha = st.columns(2)
         hoja = izquierda.text_input(
             "URL del Google Sheet (análisis de compras)",
+            value=URL_HOJA_POR_DEFECTO,
             key="url_hoja",
-            placeholder="https://docs.google.com/spreadsheets/d/ID_HOJA/edit",
+            help="Viene cargada la hoja de la Escuela Naval. Puedes reemplazarla por "
+                 "la de otra institución cuando quieras.",
         )
         catalogo = derecha.text_input(
-            "URL del catálogo de ofertas de la semana",
+            "Carpeta (o enlace) del catálogo de ofertas",
+            value=URL_OFERTAS_POR_DEFECTO,
             key="url_ofertas",
-            placeholder="Opcional: para el precio oferta del PDF",
-            help="Comparte el archivo de ofertas con 'Cualquiera con el enlace' y pégalo aquí. "
-                 "La app cruza los ID para poner el precio en la cotización.",
+            help="Viene cargada tu carpeta de ofertas de Drive: la app busca sola el "
+                 "archivo «OFERTAS» más reciente y cruza los ID para poner el precio "
+                 "en la cotización. También acepta el enlace directo de una hoja.",
         )
     return hoja.strip(), catalogo.strip()
 
@@ -854,12 +1038,18 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             return
 
         c1, c2 = st.columns(2)
-        institucion = c1.text_input("Institución", value=pestana, key=f"inst_{clave}")
+        institucion = c1.text_input("Cliente (institución)", value=pestana, key=f"inst_{clave}")
         contacto = c2.text_input("Nombre del contacto", key=f"cont_{clave}",
                                  placeholder="Ej: Claudia Inzunza")
-        c3, c4 = st.columns(2)
-        para = c3.text_input("Para", key=f"para_{clave}", placeholder="correo@institucion.cl")
-        copia = c4.text_input("Copia (CC)", key=f"cc_{clave}", placeholder="otro@correo.cl")
+        c3, c4 = st.columns([2, 1])
+        linea_producto = c3.text_input("Producto (línea del documento)", key=f"prod_{clave}",
+                                       placeholder="Ej: CAJAS DE ALIMENTOS")
+        numero = c4.text_input("N° Cotización", value=numero_cotizacion_sugerido(),
+                               key=f"num_{clave}")
+        c5, c6, c7 = st.columns(3)
+        remitente = c5.selectbox("Enviar desde", CORREOS_ENVIO, key=f"desde_{clave}")
+        para = c6.text_input("Para", key=f"para_{clave}", placeholder="correo@institucion.cl")
+        copia = c7.text_input("Copia (CC)", key=f"cc_{clave}", placeholder="otro@correo.cl")
 
         con_precio = sum(1 for i in seleccionados.get("ID", []) if str(i).strip() in precios_oferta)
         if precios_oferta:
@@ -869,25 +1059,40 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             st.caption("Sin catálogo de ofertas cargado: el PDF saldrá sin precios. "
                        "Pega el enlace del catálogo arriba para incluirlos.")
 
-        st.download_button(
-            f"⬇️ Descargar PDF con {len(seleccionados)} productos",
-            data=a_pdf(seleccionados, institucion, contacto, precios_oferta),
-            file_name=nombre_archivo("ID-disponibles", institucion, str(len(seleccionados)), "pdf"),
+        cuerpo = texto_correo(contacto, institucion, len(seleccionados))
+
+        boton_pdf, boton_envio = st.columns(2)
+        boton_pdf.download_button(
+            f"⬇️ 1. Descargar PDF ({len(seleccionados)} productos)",
+            data=a_pdf(seleccionados, institucion, contacto, linea_producto,
+                       numero, precios_oferta),
+            file_name=nombre_archivo("ID-disponible-segun-historico", institucion,
+                                     numero or str(len(seleccionados)), "pdf"),
             mime="application/pdf",
+            width="stretch",
             key=f"pdf_{clave}",
         )
-
-        st.markdown("**Correo listo para copiar y pegar en Gmail:**")
         if para.strip():
-            st.text("Para:")
-            st.code(para.strip(), language=None)
-        if copia.strip():
-            st.text("Copia:")
-            st.code(copia.strip(), language=None)
-        st.text("Asunto:")
-        st.code(ASUNTO_CORREO, language=None)
-        st.text("Mensaje:")
-        st.code(texto_correo(contacto, institucion, len(seleccionados)), language=None)
+            boton_envio.link_button(
+                f"📧 2. Abrir correo en {remitente}",
+                url=enlace_gmail(remitente, para, copia, ASUNTO_CORREO, cuerpo),
+                width="stretch",
+                help="Abre Gmail con el mensaje ya escrito desde esa cuenta. "
+                     "Solo tienes que adjuntar el PDF y pulsar Enviar.",
+            )
+        else:
+            boton_envio.button("📧 2. Abrir correo", disabled=True, width="stretch",
+                               help="Escribe primero la dirección en «Para».",
+                               key=f"sin_para_{clave}")
+
+        st.caption("El PDF se adjunta a mano: por seguridad, ninguna página web puede "
+                   "adjuntar archivos a Gmail.")
+
+        with st.expander("Ver el texto del correo para copiarlo"):
+            st.text("Asunto:")
+            st.code(ASUNTO_CORREO, language=None)
+            st.text("Mensaje:")
+            st.code(cuerpo, language=None)
 
 
 # ===========================================================================
@@ -923,9 +1128,9 @@ def main() -> None:
     precios_oferta: dict[str, float] = {}
     if url_ofertas:
         try:
-            precios_oferta = cargar_ofertas(url_ofertas)
+            precios_oferta, fuente = cargar_ofertas(url_ofertas)
             if precios_oferta:
-                st.success(f"Catálogo de ofertas cargado: {len(precios_oferta)} precios encontrados.")
+                st.caption(f"✅ Catálogo de ofertas: **{fuente}** — {len(precios_oferta)} precios cargados.")
             else:
                 st.warning("El catálogo de ofertas se leyó, pero no se encontraron columnas "
                            "de ID y precio. Revisa que el archivo tenga esos encabezados.")
