@@ -134,7 +134,11 @@ FIRMA = {
 # Cuentas desde las que Serling puede enviar el correo.
 CORREOS_ENVIO = ["svera@emergenza.cl", "serlingvera@gmail.com"]
 
-ASUNTO_CORREO = "ID disponibles en Convenio Marco | Comercial Emergenza"
+def asunto_correo(institucion: str) -> str:
+    """«ID disponibles en Convenio Marco - Escuela Naval | Comercial Emergenza»."""
+    nombre = institucion.strip()
+    medio = f" - {nombre}" if nombre else ""
+    return f"ID disponibles en Convenio Marco{medio} | Comercial Emergenza"
 
 # Ambitos minimos de lectura para el Modo 2 (cuenta de servicio, en construccion).
 SCOPES_GOOGLE = [
@@ -795,6 +799,17 @@ def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str, linea_producto: 
     return bytes(pdf.output())
 
 
+def nombre_pdf(institucion: str, numero: str) -> str:
+    """Nombre del PDF: «Id Convenio Marco, Institución, Correlativo.pdf»."""
+    partes = [
+        "Id Convenio Marco",
+        institucion.strip() or "Institución",
+        numero.strip() or numero_cotizacion_sugerido(),
+    ]
+    limpias = [re.sub(r'[\\/:*?"<>|]', "", parte).strip() for parte in partes]
+    return ", ".join(limpias) + ".pdf"
+
+
 def nombre_archivo(informe: str, pestana: str, estado: str, extension: str) -> str:
     """Arma un nombre de archivo limpio para las descargas."""
     partes = [informe, pestana, estado]
@@ -825,8 +840,27 @@ def enlace_gmail(remitente: str, para: str, copia: str, asunto: str, cuerpo: str
     return "https://mail.google.com/mail/u/?" + "&".join(partes)
 
 
-def texto_correo(contacto: str, institucion: str, cantidad: int) -> str:
-    """Redacta el correo con el mismo tono de los envios semanales."""
+def nombre_institucion(pestana: str) -> str:
+    """Nombre de cliente a partir del nombre de la pestaña, sin el periodo.
+
+    "Escuela Naval 2026" y "Escuela Naval Ultimo Semestre 2" -> "Escuela Naval".
+    (El año y el semestre son la forma de Serling de nombrar las pestañas, no
+    parte del nombre de la institución.)
+    """
+    texto = str(pestana).strip()
+    texto = re.sub(r"(?i)\b(ultimo|último|primer|segundo|1er|2do)?\s*"
+                   r"(semestre|trimestre|periodo|período)\b", " ", texto)
+    texto = re.sub(r"\b(19|20)\d{2}\b", " ", texto)     # años completos
+    texto = re.sub(r"\s+\d{1,3}\s*$", " ", texto)       # restos del nombre recortado
+    return re.sub(r"\s{2,}", " ", texto).strip(" -–—,") or str(pestana).strip()
+
+
+def texto_correo(contacto: str, institucion: str, cantidad: int, remitente: str) -> str:
+    """Redacta el correo con el mismo tono de los envios semanales.
+
+    La firma lleva el correo desde el que se va a enviar, para que el comprador
+    responda a esa misma casilla.
+    """
     saludo = f"Estimado/a {contacto.strip()}, buen día." if contacto.strip() else "Estimados, buen día."
     de_quien = f" de {institucion.strip()}" if institucion.strip() else ""
     return "\n".join([
@@ -849,7 +883,7 @@ def texto_correo(contacto: str, institucion: str, cantidad: int) -> str:
         FIRMA["cargo"],
         FIRMA["empresa"],
         FIRMA["fono"],
-        FIRMA["correo"],
+        remitente.strip() or FIRMA["correo"],
     ])
 
 
@@ -862,9 +896,19 @@ def aplicar_estilos() -> None:
     st.markdown(
         f"""
         <style>
-        html, body, .stApp, button, input, textarea, select,
-        [class*="st-"], [data-testid="stMarkdownContainer"] {{
+        /* OJO: no incluir selectores amplios como [class*="st-"]: los iconos de
+           Streamlit son ligaduras de la fuente Material Symbols y, si se les
+           cambia la tipografia, se ven como texto ("keyboard_double_arrow_left")
+           montado sobre la pantalla. */
+        html, body, .stApp, button, input, textarea, select, label,
+        p, h1, h2, h3, h4, h5, h6, li, td, th,
+        [data-testid="stMarkdownContainer"] {{
             font-family: {TIPOGRAFIA} !important;
+        }}
+        /* Red de seguridad: los iconos siempre con su fuente propia. */
+        [data-testid="stIconMaterial"], span[class*="material-symbols"],
+        .material-symbols-rounded, [data-testid*="ToggleIcon"] {{
+            font-family: "Material Symbols Rounded" !important;
         }}
         /* Tarjetas: mismo azul pizarra que el panel de Apps Script */
         [data-testid="stVerticalBlockBorderWrapper"]:has(> div > div > [data-testid="stVerticalBlock"]) {{
@@ -1038,7 +1082,8 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             return
 
         c1, c2 = st.columns(2)
-        institucion = c1.text_input("Cliente (institución)", value=pestana, key=f"inst_{clave}")
+        institucion = c1.text_input("Cliente (institución)", value=nombre_institucion(pestana),
+                                    key=f"inst_{clave}")
         contacto = c2.text_input("Nombre del contacto", key=f"cont_{clave}",
                                  placeholder="Ej: Claudia Inzunza")
         c3, c4 = st.columns([2, 1])
@@ -1059,15 +1104,15 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             st.caption("Sin catálogo de ofertas cargado: el PDF saldrá sin precios. "
                        "Pega el enlace del catálogo arriba para incluirlos.")
 
-        cuerpo = texto_correo(contacto, institucion, len(seleccionados))
+        cuerpo = texto_correo(contacto, institucion, len(seleccionados), remitente)
+        asunto = asunto_correo(institucion)
 
         boton_pdf, boton_envio = st.columns(2)
         boton_pdf.download_button(
             f"⬇️ 1. Descargar PDF ({len(seleccionados)} productos)",
             data=a_pdf(seleccionados, institucion, contacto, linea_producto,
                        numero, precios_oferta),
-            file_name=nombre_archivo("ID-disponible-segun-historico", institucion,
-                                     numero or str(len(seleccionados)), "pdf"),
+            file_name=nombre_pdf(institucion, numero),
             mime="application/pdf",
             width="stretch",
             key=f"pdf_{clave}",
@@ -1075,7 +1120,7 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         if para.strip():
             boton_envio.link_button(
                 f"📧 2. Abrir correo en {remitente}",
-                url=enlace_gmail(remitente, para, copia, ASUNTO_CORREO, cuerpo),
+                url=enlace_gmail(remitente, para, copia, asunto, cuerpo),
                 width="stretch",
                 help="Abre Gmail con el mensaje ya escrito desde esa cuenta. "
                      "Solo tienes que adjuntar el PDF y pulsar Enviar.",
@@ -1090,7 +1135,7 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
 
         with st.expander("Ver el texto del correo para copiarlo"):
             st.text("Asunto:")
-            st.code(ASUNTO_CORREO, language=None)
+            st.code(asunto, language=None)
             st.text("Mensaje:")
             st.code(cuerpo, language=None)
 
