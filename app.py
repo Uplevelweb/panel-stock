@@ -821,6 +821,113 @@ def nombre_archivo(informe: str, pestana: str, estado: str, extension: str) -> s
 # 8. CORREO LISTO PARA COPIAR
 # ===========================================================================
 
+def urls_enviador() -> dict[str, str]:
+    """{cuenta: dirección del script enviador} desde los secrets de Streamlit.
+
+    Cada cuenta tiene su propio Apps Script (ver enviador-para-copiar.txt), que
+    envía el correo desde esa misma cuenta de Google. No hay contraseñas de
+    correo de por medio. En Streamlit ▸ Manage app ▸ Settings ▸ Secrets:
+
+        [correo]
+        clave_envio = "la misma clave que pusiste en los dos scripts"
+
+        [correo.scripts]
+        "svera@emergenza.cl" = "https://script.google.com/macros/s/XXXX/exec"
+        "serlingvera@gmail.com" = "https://script.google.com/macros/s/YYYY/exec"
+    """
+    try:
+        return {str(cuenta): str(url).strip()
+                for cuenta, url in dict(st.secrets["correo"]["scripts"]).items()
+                if str(url).strip()}
+    except Exception:
+        return {}
+
+
+def clave_envio() -> str:
+    """Clave que hay que escribir en la app para poder enviar (app publica)."""
+    try:
+        return str(st.secrets["correo"]["clave_envio"])
+    except Exception:
+        return ""
+
+
+def cuerpo_html(cuerpo: str, remitente: str, con_logo: bool) -> str:
+    """Versión con formato del correo, con la firma al pie como la de Gmail."""
+    parrafos = [p.strip() for p in cuerpo.split("Saludos cordiales,")[0].split("\n\n") if p.strip()]
+    texto = "".join(f"<p style='margin:0 0 12px'>{p}</p>" for p in parrafos)
+    logo = ("<img src='cid:logoemergenza' alt='Comercial Emergenza' "
+            "style='width:104px;display:block;margin-bottom:6px'>") if con_logo else ""
+    return f"""
+    <div style="font-family:Tahoma,Geneva,Verdana,sans-serif;font-size:14px;color:#222">
+      {texto}
+      <p style="margin:0 0 12px">Saludos cordiales,</p>
+      <table cellpadding="0" cellspacing="0" style="border-top:2px solid #C1303F;padding-top:10px">
+        <tr>
+          <td style="padding-right:14px;vertical-align:middle">{logo}</td>
+          <td style="vertical-align:middle;font-size:13px;line-height:1.45;color:#444">
+            <b style="color:#24333F;font-size:14px">{FIRMA['nombre']}</b><br>
+            {FIRMA['cargo']}<br>{FIRMA['empresa']}<br>{FIRMA['fono']}<br>
+            <a href="mailto:{remitente}" style="color:#C1303F">{remitente}</a>
+          </td>
+        </tr>
+      </table>
+    </div>
+    """
+
+
+def armar_envio(remitente: str, para: str, copia: str, asunto: str, cuerpo: str,
+                pdf: bytes, nombre_adjunto: str, clave: str) -> dict:
+    """Paquete de datos que recibe el Apps Script (el PDF viaja como texto)."""
+    hay_logo = RUTA_LOGO.exists()
+    envio = {
+        "clave": clave,
+        "para": para.strip(),
+        "cc": copia.strip(),
+        "asunto": asunto,
+        "cuerpo": cuerpo,
+        "cuerpoHtml": cuerpo_html(cuerpo, remitente, hay_logo),
+        "nombrePdf": nombre_adjunto,
+        "pdfBase64": base64.b64encode(pdf).decode(),
+        "nombreRemitente": FIRMA["nombre"],
+    }
+    if hay_logo:
+        envio["logoBase64"] = base64.b64encode(RUTA_LOGO.read_bytes()).decode()
+    return envio
+
+
+def enviar_por_script(url: str, envio: dict) -> dict:
+    """Manda el correo a través del Apps Script de esa cuenta.
+
+    El script responde en JSON: {"ok": true, "cuenta": ..., "para": ...} o
+    {"ok": false, "error": ...}.
+    """
+    peticion = urllib.request.Request(
+        url,
+        data=json.dumps(envio).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+    )
+    try:
+        with urllib.request.urlopen(peticion, timeout=90) as respuesta:
+            contenido = respuesta.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(
+            f"El enviador respondió con un error {error.code}. Revisa que la "
+            "implementación esté como «Ejecutar como: Yo» y «Quién tiene acceso: "
+            "Cualquier persona»."
+        ) from error
+    except urllib.error.URLError as error:
+        raise ConnectionError(f"No se pudo contactar al enviador: {error.reason}") from error
+
+    try:
+        return json.loads(contenido)
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            "El enviador no respondió como se esperaba. Suele pasar cuando la "
+            "dirección no termina en /exec o cuando falta implementar una versión "
+            "nueva del script."
+        )
+
+
 def enlace_gmail(remitente: str, para: str, copia: str, asunto: str, cuerpo: str) -> str:
     """Enlace que abre Gmail con el correo ya redactado en la cuenta elegida.
 
@@ -1107,31 +1214,67 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         cuerpo = texto_correo(contacto, institucion, len(seleccionados), remitente)
         asunto = asunto_correo(institucion)
 
+        pdf = a_pdf(seleccionados, institucion, contacto, linea_producto,
+                    numero, precios_oferta)
+        archivo_pdf = nombre_pdf(institucion, numero)
+        enviadores = urls_enviador()
+        automatico = remitente in enviadores and clave_envio()
+
         boton_pdf, boton_envio = st.columns(2)
         boton_pdf.download_button(
-            f"⬇️ 1. Descargar PDF ({len(seleccionados)} productos)",
-            data=a_pdf(seleccionados, institucion, contacto, linea_producto,
-                       numero, precios_oferta),
-            file_name=nombre_pdf(institucion, numero),
+            f"⬇️ Descargar PDF ({len(seleccionados)} productos)",
+            data=pdf,
+            file_name=archivo_pdf,
             mime="application/pdf",
             width="stretch",
             key=f"pdf_{clave}",
         )
-        if para.strip():
-            boton_envio.link_button(
-                f"📧 2. Abrir correo en {remitente}",
-                url=enlace_gmail(remitente, para, copia, asunto, cuerpo),
-                width="stretch",
-                help="Abre Gmail con el mensaje ya escrito desde esa cuenta. "
-                     "Solo tienes que adjuntar el PDF y pulsar Enviar.",
-            )
-        else:
-            boton_envio.button("📧 2. Abrir correo", disabled=True, width="stretch",
-                               help="Escribe primero la dirección en «Para».",
-                               key=f"sin_para_{clave}")
 
-        st.caption("El PDF se adjunta a mano: por seguridad, ninguna página web puede "
-                   "adjuntar archivos a Gmail.")
+        if automatico:
+            # --- Envio con un clic (necesita las claves en los secrets) -----
+            with boton_envio:
+                clave_escrita = st.text_input(
+                    "Clave de envío", type="password", key=f"clave_{clave}",
+                    placeholder="Requerida: la app es pública")
+                enviar = st.button(f"📧 Enviar ahora desde {remitente}", width="stretch",
+                                   type="primary", disabled=not para.strip(),
+                                   key=f"enviar_{clave}")
+            if enviar:
+                if clave_escrita != clave_envio():
+                    st.error("Clave de envío incorrecta. El correo no se envió.")
+                else:
+                    try:
+                        with st.spinner("Enviando..."):
+                            envio = armar_envio(remitente, para, copia, asunto, cuerpo,
+                                                pdf, archivo_pdf, clave_escrita)
+                            respuesta = enviar_por_script(enviadores[remitente], envio)
+                        if respuesta.get("ok"):
+                            destinos = ", ".join(x for x in [respuesta.get("para"),
+                                                             respuesta.get("cc")] if x)
+                            st.success(
+                                f"✅ Enviado desde {respuesta.get('cuenta') or remitente} "
+                                f"a {destinos} con «{archivo_pdf}» adjunto. "
+                                "Queda copia en tus Enviados de Gmail.")
+                        else:
+                            st.error(f"El enviador no lo mandó: {respuesta.get('error')}")
+                    except Exception as error:
+                        st.error(f"No se pudo enviar: {error}")
+        else:
+            # --- Sin claves configuradas: se abre Gmail redactado ------------
+            if para.strip():
+                boton_envio.link_button(
+                    f"📧 Abrir correo en {remitente}",
+                    url=enlace_gmail(remitente, para, copia, asunto, cuerpo),
+                    width="stretch",
+                    help="Abre Gmail con el mensaje ya escrito. Adjunta el PDF y envía.",
+                )
+            else:
+                boton_envio.button("📧 Abrir correo", disabled=True, width="stretch",
+                                   help="Escribe primero la dirección en «Para».",
+                                   key=f"sin_para_{clave}")
+            st.caption("Envío con un clic desactivado para esta cuenta: falta instalar su "
+                       "script enviador y anotarlo en Streamlit ▸ Manage app ▸ Settings ▸ "
+                       "Secrets. Mientras tanto, el botón abre Gmail y adjuntas el PDF a mano.")
 
         with st.expander("Ver el texto del correo para copiarlo"):
             st.text("Asunto:")
