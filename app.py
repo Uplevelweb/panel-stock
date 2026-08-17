@@ -947,6 +947,110 @@ def enlace_gmail(remitente: str, para: str, copia: str, asunto: str, cuerpo: str
     return "https://mail.google.com/mail/u/?" + "&".join(partes)
 
 
+# --- Para decidir si el saludo va en masculino o femenino -------------------
+# Tratamientos que ya traen el genero puesto.
+TRATAMIENTOS = {
+    "SR": "M", "SENOR": "M", "DON": "M", "DR": "M", "DOCTOR": "M", "JEFE": "M",
+    "DIRECTOR": "M", "ENCARGADO": "M", "ADMINISTRADOR": "M",
+    "SRA": "F", "SENORA": "F", "SRTA": "F", "SENORITA": "F", "DONA": "F",
+    "DRA": "F", "DOCTORA": "F", "JEFA": "F", "DIRECTORA": "F", "ENCARGADA": "F",
+    "ADMINISTRADORA": "F", "CAPITANA": "F", "SARGENTA": "F",
+}
+
+# Grados y cargos sin genero: se saltan para buscar el nombre que viene despues.
+# Importa tenerlos completos: "Guardiamarina" termina en A y "Subteniente" en E,
+# asi que sin esta lista el saludo se equivocaria de genero.
+PALABRAS_NEUTRAS = {
+    # Armada
+    "GRUMETE", "MARINERO", "CONTRAMAESTRE", "GUARDIAMARINA", "SUBTENIENTE",
+    "CORBETA", "FRAGATA", "NAVIO", "CONTRAALMIRANTE", "VICEALMIRANTE",
+    "ALMIRANTE",
+    # Ejercito y comunes a las dos ramas
+    "SOLDADO", "CABO", "SARGENTO", "SUBOFICIAL", "ALFEREZ", "TENIENTE",
+    "CAPITAN", "MAYOR", "COMANDANTE", "CORONEL", "GENERAL", "BRIGADIER",
+    "OFICIAL", "PRIMERO", "SEGUNDO", "TERCERO", "PRIMER",
+    # Civiles
+    "ING", "INGENIERO", "INGENIERA", "CONTADOR", "CONTADORA", "ABOGADO",
+    "ABOGADA", "DE", "DEL", "LA", "LOS", "LAS",
+}
+
+# Nombres que la regla de la ultima letra no acierta.
+NOMBRES_M = {
+    "JOSE", "NICOLAS", "ANDRES", "MATIAS", "ELIAS", "TOMAS", "LUCAS", "JESUS",
+    "ISAIAS", "MACIAS", "LUIS", "JUAN", "CRISTIAN", "CHRISTIAN", "SEBASTIAN",
+    "BASTIAN", "IVAN", "NELSON", "WILSON", "VICTOR", "HECTOR", "NESTOR",
+    "OSCAR", "OMAR", "CESAR", "JAVIER", "MANUEL", "MIGUEL", "DANIEL",
+    "GABRIEL", "RAFAEL", "ARIEL", "ISRAEL", "ISMAEL", "JOEL", "ABEL", "ANGEL",
+    "EZEQUIEL", "EMANUEL", "JORGE", "FELIPE", "ENRIQUE", "VICENTE", "CLEMENTE",
+    "RENE", "CARLOS", "MARCOS", "RUBEN", "EFRAIN", "JOAQUIN", "AGUSTIN",
+    "MARTIN", "RAMON", "SIMON", "GERMAN", "FABIAN", "DAMIAN", "JULIAN",
+    "ADRIAN", "KEVIN", "BRAYAN", "JONATHAN", "ALEXIS", "YERKO", "ARTURO",
+    "HERNAN", "ESTEBAN", "GASTON", "MAURICIO", "PATRICIO", "IGNACIO",
+}
+NOMBRES_F = {
+    "CARMEN", "ISABEL", "RAQUEL", "INES", "BEATRIZ", "RUTH", "ESTER", "ESTHER",
+    "JUDITH", "MERCEDES", "DOLORES", "PILAR", "SOLEDAD", "MARISOL", "MARIBEL",
+    "ROCIO", "BELEN", "JAZMIN", "YASMIN", "KAREN", "INGRID", "ASTRID",
+    "MIRIAM", "MYRIAM", "JACQUELINE", "KATHERINE", "NICOLE", "MICHELLE",
+    "DENISSE", "ELIZABETH", "YANET", "JANET", "MILLARAY", "AYELEN", "YASNA",
+    "LISSETTE", "DAMARIS", "ABIGAIL", "NOEMI", "SARAI", "MARLEN", "MARLENE",
+    "MARIA", "MARIELA", "FABIOLA", "JAVIERA", "PAULINA", "VERONICA",
+    # Terminan en "o" pero son de mujer:
+    "LORETO", "CONSUELO", "ROSARIO", "AMPARO", "SOCORRO",
+}
+
+# Cuando el contacto es un área y no una persona, no se arriesga el género.
+PALABRAS_NO_NOMBRE = {
+    "DEPARTAMENTO", "DEPTO", "CENTRAL", "UNIDAD", "OFICINA", "SECCION",
+    "ABASTECIMIENTO", "ADQUISICIONES", "COMPRAS", "FINANZAS", "LOGISTICA",
+    "ALMACEN", "BODEGA", "CASINO", "RANCHO", "INTENDENCIA", "TESORERIA",
+    "CONTABILIDAD", "EQUIPO", "AREA", "SUBDIRECCION", "DIRECCION",
+}
+
+
+def genero_nombre(contacto: str) -> str:
+    """Devuelve "M", "F" o "" (cuando no se puede determinar).
+
+    Manda el PRIMER nombre, no el segundo: "María José" es de mujer y "José
+    María" de hombre. Un tratamiento explícito (Sra., Don, Directora...) gana
+    por sobre todo lo demás.
+    """
+    palabras = [normalizar(p) for p in str(contacto).split() if normalizar(p)]
+
+    # 1) Tratamientos: si aparece uno, ya está resuelto.
+    for palabra in palabras:
+        if palabra in TRATAMIENTOS:
+            return TRATAMIENTOS[palabra]
+
+    # 2) El primer nombre de verdad decide (los grados militares se saltan).
+    for palabra in palabras:
+        if palabra in PALABRAS_NEUTRAS or len(palabra) < 3:
+            continue
+        if palabra in PALABRAS_NO_NOMBRE:
+            return ""                      # es un área, no una persona
+        if palabra in NOMBRES_M:
+            return "M"
+        if palabra in NOMBRES_F:
+            return "F"
+        if palabra.endswith("A"):
+            return "F"
+        if palabra.endswith("O"):
+            return "M"
+        return ""                          # otras terminaciones: no arriesgar
+    return ""
+
+
+def saludo_correo(contacto: str) -> str:
+    """Saludo del correo. Sin nombre o con genero dudoso: «Estimados,»."""
+    nombre = str(contacto).strip()
+    genero = genero_nombre(nombre) if nombre else ""
+    if genero == "M":
+        return f"Estimado {nombre}, buen día."
+    if genero == "F":
+        return f"Estimada {nombre}, buen día."
+    return "Estimados, buen día."
+
+
 def nombre_institucion(pestana: str) -> str:
     """Nombre de cliente a partir del nombre de la pestaña, sin el periodo.
 
@@ -968,10 +1072,9 @@ def texto_correo(contacto: str, institucion: str, cantidad: int, remitente: str)
     La firma lleva el correo desde el que se va a enviar, para que el comprador
     responda a esa misma casilla.
     """
-    saludo = f"Estimado/a {contacto.strip()}, buen día." if contacto.strip() else "Estimados, buen día."
     de_quien = f" de {institucion.strip()}" if institucion.strip() else ""
     return "\n".join([
-        saludo,
+        saludo_correo(contacto),
         "",
         f"Le saluda {FIRMA['nombre']} de {FIRMA['empresa']}.",
         "",
@@ -1221,20 +1324,24 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             st.info("Selecciona en la tabla los productos que van en el PDF y el correo.")
             return
 
+        # autocomplete="off" en todos: si no, Chrome rellena solo el CC con la
+        # misma direccion que se escribio en Para.
         c1, c2 = st.columns(2)
         institucion = c1.text_input("Cliente (institución)", value=nombre_institucion(pestana),
-                                    key=f"inst_{clave}")
+                                    key=f"inst_{clave}", autocomplete="off")
         contacto = c2.text_input("Nombre del contacto", key=f"cont_{clave}",
-                                 placeholder="Ej: Claudia Inzunza")
+                                 placeholder="Ej: Claudia Inzunza", autocomplete="off")
         c3, c4 = st.columns([2, 1])
         linea_producto = c3.text_input("Producto (línea del documento)", key=f"prod_{clave}",
-                                       placeholder="Ej: CAJAS DE ALIMENTOS")
+                                       placeholder="Ej: CAJAS DE ALIMENTOS", autocomplete="off")
         numero = c4.text_input("N° Cotización", value=numero_cotizacion_sugerido(),
-                               key=f"num_{clave}")
+                               key=f"num_{clave}", autocomplete="off")
         c5, c6, c7 = st.columns(3)
         remitente = c5.selectbox("Enviar desde", CORREOS_ENVIO, key=f"desde_{clave}")
-        para = c6.text_input("Para", key=f"para_{clave}", placeholder="correo@institucion.cl")
-        copia = c7.text_input("Copia (CC)", key=f"cc_{clave}", placeholder="otro@correo.cl")
+        para = c6.text_input("Para", key=f"para_{clave}", placeholder="correo@institucion.cl",
+                             autocomplete="off")
+        copia = c7.text_input("Copia (CC)", key=f"cc_{clave}", placeholder="otro@correo.cl",
+                              autocomplete="off")
 
         con_precio = sum(1 for i in seleccionados.get("ID", []) if str(i).strip() in precios_oferta)
         if precios_oferta:
