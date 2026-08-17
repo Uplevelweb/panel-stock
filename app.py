@@ -1023,23 +1023,29 @@ def aplicar_estilos() -> None:
             border: 1px solid {COLOR['borde']};
             border-radius: 12px;
         }}
-        .cabecera {{
-            background: {COLOR['blanco']};
-            border-radius: 14px;
-            padding: 16px 20px 10px;
-            text-align: center;
-            margin-bottom: 14px;
+        /* El tamaño general (20% mas chico) se define en .streamlit/config.toml
+           con baseFontSize; aqui solo se ajusta el ancho y el aire de arriba. */
+        [data-testid="stMainBlockContainer"] {{
+            padding-top: 2.2rem;
+            max-width: 1500px;
         }}
-        .cabecera img {{ width: 186px; }}
+        /* Cabecera compacta: logo y titulo en una sola franja, con el filo rojo. */
+        .cabecera {{
+            display: flex; align-items: center; gap: 22px;
+            background: {COLOR['blanco']};
+            border-radius: 12px;
+            border-bottom: 4px solid {COLOR['rojo']};
+            padding: 12px 24px;
+            margin-bottom: 16px;
+        }}
+        .cabecera img {{ width: 132px; flex: none; }}
+        .cabecera-texto {{ line-height: 1.15; }}
         .titulo-panel {{
-            color: {COLOR['texto']}; text-align: center;
-            font-size: 34px; font-weight: bold; margin: 6px 0 0;
+            color: #24333F; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
-            color: {COLOR['texto_suave']}; text-align: center;
-            font-size: 14px; margin: 2px 0 18px;
+            color: #5A7089; font-size: 12.5px; margin-top: 2px;
         }}
-        .stTabs [data-baseweb="tab"] {{ font-size: 15px; font-weight: 600; }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1047,16 +1053,21 @@ def aplicar_estilos() -> None:
 
 
 def cabecera() -> None:
-    """Franja blanca con el logo, mas el titulo del panel."""
+    """Franja blanca con el logo a la izquierda y el titulo al lado."""
     if RUTA_LOGO.exists():
         logo = base64.b64encode(RUTA_LOGO.read_bytes()).decode()
         marca = f'<img src="data:image/png;base64,{logo}" alt="Comercial Emergenza">'
     else:
-        marca = (f'<div style="color:{COLOR["rojo"]};font-size:26px;font-weight:bold;'
+        marca = (f'<div style="color:{COLOR["rojo"]};font-size:20px;font-weight:bold;'
                  f'line-height:1.1">COMERCIAL<br>EMERGENZA</div>')
-    st.markdown(f'<div class="cabecera">{marca}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="titulo-panel">{TITULO_APP}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="subtitulo-panel">{SUBTITULO_APP}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="cabecera">{marca}'
+        f'<div class="cabecera-texto">'
+        f'<div class="titulo-panel">{TITULO_APP}</div>'
+        f'<div class="subtitulo-panel">{SUBTITULO_APP}</div>'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def panel_lateral_en_construccion() -> None:
@@ -1153,23 +1164,23 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
     col2.metric("Monto del período", pesos(total) or "$0")
     col3.metric("Compra recurrente", recurrentes)
 
-    # --- Tabla con casilla de seleccion ------------------------------------
-    st.caption(f"{pestana} — {estado}. Marca los productos que quieres incluir en el PDF.")
-    editable = tabla.copy()
-    editable.insert(0, "✓", False)
-    editada = st.data_editor(
-        editable,
+    # --- Tabla con seleccion de varias filas -------------------------------
+    st.caption(f"{pestana} — {estado}. Selecciona los productos para el PDF: clic en una fila, "
+               "y con **Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas.")
+    seleccion = st.dataframe(
+        tabla,
         width="stretch",
         hide_index=True,
-        disabled=[c for c in editable.columns if c != "✓"],
+        on_select="rerun",
+        selection_mode="multi-row",
         column_config={
-            "✓": st.column_config.CheckboxColumn("✓", help="Incluir en el PDF", width="small"),
             "PRODUCTO": st.column_config.TextColumn(width="large"),
             "COMENTARIO": st.column_config.TextColumn(width="large"),
         },
         key=f"tabla_{clave}",
     )
-    seleccionados = editada[editada["✓"]].drop(columns=["✓"]) if len(editada) else editada
+    filas = list(seleccion.selection.rows) if len(tabla) else []
+    seleccionados = tabla.iloc[filas] if filas else tabla.iloc[0:0]
 
     # --- Excel de todo lo filtrado ------------------------------------------
     st.download_button(
@@ -1185,7 +1196,7 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
     with st.container(border=True):
         st.markdown("##### 📄 Cotización y correo")
         if seleccionados.empty:
-            st.info("Marca con ✓ los productos de la tabla para generar el PDF y el correo.")
+            st.info("Selecciona en la tabla los productos que van en el PDF y el correo.")
             return
 
         c1, c2 = st.columns(2)
@@ -1326,15 +1337,7 @@ def main() -> None:
             st.warning(f"No se pudo leer el catálogo de ofertas: {error}")
 
     año_actual = datetime.now().year
-    informe_actual, informe_anterior = st.tabs(
-        [f"Informe 1 · Año actual ({año_actual})", f"Informe 2 · Período anterior ({año_actual - 1})"]
-    )
-
-    with informe_actual:
-        render_informe(libro, precios_oferta, f"Oportunidades-{año_actual}", año_actual, clave="actual")
-
-    with informe_anterior:
-        render_informe(libro, precios_oferta, f"Oportunidades-{año_actual - 1}", año_actual - 1, clave="anterior")
+    render_informe(libro, precios_oferta, f"Oportunidades-{año_actual}", año_actual, clave="unico")
 
 
 if __name__ == "__main__":
