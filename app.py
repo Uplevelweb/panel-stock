@@ -181,13 +181,14 @@ RUTA_CATALOGO_UNIDADES = CARPETA / "catalogo_unidades.csv"
 # proposito para que no pueda subirse por error a GitHub.
 RUTA_TICKET_LOCAL = Path.home() / "ticket-mp.txt"
 
-# Cuantos dias hacia atras barre la consulta. Cada dia es una consulta por
-# organismo, asi que este numero es el costo: 15 dias son 15 consultas.
-PERIODOS_MP = {
-    "Últimos 7 días": 7,
-    "Últimos 15 días": 15,
-    "Últimos 30 días": 30,
-}
+# El periodo se elige con un calendario, sin topes: cada dia es una consulta por
+# organismo, asi que el largo del rango ES el costo. Se comprobo que la API
+# responde al menos hasta enero de 2023 (salio «2950-28-CM23»).
+DIAS_INICIALES_MP = 15
+PRIMERA_FECHA_MP = date(2023, 1, 1)
+
+# A partir de aqui la consulta deja de ser instantanea y conviene avisarlo.
+CONSULTAS_QUE_DEMORAN = 120
 
 # Columnas del resultado, en este orden. Una fila por producto comprado.
 # La orden se llama "ORDEN" y no "OC" a proposito: en el panel de arriba "OC" es
@@ -1385,6 +1386,17 @@ def es_convenio_marco(codigo: str) -> bool:
     return len(tramos) >= 3 and tramos[-1].strip().upper().startswith("CM")
 
 
+def convenio_del_codigo(codigo: str) -> str:
+    """El convenio y su año: «2950-1975-CM25» -> «CM25».
+
+    Es el mismo ultimo tramo que dice que la orden es de Convenio Marco. El
+    numero es el año del convenio, no el de la compra: en un barrido de agosto
+    de 2026 aparecen ordenes CM25 y CM24 todavia vivas.
+    """
+    tramos = str(codigo).split("-")
+    return tramos[-1].strip().upper() if len(tramos) >= 3 else ""
+
+
 def unidad_del_codigo(codigo: str) -> str:
     """El primer tramo del codigo ES la unidad compradora: «2945-381-CM26» -> «2945».
 
@@ -2017,21 +2029,33 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
                       else por_region[por_region["nombre_organismo"] == organismo])
 
         busqueda = st.text_input(
-            "Buscar la unidad por nombre", key="mp_busqueda",
-            placeholder="Ej: escuela naval, hospital, municipalidad",
-            help="Se puede escribir sin tildes y en minúsculas.")
+            "Buscar por institución o unidad", key="mp_busqueda",
+            placeholder="Ej: escuela naval, municipalidad valparaíso, hospital",
+            help="Se puede escribir sin tildes, en minúsculas y con palabras sueltas.")
         if busqueda.strip():
-            patron = normalizar(busqueda)
-            candidatas = candidatas[candidatas["nombre_unidad"].map(
-                lambda nombre: patron in normalizar(nombre))]
+            # Dos cosas que parecen detalles y son la diferencia entre encontrar
+            # y no encontrar:
+            #  - Las palabras se buscan POR SEPARADO, no como frase pegada:
+            #    «servicio oceano» encuentra «SERVICIO HIDROGRÁFICO Y OCEANOGRÁFICO».
+            #  - Se busca tambien en el ORGANISMO: 16 de las 21 unidades de
+            #    municipios se llaman «Dirección de Salud» o «EDUCACION», asi que
+            #    «municipalidad valparaiso» no aparecia por ningun lado.
+            palabras = [p for p in (normalizar(t) for t in busqueda.split()) if p]
+            donde = candidatas["nombre_unidad"] + " " + candidatas["nombre_organismo"]
+            candidatas = candidatas[donde.map(
+                lambda texto: all(p in normalizar(texto) for p in palabras))]
 
-        # La comuna se omite cuando viene vacia, para no dejar el punto colgando.
-        etiquetas = {
-            fila.codigo_unidad: " · ".join(
-                parte for parte in (fila.nombre_unidad, fila.comuna,
-                                    f"{fila.oc_convenio_marco} OC") if parte)
-            for fila in candidatas.itertuples()
-        }
+        # El organismo se agrega cuando el nombre de la unidad no lo dice ya:
+        # sin eso, veinte municipios distintos se ven todos como «Dirección de
+        # Salud». La comuna se omite cuando viene vacia, para no dejar el punto
+        # colgando.
+        etiquetas = {}
+        for fila in candidatas.itertuples():
+            partes = [fila.nombre_unidad]
+            if normalizar(fila.nombre_organismo) not in normalizar(fila.nombre_unidad):
+                partes.append(fila.nombre_organismo)
+            partes += [fila.comuna, f"{fila.oc_convenio_marco} OC"]
+            etiquetas[fila.codigo_unidad] = " · ".join(p for p in partes if p)
 
         # Igual que la seleccion de filas de la tabla: si se cambia un filtro, las
         # unidades ya marcadas pueden dejar de estar entre las opciones. Se limpian
@@ -2052,21 +2076,43 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
                  "compra seguido.")
 
         # --- Periodo y costo de la consulta ---------------------------------
+        hoy = date.today()
         p1, p2 = st.columns([1, 2])
-        periodo = p1.selectbox("Período", list(PERIODOS_MP), index=1, key="mp_periodo")
-        hasta = date.today()
-        desde = hasta - timedelta(days=PERIODOS_MP[periodo] - 1)
+        elegido = p1.date_input(
+            "Período a consultar",
+            value=(hoy - timedelta(days=DIAS_INICIALES_MP - 1), hoy),
+            min_value=PRIMERA_FECHA_MP, max_value=hoy,
+            format="DD/MM/YYYY", key="mp_periodo",
+            help="Elige la fecha de inicio y la de término. Puedes ir hacia atrás "
+                 "hasta 2023, pero mientras más largo el período, más demora: "
+                 "cada día es una consulta.")
+
+        # Mientras elige la segunda fecha, el calendario devuelve una sola: hay
+        # que esperarla o la consulta saldria con un rango a medias.
+        fechas = list(elegido) if isinstance(elegido, (list, tuple)) else [elegido]
+        desde = fechas[0] if fechas else hoy
+        rango_listo = len(fechas) > 1
+        hasta = fechas[1] if rango_listo else desde
 
         elegidas_df = catalogo[catalogo["codigo_unidad"].isin(elegidas)]
         dias = len(dias_del_barrido(desde, hasta))
         organismos_distintos = elegidas_df["codigo_organismo"].nunique()
+        consultas = dias * organismos_distintos
         with p2:
-            st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**.")
-            if elegidas:
+            if not rango_listo:
+                st.caption("Elige también la fecha de término.")
+            elif elegidas:
                 st.caption(
-                    f"Son **{dias * organismos_distintos} consultas** para barrer el "
-                    f"período ({dias} días × {organismos_distintos} organismo/s), más "
-                    "una por cada orden que calce. El ticket permite 10.000 al día.")
+                    f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**: son **{consultas} "
+                    f"consultas** para barrer el período ({dias} días × "
+                    f"{organismos_distintos} organismo/s), más una por cada orden que "
+                    "calce. El ticket permite 10.000 al día.")
+                if consultas > CONSULTAS_QUE_DEMORAN:
+                    st.warning(
+                        f"Son {dias} días: la consulta puede demorar varios minutos y "
+                        "no hay que cerrar la página mientras avanza.")
+            else:
+                st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**.")
 
         if not hay_ticket:
             st.warning(
@@ -2075,7 +2121,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
 
         consultar = st.button(
             "🔎 Consultar Mercado Público", type="primary", width="stretch",
-            disabled=not elegidas or not hay_ticket, key="mp_consultar",
+            disabled=not elegidas or not hay_ticket or not rango_listo,
+            key="mp_consultar",
             help=None if elegidas else "Marca primero al menos una unidad.")
 
     # --- La consulta ---------------------------------------------------------
@@ -2120,6 +2167,24 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
     vista = tabla
     if solo_periodo:
         vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
+
+    # --- Filtro por convenio (el año del CM) --------------------------------
+    convenios = sorted({convenio_del_codigo(c) for c in vista["ORDEN"] if c}, reverse=True)
+    if len(convenios) > 1:
+        # Igual que con las unidades: al reconsultar otra institucion los
+        # convenios cambian, y hay que soltar los que ya no existen antes de
+        # dibujar el selector.
+        vigentes = [c for c in st.session_state.get("mp_convenio", convenios) if c in convenios]
+        st.session_state["mp_convenio"] = vigentes or convenios
+
+        elegidos = st.multiselect(
+            "Convenio", convenios, key="mp_convenio",
+            help="El año del Convenio Marco, sacado del código de cada orden. El "
+                 "barrido trae órdenes de convenios anteriores que siguen vivos.")
+        vista = vista[[convenio_del_codigo(c) in elegidos for c in vista["ORDEN"]]]
+        if vista.empty:
+            st.warning("No queda ninguna orden con esos convenios marcados.")
+            return
 
     if resumen.get("desde_real") and resumen.get("hasta_real"):
         st.caption(
