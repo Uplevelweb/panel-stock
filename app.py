@@ -762,7 +762,7 @@ def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str, linea_producto: 
     pdf.set_font("Helvetica", "", 8)
     with pdf.table(
         col_widths=(24, 132, 30),
-        text_align=("CENTER", "LEFT", "RIGHT"),
+        text_align=("CENTER", "LEFT", "CENTER"),
         headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=AZUL_TABLA),
         cell_fill_color=(238, 243, 248),
         cell_fill_mode="ROWS",
