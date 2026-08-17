@@ -1128,6 +1128,29 @@ def sugerir_pestana(nombres: list[str], año: int, año_actual: int) -> int:
     return 0
 
 
+def filas_seleccionadas(seleccion, total_filas: int) -> list[int]:
+    """Posiciones de las filas marcadas en la tabla, siempre limpias.
+
+    No se confia en el formato que devuelve el componente: se descarta lo que
+    no sea un numero y lo que quede fuera de rango. Eso ultimo pasa de verdad
+    cuando se marcan filas y despues se cambia el filtro o la pestaña: la
+    seleccion guardada apunta a posiciones que ya no existen.
+    """
+    crudas = getattr(getattr(seleccion, "selection", None), "rows", None) or []
+    if isinstance(crudas, (str, int, float)):
+        crudas = [crudas]
+
+    posiciones: list[int] = []
+    for valor in crudas:
+        try:
+            posicion = int(valor)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= posicion < total_filas and posicion not in posiciones:
+            posiciones.append(posicion)
+    return posiciones
+
+
 def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, float],
                    titulo: str, año: int, clave: str) -> None:
     """Un informe completo: pestaña, filtro, tabla, exportacion y correo."""
@@ -1179,8 +1202,7 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         },
         key=f"tabla_{clave}",
     )
-    filas = list(seleccion.selection.rows) if len(tabla) else []
-    seleccionados = tabla.iloc[filas] if filas else tabla.iloc[0:0]
+    seleccionados = tabla.iloc[filas_seleccionadas(seleccion, len(tabla))]
 
     # --- Excel de todo lo filtrado ------------------------------------------
     st.download_button(
