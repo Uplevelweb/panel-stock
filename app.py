@@ -1302,14 +1302,34 @@ def detalle_orden(codigo: str) -> dict:
     return listado[0] if listado else {}
 
 
-@st.cache_data(show_spinner=False)
-def cargar_catalogo_unidades() -> pd.DataFrame:
-    """Las unidades que compran por Convenio Marco (codigo, nombre, region...)."""
-    columnas = ["codigo_unidad", "nombre_unidad", "codigo_organismo",
-                "nombre_organismo", "region", "comuna", "oc_convenio_marco"]
-    if not RUTA_CATALOGO_UNIDADES.exists():
-        return pd.DataFrame(columns=columnas)
+COLUMNAS_CATALOGO = ["codigo_unidad", "nombre_unidad", "codigo_organismo",
+                     "nombre_organismo", "region", "comuna", "oc_convenio_marco"]
 
+
+def cargar_catalogo_unidades() -> pd.DataFrame:
+    """Las unidades que compran por Convenio Marco (codigo, nombre, region...).
+
+    OJO: la comprobacion de que el archivo existe va AFUERA de la cache, y la
+    lectura se guarda con la fecha del archivo como llave. Si no, pasa lo que
+    paso al publicar: la app arranco antes de que el CSV estuviera subido,
+    guardo "no existe" en una cache sin vencimiento y siguio diciendo que
+    faltaba el archivo aunque ya estaba. Con la fecha como llave, ademas, basta
+    con reemplazar el CSV para que la app lea el nuevo.
+    """
+    if not RUTA_CATALOGO_UNIDADES.exists():
+        return pd.DataFrame(columns=COLUMNAS_CATALOGO)
+    return leer_catalogo_unidades(RUTA_CATALOGO_UNIDADES.stat().st_mtime)
+
+
+@st.cache_data(show_spinner=False)
+def leer_catalogo_unidades(fecha_del_archivo: float) -> pd.DataFrame:
+    """Lee el CSV. El argumento solo sirve de llave de la cache.
+
+    El nombre NO puede empezar con guion bajo: Streamlit excluye de la llave de
+    la cache los argumentos que empiezan asi, y entonces cambiar el archivo no
+    serviria de nada.
+    """
+    columnas = COLUMNAS_CATALOGO
     catalogo = pd.read_csv(RUTA_CATALOGO_UNIDADES, sep=";", dtype=str,
                            encoding="utf-8-sig").fillna("")
     for columna in columnas:
