@@ -23,10 +23,11 @@ import base64
 import io
 import json
 import re
+import time
 import unicodedata
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -156,6 +157,36 @@ SCOPES_GOOGLE = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
+
+# --- Mercado Publico --------------------------------------------------------
+API_MP = "https://api.mercadopublico.cl/servicios/v1/publico/"
+
+# Las unidades compradoras. NO es una base de datos: es una tabla de nombres que
+# casi no cambia y que viaja con el codigo, para poder ofrecer los filtros por
+# region, organismo y unidad sin consultar nada.
+RUTA_CATALOGO_UNIDADES = CARPETA / "catalogo_unidades.csv"
+
+# El ticket vive en los secrets de Streamlit ([mercadopublico] ticket = "...").
+# En el computador se lee de este archivo, que esta FUERA del proyecto a
+# proposito para que no pueda subirse por error a GitHub.
+RUTA_TICKET_LOCAL = Path.home() / "ticket-mp.txt"
+
+# Cuantos dias hacia atras barre la consulta. Cada dia es una consulta por
+# organismo, asi que este numero es el costo: 15 dias son 15 consultas.
+PERIODOS_MP = {
+    "Últimos 7 días": 7,
+    "Últimos 15 días": 15,
+    "Últimos 30 días": 30,
+}
+
+# Columnas del resultado, en este orden. Una fila por producto comprado.
+# La orden se llama "ORDEN" y no "OC" a proposito: en el panel de arriba "OC" es
+# CUANTAS ordenes hubo (un contador), no el numero de una orden.
+COLUMNAS_MP = [
+    "FECHA", "ORDEN", "ESTADO", "UNIDAD", "ID", "PRODUCTO",
+    "CANTIDAD", "PRECIO", "TOTAL", "PROVEEDOR", "RUT PROVEEDOR",
+]
+COLUMNAS_NUMERICAS_MP = ["CANTIDAD", "PRECIO", "TOTAL"]
 
 
 # ===========================================================================
@@ -689,7 +720,7 @@ def ids_de_pestana(bruto: pd.DataFrame) -> set[str]:
 # 7. EXPORTACION
 # ===========================================================================
 
-def a_excel(tabla: pd.DataFrame) -> bytes:
+def a_excel(tabla: pd.DataFrame, nombre_hoja: str = "Oportunidades") -> bytes:
     """Convierte la tabla en un .xlsx, con los montos como numeros (no texto)."""
     numerica = tabla.copy()
     for col in ["MONTO", "P.MIN", "P. PROM", "P.MAX", "MI PUBLICADO", "OC"]:
@@ -698,10 +729,14 @@ def a_excel(tabla: pd.DataFrame) -> bytes:
 
     memoria = io.BytesIO()
     with pd.ExcelWriter(memoria, engine="openpyxl") as escritor:
-        numerica.to_excel(escritor, index=False, sheet_name="Oportunidades")
-        hoja = escritor.sheets["Oportunidades"]
+        numerica.to_excel(escritor, index=False, sheet_name=nombre_hoja)
+        hoja = escritor.sheets[nombre_hoja]
         anchos = {"ID": 12, "PRODUCTO": 60, "MONTO": 16, "P.MIN": 12, "P. PROM": 12,
-                  "P.MAX": 12, "MI PUBLICADO": 14, "OC": 8, "COMENTARIO": 70}
+                  "P.MAX": 12, "MI PUBLICADO": 14, "OC": 8, "COMENTARIO": 70,
+                  # Columnas del modulo de Mercado Publico.
+                  "FECHA": 12, "ORDEN": 20, "ESTADO": 20, "UNIDAD": 34,
+                  "CANTIDAD": 11, "PRECIO": 14, "TOTAL": 16,
+                  "PROVEEDOR": 34, "RUT PROVEEDOR": 15}
         for i, col in enumerate(numerica.columns, start=1):
             hoja.column_dimensions[hoja.cell(row=1, column=i).column_letter].width = anchos.get(col, 18)
     return memoria.getvalue()
@@ -1146,7 +1181,283 @@ def texto_correo(contacto: str, institucion: str, cantidad: int, remitente: str)
 
 
 # ===========================================================================
-# 9. INTERFAZ
+# 9. MERCADO PUBLICO: CONSULTA EN VIVO
+# ===========================================================================
+#
+# Sin base de datos y sin nada corriendo de fondo: se consulta al momento.
+#
+#   1. `catalogo_unidades.csv` da los filtros (region, organismo, unidad).
+#   2. Se barre dia por dia el listado de ordenes, SIEMPRE filtrado por
+#      organismo: el listado del dia completo son ~16.000 ordenes y 2 MB, y
+#      filtrado por organismo son decenas y 10 KB. Se comprobo que devuelve
+#      exactamente las mismas ordenes de la unidad que filtrar el dia entero.
+#   3. Se pide el detalle solo de las ordenes que calzan (decenas, no miles).
+#
+# OJO CON LAS FECHAS (comprobado el 17-08-2026, y no es lo que uno supone):
+# `fecha=DDMMAAAA` NO es la fecha de creacion de la orden, es el dia en que la
+# orden tuvo movimiento. Barriendo 6 dias de 4 unidades de la Armada salieron 43
+# ordenes, pero solo 6 estaban creadas en esos dias: habia 15 de septiembre y
+# octubre de 2025. Por eso el resultado trae la fecha REAL de cada orden y se
+# puede filtrar por ella; y por eso el barrido no garantiza traer todas las
+# ordenes creadas ayer (si su movimiento cae manana, aparece manana).
+
+def ticket_mp() -> str:
+    """El ticket de la API. En la nube sale de los secrets; en el PC, del archivo."""
+    try:
+        anotado = st.secrets["mercadopublico"]["ticket"]
+        if str(anotado).strip():
+            return str(anotado).strip()
+    except Exception:
+        pass
+    if RUTA_TICKET_LOCAL.exists():
+        return RUTA_TICKET_LOCAL.read_text(encoding="utf-8-sig").strip()
+    return ""
+
+
+def consultar_mp(recurso: str) -> dict:
+    """Una consulta a la API, con reintentos.
+
+    El ticket viaja pegado en la URL, asi que la URL NO puede aparecer en ningun
+    mensaje de error: la app es publica y se veria en pantalla. Por eso todos los
+    errores se vuelven a levantar con un texto propio.
+
+    El 429 ("peticiones simultaneas") es esporadico porque la API atiende una
+    consulta a la vez; se resuelve reintentando con una espera corta.
+    """
+    ticket = ticket_mp()
+    if not ticket:
+        raise RuntimeError(
+            "Falta el ticket de la API de Mercado Público. Se anota en "
+            "Streamlit ▸ Manage app ▸ Settings ▸ Secrets así:\n\n"
+            '[mercadopublico]\nticket = "TU-TICKET"'
+        )
+
+    separador = "&" if "?" in recurso else "?"
+    url = f"{API_MP}{recurso}{separador}ticket={ticket}"
+    espera = 1.5
+    for intento in range(4):
+        try:
+            peticion = urllib.request.Request(url, headers={"User-Agent": TITULO_APP})
+            with urllib.request.urlopen(peticion, timeout=90) as respuesta:
+                return json.loads(respuesta.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and intento < 3:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            if error.code == 429:
+                raise RuntimeError(
+                    "La API está recibiendo dos consultas a la vez con el mismo "
+                    "ticket. Espera un momento y vuelve a consultar."
+                ) from None
+            raise RuntimeError(
+                f"La API de Mercado Público respondió con el error {error.code}. "
+                "Si se repite, revisa que el ticket siga vigente."
+            ) from None
+        except (urllib.error.URLError, TimeoutError):
+            if intento < 3:
+                time.sleep(espera)
+                espera *= 2
+                continue
+            raise RuntimeError(
+                "No se pudo conectar con la API de Mercado Público. Revisa tu conexión."
+            ) from None
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                "La API de Mercado Público devolvió una respuesta ilegible."
+            ) from None
+    raise RuntimeError("No se pudo consultar la API de Mercado Público.")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def ordenes_del_dia(fecha_api: str, organismo: str) -> list[dict]:
+    """Ordenes con movimiento un dia en un organismo. Solo trae codigo y nombre."""
+    datos = consultar_mp(f"ordenesdecompra.json?fecha={fecha_api}&CodigoOrganismo={organismo}")
+    return datos.get("Listado") or []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detalle_orden(codigo: str) -> dict:
+    """Detalle de una orden: comprador, proveedor, productos, cantidades y precios.
+
+    OJO: el detalle se pide al MISMO `ordenesdecompra.json` con `codigo`. El
+    `OrdenCompra.json` que aparece en la documentacion oficial da 404.
+    """
+    datos = consultar_mp(f"ordenesdecompra.json?codigo={codigo}")
+    listado = datos.get("Listado") or []
+    return listado[0] if listado else {}
+
+
+@st.cache_data(show_spinner=False)
+def cargar_catalogo_unidades() -> pd.DataFrame:
+    """Las unidades que compran por Convenio Marco (codigo, nombre, region...)."""
+    columnas = ["codigo_unidad", "nombre_unidad", "codigo_organismo",
+                "nombre_organismo", "region", "comuna", "oc_convenio_marco"]
+    if not RUTA_CATALOGO_UNIDADES.exists():
+        return pd.DataFrame(columns=columnas)
+
+    catalogo = pd.read_csv(RUTA_CATALOGO_UNIDADES, sep=";", dtype=str,
+                           encoding="utf-8-sig").fillna("")
+    for columna in columnas:
+        if columna not in catalogo.columns:
+            catalogo[columna] = ""
+    # Las que mas compran primero: son las que valen la pena mirar.
+    catalogo["oc_convenio_marco"] = (
+        pd.to_numeric(catalogo["oc_convenio_marco"], errors="coerce").fillna(0).astype(int)
+    )
+    catalogo = catalogo[catalogo["codigo_unidad"].str.strip() != ""]
+    return (catalogo.sort_values(["oc_convenio_marco", "nombre_unidad"],
+                                 ascending=[False, True])
+            .reset_index(drop=True))
+
+
+def es_convenio_marco(codigo: str) -> bool:
+    """«2945-381-CM26» sí; «1002584-259-AG26» no.
+
+    El mecanismo esta en el ultimo tramo del codigo. Se mira ahi y no se busca
+    "-CM" suelto, que podria coincidir con otra cosa.
+    """
+    tramos = str(codigo).split("-")
+    return len(tramos) >= 3 and tramos[-1].strip().upper().startswith("CM")
+
+
+def unidad_del_codigo(codigo: str) -> str:
+    """El primer tramo del codigo ES la unidad compradora: «2945-381-CM26» -> «2945».
+
+    Por esto no hace falta pedir el detalle para saber de quien es cada orden.
+    """
+    return str(codigo).split("-")[0].strip()
+
+
+def id_convenio_marco(especificacion) -> str:
+    """El ID de Convenio Marco viene entre parentesis en la especificacion.
+
+    «(4427537) GOMA DE BORRAR RHEIN...» -> «4427537». Es el mismo numero de la
+    columna ID de su hoja de compras, asi que sirve para cruzar lo que compro la
+    institucion con lo que ella tiene publicado.
+    """
+    coincidencia = re.match(r"\s*\((\d+)\)", str(especificacion or ""))
+    return coincidencia.group(1) if coincidencia else ""
+
+
+def dias_del_barrido(desde: date, hasta: date) -> list[date]:
+    """Todos los dias del periodo, uno por consulta."""
+    if hasta < desde:
+        desde, hasta = hasta, desde
+    return [desde + timedelta(days=n) for n in range((hasta - desde).days + 1)]
+
+
+def filas_de_orden(orden: dict, nombres_unidad: dict[str, str]) -> list[dict]:
+    """Una fila por producto de la orden. Si no detalla productos, una sola fila."""
+    codigo = str(orden.get("Codigo") or "")
+    comprador = orden.get("Comprador") or {}
+    proveedor = orden.get("Proveedor") or {}
+    fechas = orden.get("Fechas") or {}
+
+    comun = {
+        "FECHA": (fechas.get("FechaCreacion") or "")[:10],
+        "ORDEN": codigo,
+        "ESTADO": str(orden.get("Estado") or "").strip(),
+        "UNIDAD": (str(comprador.get("NombreUnidad") or "").strip()
+                   or nombres_unidad.get(unidad_del_codigo(codigo), "")),
+        "PROVEEDOR": str(proveedor.get("Nombre") or "").strip(),
+        "RUT PROVEEDOR": str(proveedor.get("RutSucursal") or "").strip(),
+    }
+
+    productos = (orden.get("Items") or {}).get("Listado") or []
+    if not productos:
+        # Pasa poco, pero si la orden no trae items no se puede perder: se
+        # muestra igual con su monto total.
+        return [comun | {"ID": "", "PRODUCTO": "(la orden no detalla productos)",
+                         "CANTIDAD": None, "PRECIO": None,
+                         "TOTAL": a_numero(orden.get("Total"))}]
+
+    filas = []
+    for producto in productos:
+        filas.append(comun | {
+            "ID": id_convenio_marco(producto.get("EspecificacionComprador")),
+            "PRODUCTO": str(producto.get("Producto") or "").strip(),
+            "CANTIDAD": a_numero(producto.get("Cantidad")),
+            "PRECIO": a_numero(producto.get("PrecioNeto")),
+            "TOTAL": a_numero(producto.get("Total")),
+        })
+    return filas
+
+
+def _numeros_de_columna(serie: pd.Series) -> pd.Series:
+    """Columna numerica de verdad: entera si todos los valores son enteros.
+
+    Igual que en el panel de arriba: como texto, la tabla ordenaba "11" entre
+    "1" y "2". Las cantidades pueden venir con decimales (kilos), asi que solo
+    se pasan a entero cuando de verdad lo son.
+    """
+    numeros = pd.to_numeric(serie, errors="coerce")
+    validos = numeros.dropna()
+    if validos.empty or bool((validos % 1 == 0).all()):
+        return numeros.round().astype("Int64")
+    return numeros.astype("Float64")
+
+
+def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
+                      avisar=None) -> tuple[pd.DataFrame, dict]:
+    """Barre el periodo y devuelve (tabla de productos comprados, resumen)."""
+    codigos_unidad = set(unidades["codigo_unidad"])
+    nombres_unidad = dict(zip(unidades["codigo_unidad"], unidades["nombre_unidad"]))
+    organismos = sorted(set(unidades["codigo_organismo"]))
+    dias = dias_del_barrido(desde, hasta)
+
+    # --- Paso 1: que ordenes de Convenio Marco existen (consulta barata) ----
+    total_dias = max(len(dias) * len(organismos), 1)
+    ordenes: dict[str, str] = {}          # codigo de orden -> dia en que aparecio
+    hechas = 0
+    for organismo in organismos:
+        for dia in dias:
+            for orden in ordenes_del_dia(f"{dia:%d%m%Y}", organismo):
+                codigo = str(orden.get("Codigo") or "")
+                if unidad_del_codigo(codigo) in codigos_unidad and es_convenio_marco(codigo):
+                    ordenes.setdefault(codigo, f"{dia:%d-%m-%Y}")
+            hechas += 1
+            if avisar:
+                avisar(hechas / total_dias * 0.4,
+                       f"Barriendo el período: {hechas} de {total_dias} días · "
+                       f"{len(ordenes)} órdenes de Convenio Marco encontradas")
+
+    # --- Paso 2: el detalle solo de esas ------------------------------------
+    filas: list[dict] = []
+    total_ordenes = max(len(ordenes), 1)
+    for numero, codigo in enumerate(sorted(ordenes), start=1):
+        orden = detalle_orden(codigo)
+        if orden:
+            filas.extend(filas_de_orden(orden, nombres_unidad))
+        if avisar:
+            avisar(0.4 + numero / total_ordenes * 0.6,
+                   f"Leyendo el detalle: {numero} de {len(ordenes)} órdenes")
+
+    tabla = pd.DataFrame(filas, columns=COLUMNAS_MP)
+    for columna in COLUMNAS_NUMERICAS_MP:
+        tabla[columna] = _numeros_de_columna(tabla[columna])
+
+    fechas = pd.to_datetime(tabla["FECHA"], errors="coerce")
+    tabla["FECHA"] = [None if pd.isna(f) else f.date() for f in fechas]
+    tabla = (tabla.sort_values(["ORDEN"], ascending=False)
+             .sort_values("FECHA", ascending=False, na_position="last", kind="stable")
+             .reset_index(drop=True))
+
+    en_periodo = fechas.dt.date.between(desde, hasta)
+    resumen = {
+        "consultas": len(dias) * len(organismos) + len(ordenes),
+        "dias": len(dias),
+        "organismos": len(organismos),
+        "ordenes": len(ordenes),
+        "ordenes_en_periodo": int(tabla.loc[en_periodo.values, "ORDEN"].nunique()) if len(tabla) else 0,
+        "desde_real": min((f for f in tabla["FECHA"] if f), default=None),
+        "hasta_real": max((f for f in tabla["FECHA"] if f), default=None),
+    }
+    return tabla, resumen
+
+
+# ===========================================================================
+# 10. INTERFAZ
 # ===========================================================================
 
 def aplicar_estilos() -> None:
