@@ -96,6 +96,17 @@ COLUMNA_PROVEEDORES = "PROVEEDORES"
 
 ESTADOS = ["CON STOCK", "SIN STOCK", "NO LO TENGO", "TODOS"]
 
+# Columnas que se guardan como numero (no como texto) para que la tabla se
+# pueda ordenar de verdad: como texto, "11" quedaba entre "1" y "2".
+COLUMNAS_NUMERICAS = ["MONTO", "P.MIN", "P. PROM", "P.MAX", "MI PUBLICADO", "OC"]
+
+# Señales del comentario que se pintan en amarillo. Se destaca solo la compra
+# recurrente porque es la que sirve para priorizar: "sin competencia" la tiene
+# el 72% del catalogo y "bajo el promedio" la mitad de lo que ella vende, asi
+# que pintarlas dejaria casi todo amarillo y no destacaria nada.
+SEÑALES_DESTACADAS = ("compra recurrente",)
+COLOR_DESTACADO = "#F2C14E"
+
 # Variantes aceptadas de cada encabezado. Se comparan normalizadas (sin tildes,
 # sin espacios, sin puntos), asi que "p. min", "P.MIN" y " P Min " son lo mismo.
 ALIAS_COLUMNAS: dict[str, list[str]] = {
@@ -493,6 +504,22 @@ def cargar_ofertas(url: str) -> tuple[dict[str, float], str]:
 # 5. INTELIGENCIA: EL COMENTARIO DE CADA PRODUCTO
 # ===========================================================================
 
+def meses_del_periodo(pestana: str) -> int:
+    """Cuántos meses abarca la pestaña, para medir la frecuencia de compra.
+
+    Del año en curso solo han pasado los meses corridos (en agosto, 8). Una
+    pestaña de semestre son 6 y una de un año cerrado, 12.
+    """
+    nombre = normalizar(pestana)
+    if str(datetime.now().year) in nombre:
+        return max(1, datetime.now().month)
+    if "TRIMESTRE" in nombre:
+        return 3
+    if "SEMESTRE" in nombre:
+        return 6
+    return 12
+
+
 def construir_comentario(
     id_producto: str,
     oc,
@@ -500,24 +527,39 @@ def construir_comentario(
     mi_publicado,
     p_prom,
     ids_periodo_anterior: set[str],
+    meses: int = 12,
 ) -> str:
-    """Arma la frase de oportunidad juntando las cuatro señales del negocio."""
+    """Arma la frase de oportunidad juntando las señales del negocio.
+
+    La frecuencia se mide contra los meses transcurridos del periodo: es
+    recurrente cuando hay al menos una OC cada dos meses (la mitad de los meses
+    corridos). Con 8 meses corridos, 4 OC o mas es recurrente.
+    """
     señales: list[str] = []
 
-    # 1) Compra recurrente: el mismo ID aparece en el otro periodo del libro.
-    if id_producto and id_producto in ids_periodo_anterior:
-        señales.append("Compra recurrente (también el período anterior)")
-
-    # 2) Frecuencia: la columna OC cuenta las ordenes de compra del periodo.
-    n_oc = a_numero(oc)
-    if n_oc:
-        n_oc = int(n_oc)
-        if n_oc >= 10:
-            señales.append(f"{n_oc} OC en el período: compra casi mensual")
-        elif n_oc >= 5:
-            señales.append(f"{n_oc} OC en el período: compra frecuente")
+    # 1) Frecuencia de compra: la columna OC cuenta las ordenes del periodo.
+    n_oc = int(a_numero(oc) or 0)
+    if n_oc > 0:
+        cada = meses / n_oc                       # meses promedio entre compras
+        if cada <= 1.3:
+            ritmo = "mensual"
+        elif cada <= 2.3:
+            ritmo = "bimensual"
+        elif cada <= 3.6:
+            ritmo = "trimestral"
+        elif cada <= 5.0:
+            ritmo = "cuatrimestral"
         else:
-            señales.append(f"{n_oc} OC en el período")
+            ritmo = "ocasional"
+
+        if n_oc >= meses / 2:                     # el umbral que define recurrente
+            señales.append(f"Compra recurrente: {n_oc} OC en {meses} meses ({ritmo})")
+        else:
+            señales.append(f"{n_oc} OC en {meses} meses: compra {ritmo}")
+
+    # 2) El mismo ID también fue comprado en el otro período del libro.
+    if id_producto and id_producto in ids_periodo_anterior:
+        señales.append("También compró el período anterior")
 
     # 3) Competencia: cuantos proveedores se pelean ese producto.
     n_prov = a_numero(proveedores)
@@ -548,6 +590,7 @@ def preparar_tabla(
     bruto: pd.DataFrame,
     estado: str,
     ids_periodo_anterior: set[str],
+    meses: int = 12,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Filtra por MI ESTADO y deja las columnas finales, con MONTO y COMENTARIO.
 
@@ -613,15 +656,20 @@ def preparar_tabla(
     final["COMENTARIO"] = [
         construir_comentario(
             str(ids.iloc[i]).strip(), ocs.iloc[i], proveedores.iloc[i],
-            publicados.iloc[i], promedios.iloc[i], ids_periodo_anterior,
+            publicados.iloc[i], promedios.iloc[i], ids_periodo_anterior, meses,
         )
         for i in range(len(final))
     ]
 
-    # --- Presentacion: montos y precios en formato peso -------------------
-    for col in ["MONTO", "P.MIN", "P. PROM", "P.MAX", "MI PUBLICADO"]:
+    # --- Montos y cantidades como numeros, no como texto ------------------
+    # Asi la tabla se ordena bien (como texto, "11" caia entre "1" y "2") y el
+    # formato con puntos lo pone la propia tabla al mostrarlo.
+    for col in COLUMNAS_NUMERICAS:
         if col in final.columns:
-            final[col] = final[col].map(pesos)
+            final[col] = pd.array(
+                [None if a_numero(v) is None else int(round(a_numero(v))) for v in final[col]],
+                dtype="Int64",
+            )
 
     return final.reindex(columns=[c for c in COLUMNAS_FINALES if c in final.columns]), avisos
 
@@ -1231,6 +1279,26 @@ def sugerir_pestana(nombres: list[str], año: int, año_actual: int) -> int:
     return 0
 
 
+def comentario_destacado(comentario) -> bool:
+    """¿El comentario trae una señal que conviene aprovechar para vender?"""
+    texto = str(comentario).lower()
+    return any(señal in texto for señal in SEÑALES_DESTACADAS)
+
+
+def destacar_comentarios(tabla: pd.DataFrame):
+    """Pinta en amarillo el comentario cuando trae una señal de oportunidad."""
+    if "COMENTARIO" not in tabla.columns:
+        return tabla
+
+    def color(fila: pd.Series) -> list[str]:
+        if comentario_destacado(fila["COMENTARIO"]):
+            return [f"color: {COLOR_DESTACADO}; font-weight: 600"
+                    if columna == "COMENTARIO" else "" for columna in tabla.columns]
+        return [""] * len(tabla.columns)
+
+    return tabla.style.apply(color, axis=1)
+
+
 def filas_seleccionadas(seleccion, total_filas: int) -> list[int]:
     """Posiciones de las filas marcadas en la tabla, siempre limpias.
 
@@ -1278,7 +1346,8 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         if nombre != pestana:
             ids_otros |= ids_de_pestana(grilla)
 
-    tabla, avisos = preparar_tabla(libro[pestana], estado, ids_otros)
+    meses = meses_del_periodo(pestana)
+    tabla, avisos = preparar_tabla(libro[pestana], estado, ids_otros, meses)
     for aviso in avisos:
         st.warning(aviso)
 
@@ -1291,18 +1360,29 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
     col3.metric("Compra recurrente", recurrentes)
 
     # --- Tabla con seleccion de varias filas -------------------------------
-    st.caption(f"{pestana} — {estado}. Selecciona los productos para el PDF: clic en una fila, "
-               "y con **Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas.")
+    st.caption(f"{pestana} — {estado} · frecuencia medida sobre {meses} meses. "
+               "Selecciona los productos para el PDF: clic en una fila, y con **Shift** o "
+               "arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas. "
+               "En amarillo, las oportunidades que conviene aprovechar.")
+    # Columnas numericas con separador de miles (y ordenables de verdad).
+    configuracion = {
+        "PRODUCTO": st.column_config.TextColumn(width="large"),
+        "COMENTARIO": st.column_config.TextColumn(width="large"),
+    }
+    for columna in COLUMNAS_NUMERICAS:
+        if columna in tabla.columns:
+            configuracion[columna] = st.column_config.NumberColumn(
+                format="localized",
+                help="Órdenes de compra del período" if columna == "OC" else "En pesos",
+            )
+
     seleccion = st.dataframe(
-        tabla,
+        destacar_comentarios(tabla),
         width="stretch",
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",
-        column_config={
-            "PRODUCTO": st.column_config.TextColumn(width="large"),
-            "COMENTARIO": st.column_config.TextColumn(width="large"),
-        },
+        column_config=configuracion,
         key=f"tabla_{clave}",
     )
     seleccionados = tabla.iloc[filas_seleccionadas(seleccion, len(tabla))]
