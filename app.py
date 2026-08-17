@@ -1482,10 +1482,11 @@ def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: i
     """
     señales = []
 
+    periodo = f"{dias} día" + ("s" if dias != 1 else "")
     if ocs >= 2:
-        señales.append(f"compra recurrente: {ocs} OC en {dias} días")
+        señales.append(f"compra recurrente: {ocs} OC en {periodo}")
     else:
-        señales.append(f"1 sola OC en {dias} días")
+        señales.append(f"1 sola OC en {periodo}")
 
     if proveedores <= 1:
         señales.append("1 solo proveedor: poca competencia")
@@ -2197,7 +2198,14 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
             "de creación, así que esas compras más antiguas aparecen solas y son reales.")
 
     # --- La tabla de trabajo: una fila por producto --------------------------
+    # Los dias que dice el comentario son los que de verdad cubren las ordenes
+    # que se estan mirando, no los del rango pedido: el barrido trae ordenes
+    # anteriores, y decir «3 OC en 15 días» cuando dos son de meses atras es
+    # falso y exagera la recurrencia.
+    fechas_vista = [f for f in vista["FECHA"] if f]
     dias_vista = (hasta_c - desde_c).days + 1
+    if fechas_vista:
+        dias_vista = max(dias_vista, (max(fechas_vista) - min(fechas_vista)).days + 1)
     productos = agrupar_por_producto(vista, precios_oferta, dias_vista)
     if productos.empty:
         st.warning("Las órdenes encontradas no traen el ID de Convenio Marco, "
