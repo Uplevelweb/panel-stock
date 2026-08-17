@@ -2,8 +2,10 @@
 PANEL OPORTUNIDADES — Comercial Emergenza
 ==========================================
 
-Lee el libro de Google Sheets con el analisis de compras de una institucion y
-lo convierte en oportunidades de venta:
+Dos pestañas:
+
+ANALISIS DE COMPRAS — lee el libro de Google Sheets con el analisis de compras
+de una institucion y lo convierte en oportunidades de venta:
 
   1. Enlace de la hoja y del catalogo de ofertas, arriba en el encabezado.
   2. Filtro por MI ESTADO: CON STOCK / SIN STOCK / NO LO TENGO / TODOS.
@@ -13,6 +15,14 @@ lo convierte en oportunidades de venta:
   5. Exporta a Excel, o marca productos uno a uno y genera un PDF tipo
      cotizacion con el precio de oferta de la semana, mas el correo listo
      para copiar y pegar en Gmail.
+
+MERCADO PUBLICO — que compro de verdad una institucion, consultado en vivo:
+
+  6. Selector con filtros (region, organismo, buscador) sobre las 2.103 unidades
+     que compran por Convenio Marco.
+  7. Consulta a la API de Mercado Publico del periodo elegido, sin base de datos
+     y sin nada corriendo de fondo, y una fila por producto comprado: fecha, ID,
+     producto, cantidad, precio pagado y quien gano la venta.
 
 Ejecutar:  streamlit run app.py
 """
@@ -187,6 +197,10 @@ COLUMNAS_MP = [
     "CANTIDAD", "PRECIO", "TOTAL", "PROVEEDOR", "RUT PROVEEDOR",
 ]
 COLUMNAS_NUMERICAS_MP = ["CANTIDAD", "PRECIO", "TOTAL"]
+
+# Etiqueta de las unidades a las que la API no le informa la region (ver
+# cargar_catalogo_unidades).
+SIN_REGION = "(sin región informada)"
 
 
 # ===========================================================================
@@ -1301,6 +1315,15 @@ def cargar_catalogo_unidades() -> pd.DataFrame:
     for columna in columnas:
         if columna not in catalogo.columns:
             catalogo[columna] = ""
+
+    # 176 unidades vienen sin region ni comuna porque la API no las informa, y
+    # son casi todas hospitales y servicios de salud: 1.530 ordenes de Convenio
+    # Marco, el 11% del total. Se les pone una etiqueta propia para que el filtro
+    # por region no las esconda. No se les adivina la region a partir de otra
+    # unidad del mismo organismo: un organismo puede tener unidades en varias.
+    sin_region = catalogo["region"].str.strip() == ""
+    catalogo.loc[sin_region, "region"] = SIN_REGION
+
     # Las que mas compran primero: son las que valen la pena mirar.
     catalogo["oc_convenio_marco"] = (
         pd.to_numeric(catalogo["oc_convenio_marco"], errors="coerce").fillna(0).astype(int)
@@ -1443,13 +1466,17 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
              .sort_values("FECHA", ascending=False, na_position="last", kind="stable")
              .reset_index(drop=True))
 
-    en_periodo = fechas.dt.date.between(desde, hasta)
+    # OJO: esto se calcula DESPUES de ordenar y reindexar, sobre la columna ya
+    # ordenada. Calculado antes, las posiciones apuntaban a otras filas y el
+    # resumen contaba ordenes que no eran.
+    primero, ultimo = min(desde, hasta), max(desde, hasta)
+    en_periodo = [bool(f and primero <= f <= ultimo) for f in tabla["FECHA"]]
     resumen = {
         "consultas": len(dias) * len(organismos) + len(ordenes),
         "dias": len(dias),
         "organismos": len(organismos),
         "ordenes": len(ordenes),
-        "ordenes_en_periodo": int(tabla.loc[en_periodo.values, "ORDEN"].nunique()) if len(tabla) else 0,
+        "ordenes_en_periodo": int(tabla.loc[en_periodo, "ORDEN"].nunique()) if len(tabla) else 0,
         "desde_real": min((f for f in tabla["FECHA"] if f), default=None),
         "hasta_real": max((f for f in tabla["FECHA"] if f), default=None),
     }
@@ -1814,20 +1841,198 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             st.code(cuerpo, language=None)
 
 
-# ===========================================================================
-# 10. PROGRAMA PRINCIPAL
-# ===========================================================================
+def seccion_mercado_publico() -> None:
+    """Selector de instituciones con filtros y consulta en vivo a la API."""
+    catalogo = cargar_catalogo_unidades()
+    if catalogo.empty:
+        st.error(
+            "Falta el archivo «catalogo_unidades.csv» en el proyecto. Es la tabla de "
+            "unidades compradoras que da los filtros por región, organismo y unidad."
+        )
+        return
 
-def main() -> None:
-    st.set_page_config(
-        page_title=TITULO_APP,
-        page_icon=str(RUTA_LOGO) if RUTA_LOGO.exists() else "📊",
-        layout="wide",
+    hay_ticket = bool(ticket_mp())
+
+    # --- Filtros -------------------------------------------------------------
+    with st.container(border=True):
+        st.markdown("##### 🏛️ Institución a consultar")
+
+        f1, f2 = st.columns([1, 2])
+        # Las sin region van al final de la lista, no primeras por el parentesis.
+        nombradas = sorted(r for r in catalogo["region"].unique() if r and r != SIN_REGION)
+        regiones = ["Todas las regiones"] + nombradas
+        if (catalogo["region"] == SIN_REGION).any():
+            regiones.append(SIN_REGION)
+        region = f1.selectbox("Región", regiones, key="mp_region")
+        por_region = catalogo if region == regiones[0] else catalogo[catalogo["region"] == region]
+
+        organismos = ["Todos los organismos"] + sorted(
+            o for o in por_region["nombre_organismo"].unique() if o)
+        organismo = f2.selectbox("Organismo", organismos, key="mp_organismo")
+        candidatas = (por_region if organismo == organismos[0]
+                      else por_region[por_region["nombre_organismo"] == organismo])
+
+        busqueda = st.text_input(
+            "Buscar la unidad por nombre", key="mp_busqueda",
+            placeholder="Ej: escuela naval, hospital, municipalidad",
+            help="Se puede escribir sin tildes y en minúsculas.")
+        if busqueda.strip():
+            patron = normalizar(busqueda)
+            candidatas = candidatas[candidatas["nombre_unidad"].map(
+                lambda nombre: patron in normalizar(nombre))]
+
+        # La comuna se omite cuando viene vacia, para no dejar el punto colgando.
+        etiquetas = {
+            fila.codigo_unidad: " · ".join(
+                parte for parte in (fila.nombre_unidad, fila.comuna,
+                                    f"{fila.oc_convenio_marco} OC") if parte)
+            for fila in candidatas.itertuples()
+        }
+
+        # Igual que la seleccion de filas de la tabla: si se cambia un filtro, las
+        # unidades ya marcadas pueden dejar de estar entre las opciones. Se limpian
+        # ANTES de dibujar el selector, o Streamlit reclama.
+        marcadas = [c for c in st.session_state.get("mp_unidades", []) if c in etiquetas]
+        if marcadas != list(st.session_state.get("mp_unidades", [])):
+            st.session_state["mp_unidades"] = marcadas
+
+        elegidas = st.multiselect(
+            f"Unidades compradoras ({len(etiquetas)} para elegir)",
+            options=list(etiquetas),
+            format_func=lambda codigo: etiquetas.get(codigo, codigo),
+            key="mp_unidades",
+            help="Se pueden marcar varias: si son del mismo organismo (las unidades "
+                 "de la Armada, por ejemplo) la consulta no demora más. El número "
+                 "de cada una es cuántas órdenes de Convenio Marco tuvo en los 8 "
+                 "días hábiles con que se armó el catálogo: sirve para saber quién "
+                 "compra seguido.")
+
+        # --- Periodo y costo de la consulta ---------------------------------
+        p1, p2 = st.columns([1, 2])
+        periodo = p1.selectbox("Período", list(PERIODOS_MP), index=1, key="mp_periodo")
+        hasta = date.today()
+        desde = hasta - timedelta(days=PERIODOS_MP[periodo] - 1)
+
+        elegidas_df = catalogo[catalogo["codigo_unidad"].isin(elegidas)]
+        dias = len(dias_del_barrido(desde, hasta))
+        organismos_distintos = elegidas_df["codigo_organismo"].nunique()
+        with p2:
+            st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**.")
+            if elegidas:
+                st.caption(
+                    f"Son **{dias * organismos_distintos} consultas** para barrer el "
+                    f"período ({dias} días × {organismos_distintos} organismo/s), más "
+                    "una por cada orden que calce. El ticket permite 10.000 al día.")
+
+        if not hay_ticket:
+            st.warning(
+                "Falta el ticket de la API. Se anota en Streamlit ▸ Manage app ▸ "
+                'Settings ▸ Secrets así:\n\n[mercadopublico]\nticket = "TU-TICKET"')
+
+        consultar = st.button(
+            "🔎 Consultar Mercado Público", type="primary", width="stretch",
+            disabled=not elegidas or not hay_ticket, key="mp_consultar",
+            help=None if elegidas else "Marca primero al menos una unidad.")
+
+    # --- La consulta ---------------------------------------------------------
+    if consultar:
+        barra = st.progress(0.0, text="Consultando Mercado Público...")
+        try:
+            tabla, resumen = buscar_compras_cm(
+                elegidas_df, desde, hasta,
+                avisar=lambda avance, texto: barra.progress(min(max(avance, 0.0), 1.0),
+                                                            text=texto))
+        except Exception as error:
+            barra.empty()
+            st.error(str(error))
+            return
+        barra.empty()
+        st.session_state["mp_tabla"] = tabla
+        st.session_state["mp_resumen"] = resumen
+        st.session_state["mp_consultado"] = (desde, hasta, list(elegidas_df["nombre_unidad"]))
+
+    # --- El resultado (se guarda, para que no se pierda al tocar otra cosa) --
+    tabla = st.session_state.get("mp_tabla")
+    if tabla is None:
+        st.info("Elige una o más unidades y toca **Consultar Mercado Público**.")
+        return
+
+    resumen = st.session_state.get("mp_resumen", {})
+    desde_c, hasta_c, unidades_c = st.session_state.get("mp_consultado", (desde, hasta, []))
+
+    if tabla.empty:
+        st.warning(
+            f"No se encontraron órdenes de Convenio Marco de "
+            f"{', '.join(unidades_c) or 'esas unidades'} en el período consultado. "
+            "Con un período más largo pueden aparecer.")
+        return
+
+    # La fecha con que se filtra es la de creacion de la orden, que es la real.
+    # El barrido trae ordenes mas antiguas porque la API lista por dia de
+    # movimiento; se avisa y se deja elegir.
+    solo_periodo = st.checkbox(
+        f"Mostrar solo las órdenes creadas entre el {desde_c:%d-%m-%Y} y el {hasta_c:%d-%m-%Y}",
+        value=False, key="mp_solo_periodo")
+    vista = tabla
+    if solo_periodo:
+        vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
+
+    monto = sum(v for v in vista["TOTAL"].tolist() if v is not None and not pd.isna(v))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Órdenes", int(vista["ORDEN"].nunique()))
+    m2.metric("Productos comprados", len(vista))
+    m3.metric("Monto", pesos(monto) or "$0")
+    m4.metric("Proveedores", int(vista["PROVEEDOR"].nunique()))
+
+    if resumen.get("desde_real") and resumen.get("hasta_real"):
+        st.caption(
+            f"{', '.join(unidades_c)} · {resumen.get('consultas', 0)} consultas a la API. "
+            f"El barrido de {resumen.get('dias', 0)} días encontró "
+            f"{resumen.get('ordenes', 0)} órdenes, creadas entre "
+            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**: "
+            f"{resumen.get('ordenes_en_periodo', 0)} son del período consultado y el resto "
+            "son anteriores. La API lista las órdenes por día de movimiento, no por fecha "
+            "de creación, así que esas compras más antiguas aparecen solas y son reales.")
+
+    st.dataframe(
+        vista,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
+                                                 help="Fecha de creación de la orden"),
+            "PRODUCTO": st.column_config.TextColumn(width="large"),
+            "UNIDAD": st.column_config.TextColumn(width="medium"),
+            "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
+                                                     help="Quién ganó la venta"),
+            "ID": st.column_config.TextColumn(
+                "ID", help="El ID de Convenio Marco, el mismo de tu hoja de compras"),
+            "CANTIDAD": st.column_config.NumberColumn(format="localized"),
+            "PRECIO": st.column_config.NumberColumn(format="localized",
+                                                    help="Precio unitario neto pagado"),
+            "TOTAL": st.column_config.NumberColumn(format="localized",
+                                                   help="Total de la línea, en pesos"),
+        },
+        key="mp_tabla_vista",
     )
-    aplicar_estilos()
-    cabecera()
-    panel_lateral_en_construccion()
 
+    st.download_button(
+        "⬇️ Descargar Excel de esta consulta",
+        data=a_excel(vista, nombre_hoja="Mercado Público"),
+        file_name=(f"MercadoPublico-{normalizar(unidades_c[0])[:20] if unidades_c else 'consulta'}"
+                   f"-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx"),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        disabled=vista.empty,
+        key="mp_xlsx",
+    )
+
+
+# ===========================================================================
+# 11. PROGRAMA PRINCIPAL
+# ===========================================================================
+
+def seccion_analisis_compras() -> None:
+    """El panel de siempre: la hoja de compras convertida en oportunidades."""
     url_hoja, url_ofertas = origen_de_datos()
 
     if not url_hoja:
@@ -1858,6 +2063,23 @@ def main() -> None:
 
     año_actual = datetime.now().year
     render_informe(libro, precios_oferta, f"Oportunidades-{año_actual}", año_actual, clave="unico")
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title=TITULO_APP,
+        page_icon=str(RUTA_LOGO) if RUTA_LOGO.exists() else "📊",
+        layout="wide",
+    )
+    aplicar_estilos()
+    cabecera()
+    panel_lateral_en_construccion()
+
+    analisis, mercado = st.tabs(["📊  Análisis de compras", "🏛️  Mercado Público"])
+    with analisis:
+        seccion_analisis_compras()
+    with mercado:
+        seccion_mercado_publico()
 
 
 if __name__ == "__main__":
