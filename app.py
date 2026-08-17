@@ -202,6 +202,27 @@ COLUMNAS_NUMERICAS_MP = ["CANTIDAD", "PRECIO", "TOTAL"]
 # cargar_catalogo_unidades).
 SIN_REGION = "(sin región informada)"
 
+# La misma tabla, pero agrupada por producto: una fila por ID, que es como ella
+# trabaja en el panel de arriba. Los precios son los que PAGO la institucion en
+# el rango consultado, no precios de mercado.
+COLUMNAS_PANEL_MP = [
+    "ID", "PRODUCTO", "MONTO", "P.MIN", "P. PROM", "P.MAX",
+    "MI OFERTA", "OC", "PROVEEDORES", "COMENTARIO",
+]
+COLUMNAS_NUMERICAS_PANEL_MP = [
+    "MONTO", "P.MIN", "P. PROM", "P.MAX", "MI OFERTA", "OC", "PROVEEDORES",
+]
+
+# Aqui solo hay dos estados posibles, porque el catalogo de ofertas dice si el
+# producto esta o no esta, y nada mas. Si esta, se entiende que lo comercializa
+# (CON STOCK); SIN STOCK no se puede saber desde aqui y por eso no aparece.
+ESTADOS_MP = ["CON STOCK", "NO LO TENGO", "TODOS"]
+
+# En este modulo tambien se destaca el precio, no solo la recurrencia: estar bajo
+# lo que la institucion ya pago es poco frecuente (4 de 54 productos en la prueba
+# con la Escuela Naval) y es el mejor argumento de venta que da la consulta.
+SEÑALES_DESTACADAS_MP = ("bajo lo que pagó", "compra recurrente")
+
 
 # ===========================================================================
 # 2. UTILIDADES DE TEXTO, NUMEROS Y COLUMNAS
@@ -1441,6 +1462,85 @@ def _numeros_de_columna(serie: pd.Series) -> pd.Series:
     return numeros.astype("Float64")
 
 
+def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: int) -> str:
+    """Las señales de negocio de un producto, con los numeros a la vista.
+
+    La mas valiosa es la ultima: si su oferta esta bajo lo que la institucion ya
+    pago, eso es un argumento de venta con nombre, ID y monto.
+    """
+    señales = []
+
+    if ocs >= 2:
+        señales.append(f"compra recurrente: {ocs} OC en {dias} días")
+    else:
+        señales.append(f"1 sola OC en {dias} días")
+
+    if proveedores <= 1:
+        señales.append("1 solo proveedor: poca competencia")
+    else:
+        señales.append(f"{proveedores} proveedores")
+
+    if oferta is None:
+        señales.append("no está en tu catálogo")
+    elif precio_pagado:
+        diferencia = (oferta - precio_pagado) / precio_pagado * 100
+        if diferencia <= -1:
+            señales.append(f"tu oferta está {abs(diferencia):.0f}% bajo lo que pagó")
+        elif diferencia >= 1:
+            señales.append(f"tu oferta está {diferencia:.0f}% sobre lo que pagó")
+        else:
+            señales.append("tu oferta iguala lo que pagó")
+
+    return " · ".join(señales)
+
+
+def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float],
+                         dias: int) -> pd.DataFrame:
+    """De una fila por linea de orden a una fila por ID, como el panel de arriba.
+
+    Los precios son los que PAGO la institucion en el rango consultado. El
+    promedio es el de los precios unitarios de cada linea, no ponderado por
+    cantidad: asi P.MIN, P. PROM y P.MAX se leen como una misma escala.
+    """
+    columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO]
+    if compras.empty:
+        return pd.DataFrame(columns=columnas)
+
+    con_id = compras[compras["ID"].astype(str).str.strip() != ""]
+    if con_id.empty:
+        return pd.DataFrame(columns=columnas)
+
+    filas = []
+    for identificador, grupo in con_id.groupby("ID", sort=False):
+        precios = [p for p in grupo["PRECIO"] if p is not None and not pd.isna(p)]
+        montos = [m for m in grupo["TOTAL"] if m is not None and not pd.isna(m)]
+        promedio = sum(precios) / len(precios) if precios else None
+        oferta = precios_oferta.get(str(identificador).strip())
+        ocs = int(grupo["ORDEN"].nunique())
+        proveedores = int(grupo["PROVEEDOR"].nunique())
+
+        filas.append({
+            "ID": str(identificador),
+            "PRODUCTO": str(grupo["PRODUCTO"].iloc[0]),
+            "MONTO": sum(montos) if montos else None,
+            "P.MIN": min(precios) if precios else None,
+            "P. PROM": promedio,
+            "P.MAX": max(precios) if precios else None,
+            # Solo se llena si existe oferta: un precio normal no sirve para
+            # cotizar y en el PDF sale con un guion.
+            "MI OFERTA": oferta,
+            "OC": ocs,
+            "PROVEEDORES": proveedores,
+            "COMENTARIO": comentario_compra(ocs, proveedores, oferta, promedio, dias),
+            COLUMNA_ESTADO: "CON STOCK" if oferta is not None else "NO LO TENGO",
+        })
+
+    tabla = pd.DataFrame(filas, columns=columnas)
+    for columna in COLUMNAS_NUMERICAS_PANEL_MP:
+        tabla[columna] = _numeros_de_columna(tabla[columna])
+    return tabla.sort_values("MONTO", ascending=False, na_position="last").reset_index(drop=True)
+
+
 def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
                       avisar=None) -> tuple[pd.DataFrame, dict]:
     """Barre el periodo y devuelve (tabla de productos comprados, resumen)."""
@@ -1467,11 +1567,17 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
 
     # --- Paso 2: el detalle solo de esas ------------------------------------
     filas: list[dict] = []
+    contactos: list[str] = []
     total_ordenes = max(len(ordenes), 1)
     for numero, codigo in enumerate(sorted(ordenes), start=1):
         orden = detalle_orden(codigo)
         if orden:
             filas.extend(filas_de_orden(orden, nombres_unidad))
+            # El nombre del contacto viene siempre; el correo NO (llega vacio en
+            # todas las ordenes revisadas). Sirve para proponer el destinatario.
+            quien = str((orden.get("Comprador") or {}).get("NombreContacto") or "").strip()
+            if quien:
+                contactos.append(quien)
         if avisar:
             avisar(0.4 + numero / total_ordenes * 0.6,
                    f"Leyendo el detalle: {numero} de {len(ordenes)} órdenes")
@@ -1499,6 +1605,8 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
         "ordenes_en_periodo": int(tabla.loc[en_periodo, "ORDEN"].nunique()) if len(tabla) else 0,
         "desde_real": min((f for f in tabla["FECHA"] if f), default=None),
         "hasta_real": max((f for f in tabla["FECHA"] if f), default=None),
+        # El contacto que mas se repite: es quien compra habitualmente.
+        "contacto": (pd.Series(contactos).mode().iloc[0] if contactos else ""),
     }
     return tabla, resumen
 
@@ -1637,19 +1745,19 @@ def sugerir_pestana(nombres: list[str], año: int, año_actual: int) -> int:
     return 0
 
 
-def comentario_destacado(comentario) -> bool:
+def comentario_destacado(comentario, señales=SEÑALES_DESTACADAS) -> bool:
     """¿El comentario trae una señal que conviene aprovechar para vender?"""
     texto = str(comentario).lower()
-    return any(señal in texto for señal in SEÑALES_DESTACADAS)
+    return any(señal.lower() in texto for señal in señales)
 
 
-def destacar_comentarios(tabla: pd.DataFrame):
+def destacar_comentarios(tabla: pd.DataFrame, señales=SEÑALES_DESTACADAS):
     """Pinta en amarillo el comentario cuando trae una señal de oportunidad."""
     if "COMENTARIO" not in tabla.columns:
         return tabla
 
     def color(fila: pd.Series) -> list[str]:
-        if comentario_destacado(fila["COMENTARIO"]):
+        if comentario_destacado(fila["COMENTARIO"], señales):
             return [f"color: {COLOR_DESTACADO}; font-weight: 600"
                     if columna == "COMENTARIO" else "" for columna in tabla.columns]
         return [""] * len(tabla.columns)
@@ -1755,7 +1863,17 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         key=f"xlsx_{clave}",
     )
 
-    # --- Cotizacion y correo -------------------------------------------------
+    cotizacion_y_correo(seleccionados, precios_oferta, nombre_institucion(pestana), "", clave)
+
+
+def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
+                        institucion_sugerida: str, contacto_sugerido: str,
+                        clave: str) -> None:
+    """El PDF de cotizacion y el correo, a partir de las filas marcadas.
+
+    Lo usan los dos lados de la app: el panel de la hoja de compras y el modulo
+    de Mercado Publico. Necesita que la tabla traiga una columna ID.
+    """
     with st.container(border=True):
         st.markdown("##### 📄 Cotización y correo")
         if seleccionados.empty:
@@ -1765,9 +1883,10 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
         # autocomplete="off" en todos: si no, Chrome rellena solo el CC con la
         # misma direccion que se escribio en Para.
         c1, c2 = st.columns(2)
-        institucion = c1.text_input("Cliente (institución)", value=nombre_institucion(pestana),
+        institucion = c1.text_input("Cliente (institución)", value=institucion_sugerida,
                                     key=f"inst_{clave}", autocomplete="off")
-        contacto = c2.text_input("Nombre del contacto", key=f"cont_{clave}",
+        contacto = c2.text_input("Nombre del contacto", value=contacto_sugerido,
+                                 key=f"cont_{clave}",
                                  placeholder="Ej: Claudia Inzunza", autocomplete="off")
         c3, c4 = st.columns([2, 1])
         linea_producto = c3.text_input("Producto (línea del documento)", key=f"prod_{clave}",
@@ -1861,8 +1980,13 @@ def render_informe(libro: dict[str, pd.DataFrame], precios_oferta: dict[str, flo
             st.code(cuerpo, language=None)
 
 
-def seccion_mercado_publico() -> None:
-    """Selector de instituciones con filtros y consulta en vivo a la API."""
+def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
+    """Selector de instituciones con filtros y consulta en vivo a la API.
+
+    Recibe el catalogo de ofertas ya cargado por la otra pestaña: de ahi salen
+    MI OFERTA y el estado (si el ID esta en el catalogo, se entiende que lo
+    comercializa).
+    """
     catalogo = cargar_catalogo_unidades()
     if catalogo.empty:
         st.error(
@@ -1997,13 +2121,6 @@ def seccion_mercado_publico() -> None:
     if solo_periodo:
         vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
 
-    monto = sum(v for v in vista["TOTAL"].tolist() if v is not None and not pd.isna(v))
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Órdenes", int(vista["ORDEN"].nunique()))
-    m2.metric("Productos comprados", len(vista))
-    m3.metric("Monto", pesos(monto) or "$0")
-    m4.metric("Proveedores", int(vista["PROVEEDOR"].nunique()))
-
     if resumen.get("desde_real") and resumen.get("hasta_real"):
         st.caption(
             f"{', '.join(unidades_c)} · {resumen.get('consultas', 0)} consultas a la API. "
@@ -2014,60 +2131,125 @@ def seccion_mercado_publico() -> None:
             "son anteriores. La API lista las órdenes por día de movimiento, no por fecha "
             "de creación, así que esas compras más antiguas aparecen solas y son reales.")
 
-    st.dataframe(
-        vista,
+    # --- La tabla de trabajo: una fila por producto --------------------------
+    dias_vista = (hasta_c - desde_c).days + 1
+    productos = agrupar_por_producto(vista, precios_oferta, dias_vista)
+    if productos.empty:
+        st.warning("Las órdenes encontradas no traen el ID de Convenio Marco, "
+                   "así que no se pueden agrupar por producto.")
+        return
+
+    # Arranca en TODOS, al reves que el panel de arriba: al abrir una institucion
+    # nueva lo primero que interesa es TODO lo que compra. Empezando en CON STOCK
+    # se veian 7 de 54 productos y parecia que la consulta habia fallado.
+    estado = st.radio("Estado", ESTADOS_MP, horizontal=True, key="mp_estado",
+                      index=ESTADOS_MP.index("TODOS"),
+                      help="CON STOCK son los ID que están en tu catálogo de ofertas; "
+                           "NO LO TENGO, los que no están en él.")
+    if estado != "TODOS":
+        productos = productos[productos[COLUMNA_ESTADO] == estado]
+    productos = productos.reset_index(drop=True)
+
+    monto = sum(v for v in productos["MONTO"].tolist() if v is not None and not pd.isna(v))
+    en_catalogo = int((productos[COLUMNA_ESTADO] == "CON STOCK").sum())
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Productos", len(productos))
+    m2.metric("Monto del período", pesos(monto) or "$0")
+    m3.metric("En tu catálogo", en_catalogo)
+    m4.metric("Órdenes", int(vista["ORDEN"].nunique()))
+
+    st.caption(
+        "Los precios son los que **pagó esta institución** en el período consultado, no "
+        "precios de mercado. **MI OFERTA** sale de tu catálogo y queda en blanco si ese ID "
+        "no tiene oferta. Selecciona los productos para el PDF: clic en una fila, y con "
+        "**Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas. "
+        "En amarillo, las oportunidades que conviene aprovechar.")
+
+    configuracion = {
+        "PRODUCTO": st.column_config.TextColumn(width="large"),
+        "COMENTARIO": st.column_config.TextColumn(width="large"),
+        "ID": st.column_config.TextColumn(
+            "ID", help="El ID de Convenio Marco, el mismo de tu hoja de compras"),
+    }
+    for columna in COLUMNAS_NUMERICAS_PANEL_MP:
+        configuracion[columna] = st.column_config.NumberColumn(
+            format="localized",
+            help={"OC": "Órdenes de compra del período",
+                  "PROVEEDORES": "Cuántos proveedores le vendieron este ID",
+                  "MI OFERTA": "Tu precio de oferta de la semana, si ese ID la tiene",
+                  }.get(columna, "En pesos"))
+
+    seleccion = st.dataframe(
+        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO]), SEÑALES_DESTACADAS_MP),
         width="stretch",
         hide_index=True,
-        column_config={
-            "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
-                                                 help="Fecha de creación de la orden"),
-            "PRODUCTO": st.column_config.TextColumn(width="large"),
-            "UNIDAD": st.column_config.TextColumn(width="medium"),
-            "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
-                                                     help="Quién ganó la venta"),
-            "ID": st.column_config.TextColumn(
-                "ID", help="El ID de Convenio Marco, el mismo de tu hoja de compras"),
-            "CANTIDAD": st.column_config.NumberColumn(format="localized"),
-            "PRECIO": st.column_config.NumberColumn(format="localized",
-                                                    help="Precio unitario neto pagado"),
-            "TOTAL": st.column_config.NumberColumn(format="localized",
-                                                   help="Total de la línea, en pesos"),
-        },
-        key="mp_tabla_vista",
+        on_select="rerun",
+        selection_mode="multi-row",
+        column_config=configuracion,
+        key="mp_tabla_productos",
     )
+    marcados = productos.iloc[filas_seleccionadas(seleccion, len(productos))]
 
+    nombre_base = normalizar(unidades_c[0])[:20] if unidades_c else "consulta"
     st.download_button(
-        "⬇️ Descargar Excel de esta consulta",
-        data=a_excel(vista, nombre_hoja="Mercado Público"),
-        file_name=(f"MercadoPublico-{normalizar(unidades_c[0])[:20] if unidades_c else 'consulta'}"
-                   f"-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx"),
+        "⬇️ Descargar Excel de esta vista",
+        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO]), nombre_hoja="Mercado Público"),
+        file_name=f"MercadoPublico-{nombre_base}-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        disabled=vista.empty,
+        disabled=productos.empty,
         key="mp_xlsx",
     )
+
+    # El PDF y el correo son los mismos del panel de arriba. El contacto lo
+    # propone la API; el correo no, porque llega siempre vacio.
+    cotizacion_y_correo(marcados, precios_oferta,
+                        unidades_c[0] if unidades_c else "",
+                        resumen.get("contacto", ""), "mp")
+
+    # --- El detalle, por si quiere ver orden por orden -----------------------
+    with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "
+                     f"({len(vista)} líneas)"):
+        st.dataframe(
+            vista,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
+                                                     help="Fecha de creación de la orden"),
+                "PRODUCTO": st.column_config.TextColumn(width="large"),
+                "UNIDAD": st.column_config.TextColumn(width="medium"),
+                "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
+                                                         help="Quién ganó la venta"),
+                "CANTIDAD": st.column_config.NumberColumn(format="localized"),
+                "PRECIO": st.column_config.NumberColumn(format="localized",
+                                                        help="Precio unitario neto pagado"),
+                "TOTAL": st.column_config.NumberColumn(format="localized",
+                                                       help="Total de la línea, en pesos"),
+            },
+            key="mp_tabla_ordenes",
+        )
+        st.download_button(
+            "⬇️ Descargar Excel de las órdenes",
+            data=a_excel(vista, nombre_hoja="Órdenes"),
+            file_name=f"MercadoPublico-ordenes-{nombre_base}-{desde_c:%d%m%Y}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="mp_xlsx_ordenes",
+        )
 
 
 # ===========================================================================
 # 11. PROGRAMA PRINCIPAL
 # ===========================================================================
 
-def seccion_analisis_compras() -> None:
-    """El panel de siempre: la hoja de compras convertida en oportunidades."""
+def seccion_analisis_compras() -> dict[str, float]:
+    """El panel de siempre: la hoja de compras convertida en oportunidades.
+
+    Devuelve los precios del catalogo de ofertas, porque el modulo de Mercado
+    Publico tambien los necesita. Por eso el catalogo se carga ANTES de mirar si
+    hay hoja de compras: sin esa hoja el panel no puede seguir, pero el otro
+    modulo si.
+    """
     url_hoja, url_ofertas = origen_de_datos()
-
-    if not url_hoja:
-        st.info("Pega arriba el enlace de tu Google Sheet para comenzar.")
-        return
-
-    try:
-        libro = cargar_libro_por_enlace(url_hoja)
-    except Exception as error:
-        st.error(str(error))
-        return
-
-    if not libro:
-        st.error("El libro no tiene pestañas legibles.")
-        return
 
     precios_oferta: dict[str, float] = {}
     if url_ofertas:
@@ -2081,8 +2263,23 @@ def seccion_analisis_compras() -> None:
         except Exception as error:
             st.warning(f"No se pudo leer el catálogo de ofertas: {error}")
 
+    if not url_hoja:
+        st.info("Pega arriba el enlace de tu Google Sheet para comenzar.")
+        return precios_oferta
+
+    try:
+        libro = cargar_libro_por_enlace(url_hoja)
+    except Exception as error:
+        st.error(str(error))
+        return precios_oferta
+
+    if not libro:
+        st.error("El libro no tiene pestañas legibles.")
+        return precios_oferta
+
     año_actual = datetime.now().year
     render_informe(libro, precios_oferta, f"Oportunidades-{año_actual}", año_actual, clave="unico")
+    return precios_oferta
 
 
 def main() -> None:
@@ -2096,10 +2293,12 @@ def main() -> None:
     panel_lateral_en_construccion()
 
     analisis, mercado = st.tabs(["📊  Análisis de compras", "🏛️  Mercado Público"])
+    # El orden importa: la primera pestaña carga el catalogo de ofertas y la
+    # segunda lo necesita para MI OFERTA y para el estado de cada producto.
     with analisis:
-        seccion_analisis_compras()
+        precios_oferta = seccion_analisis_compras()
     with mercado:
-        seccion_mercado_publico()
+        seccion_mercado_publico(precios_oferta)
 
 
 if __name__ == "__main__":
