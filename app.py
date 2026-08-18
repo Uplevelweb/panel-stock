@@ -1277,7 +1277,10 @@ def consultar_mp(recurso: str) -> dict:
             with urllib.request.urlopen(peticion, timeout=90) as respuesta:
                 return json.loads(respuesta.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            if error.code == 429 and intento < 3:
+            # El 429 («peticiones simultaneas») y los 500/502/503 (la API
+            # saturada) son pasajeros: se reintentan igual que en el bodeguero.
+            # Antes el 500 cortaba la consulta al primer intento.
+            if error.code in (429, 500, 502, 503) and intento < 3:
                 time.sleep(espera)
                 espera *= 2
                 continue
@@ -1285,6 +1288,12 @@ def consultar_mp(recurso: str) -> dict:
                 raise RuntimeError(
                     "La API está recibiendo dos consultas a la vez con el mismo "
                     "ticket. Espera un momento y vuelve a consultar."
+                ) from None
+            if error.code in (500, 502, 503):
+                raise RuntimeError(
+                    "La API de Mercado Público no está respondiendo bien en este "
+                    "momento. Puede ser que se hayan agotado las 10.000 consultas "
+                    "del día: prueba de nuevo más tarde o con un período más corto."
                 ) from None
             raise RuntimeError(
                 f"La API de Mercado Público respondió con el error {error.code}. "
