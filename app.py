@@ -1328,6 +1328,129 @@ COLUMNAS_CATALOGO = ["codigo_unidad", "nombre_unidad", "codigo_organismo",
                      "nombre_organismo", "region", "comuna", "oc_convenio_marco"]
 
 
+# ---------------------------------------------------------------------------
+# LA BODEGA: lo que el bodeguero dejo descargado
+# ---------------------------------------------------------------------------
+# `bodeguero.py` corre de madrugada en GitHub y deja aqui las ordenes ya
+# bajadas. Leer de la bodega es instantaneo y no gasta ni una consulta del
+# ticket; consultar en vivo tomaba minutos.
+#
+# La app funciona con bodega y sin ella: mientras se va llenando, lo que no
+# alcanza a cubrir se sigue consultando en vivo como antes.
+
+RUTA_BODEGA = CARPETA / "bodega"
+
+
+def estado_bodega() -> dict:
+    """Que dias tiene la bodega y cuando se actualizo por ultima vez."""
+    archivo = RUTA_BODEGA / "estado.json"
+    if not archivo.exists():
+        return {"mapa": [], "detalle": [], "actualizado": None}
+    try:
+        return json.loads(archivo.read_text(encoding="utf-8"))
+    except Exception:
+        return {"mapa": [], "detalle": [], "actualizado": None}
+
+
+def _meses_del_rango(desde: date, hasta: date) -> list[str]:
+    """«2026-06», «2026-07», «2026-08»: los archivos que hay que abrir."""
+    meses, cursor = [], date(desde.year, desde.month, 1)
+    while cursor <= hasta:
+        meses.append(f"{cursor:%Y-%m}")
+        cursor = date(cursor.year + (cursor.month == 12),
+                      cursor.month % 12 + 1, 1)
+    return meses
+
+
+@st.cache_data(show_spinner=False)
+def leer_bodega(capa: str, meses: tuple[str, ...], sello: str) -> pd.DataFrame:
+    """Lee los archivos mensuales de una capa. `sello` invalida la cache."""
+    partes = []
+    for mes in meses:
+        archivo = RUTA_BODEGA / capa / f"{mes}.parquet"
+        if archivo.exists():
+            partes.append(pd.read_parquet(archivo))
+    if not partes:
+        return pd.DataFrame()
+    return pd.concat(partes, ignore_index=True)
+
+
+def sello_bodega() -> str:
+    """Cambia cuando el bodeguero deja datos nuevos, para soltar la cache."""
+    return str(estado_bodega().get("actualizado") or "vacia")
+
+
+def dias_cubiertos(desde: date, hasta: date) -> tuple[int, int]:
+    """(dias del rango que la bodega tiene con detalle, dias del rango)."""
+    listos = set(estado_bodega().get("detalle") or [])
+    dias = dias_del_barrido(desde, hasta)
+    return sum(1 for d in dias if d.isoformat() in listos), len(dias)
+
+
+def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
+                         hasta: date) -> pd.DataFrame:
+    """Las compras guardadas, en el mismo formato que devuelve la consulta viva."""
+    detalle = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
+                          sello_bodega())
+    if detalle.empty:
+        return pd.DataFrame(columns=COLUMNAS_MP)
+
+    codigos = set(unidades["codigo_unidad"])
+    nombres = dict(zip(unidades["codigo_unidad"], unidades["nombre_unidad"]))
+    # Se filtra por el DIA DEL BARRIDO, no por la fecha de creacion: es lo mismo
+    # que hace la consulta en vivo, que barre dias y despues deja filtrar por la
+    # fecha real. Filtrando por creacion no salia nada, porque las ordenes que
+    # la API lista un dia casi siempre se crearon antes.
+    dias_barridos = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
+    dentro = dias_barridos.between(desde, hasta)
+    suyas = detalle["unidad"].isin(codigos)
+    elegidas = detalle[dentro.values & suyas.values].copy()
+    if elegidas.empty:
+        return pd.DataFrame(columns=COLUMNAS_MP)
+
+    tabla = pd.DataFrame({
+        "FECHA": pd.to_datetime(elegidas["fecha"], errors="coerce").dt.date,
+        "ORDEN": elegidas["orden"].astype(str),
+        "ESTADO": elegidas["estado"].astype(str),
+        "UNIDAD": [nombres.get(u, u) for u in elegidas["unidad"]],
+        "ID": elegidas["id_producto"].astype(str),
+        "PRODUCTO": elegidas["producto"].astype(str),
+        "CANTIDAD": elegidas["cantidad"],
+        "PRECIO": elegidas["precio"],
+        "TOTAL": elegidas["total"],
+        "PROVEEDOR": elegidas["proveedor"].astype(str),
+        "RUT PROVEEDOR": elegidas["rut_proveedor"].astype(str),
+    })
+    for columna in COLUMNAS_NUMERICAS_MP:
+        tabla[columna] = _numeros_de_columna(tabla[columna])
+    return (tabla.sort_values(["ORDEN"], ascending=False)
+            .sort_values("FECHA", ascending=False, na_position="last", kind="stable")
+            .reset_index(drop=True))
+
+
+def resumen_bodega(tabla: pd.DataFrame, desde: date, hasta: date,
+                   detalle: pd.DataFrame | None = None) -> dict:
+    """El mismo resumen que arma la consulta viva, pero sin gastar consultas."""
+    fechas = [f for f in tabla["FECHA"] if f] if len(tabla) else []
+    en_periodo = [bool(f and desde <= f <= hasta) for f in tabla["FECHA"]] if len(tabla) else []
+    contacto = ""
+    if detalle is not None and not detalle.empty and "contacto" in detalle:
+        posibles = detalle["contacto"][detalle["contacto"].astype(str).str.strip() != ""]
+        if not posibles.empty:
+            contacto = posibles.mode().iloc[0]
+    return {
+        "consultas": 0,
+        "dias": (hasta - desde).days + 1,
+        "organismos": 0,
+        "ordenes": int(tabla["ORDEN"].nunique()) if len(tabla) else 0,
+        "ordenes_en_periodo": int(tabla.loc[en_periodo, "ORDEN"].nunique()) if len(tabla) else 0,
+        "desde_real": min(fechas, default=None),
+        "hasta_real": max(fechas, default=None),
+        "contacto": contacto,
+        "de_bodega": True,
+    }
+
+
 def cargar_catalogo_unidades() -> pd.DataFrame:
     """Las unidades que compran por Convenio Marco (codigo, nombre, region...).
 
@@ -1338,9 +1461,75 @@ def cargar_catalogo_unidades() -> pd.DataFrame:
     faltaba el archivo aunque ya estaba. Con la fecha como llave, ademas, basta
     con reemplazar el CSV para que la app lea el nuevo.
     """
-    if not RUTA_CATALOGO_UNIDADES.exists():
-        return pd.DataFrame(columns=COLUMNAS_CATALOGO)
-    return leer_catalogo_unidades(RUTA_CATALOGO_UNIDADES.stat().st_mtime)
+    if RUTA_CATALOGO_UNIDADES.exists():
+        catalogo = leer_catalogo_unidades(RUTA_CATALOGO_UNIDADES.stat().st_mtime)
+    else:
+        catalogo = pd.DataFrame(columns=COLUMNAS_CATALOGO)
+    return con_unidades_de_bodega(catalogo, sello_bodega())
+
+
+@st.cache_data(show_spinner=False)
+def con_unidades_de_bodega(catalogo: pd.DataFrame, sello: str) -> pd.DataFrame:
+    """Suma al catalogo las unidades que descubrio el bodeguero.
+
+    El CSV se armo con 8 dias habiles y trae 2.103 unidades; la bodega, con 594
+    dias, encontro 4.293. Se combinan en vez de reemplazar porque el bodeguero
+    va averiguando los nombres de a poco: mientras no sepa uno, manda el CSV.
+
+    La frecuencia de compra tambien se recalcula: el CSV la medio sobre 8 dias y
+    la bodega la mide sobre todo lo descargado, que es muchisimo mas fiel.
+    """
+    unidades = RUTA_BODEGA / "unidades.parquet"
+    if not unidades.exists():
+        return catalogo
+
+    try:
+        nuevas = pd.read_parquet(unidades).fillna("")
+    except Exception:
+        return catalogo
+
+    juntas = pd.concat([catalogo, nuevas], ignore_index=True)
+    for columna in COLUMNAS_CATALOGO:
+        if columna not in juntas.columns:
+            juntas[columna] = ""
+    juntas = juntas.fillna("")
+    # Gana la fila con nombre: la del bodeguero si lo trae, si no la del CSV.
+    juntas["_tiene_nombre"] = juntas["nombre_unidad"].astype(str).str.strip() != ""
+    juntas = (juntas.sort_values("_tiene_nombre")
+              .drop_duplicates("codigo_unidad", keep="last")
+              .drop(columns="_tiene_nombre"))
+
+    sin_region = juntas["region"].astype(str).str.strip() == ""
+    juntas.loc[sin_region, "region"] = SIN_REGION
+
+    frecuencia = ordenes_por_unidad(sello)
+    if frecuencia:
+        juntas["oc_convenio_marco"] = [
+            frecuencia.get(u, 0) or v
+            for u, v in zip(juntas["codigo_unidad"],
+                            pd.to_numeric(juntas["oc_convenio_marco"],
+                                          errors="coerce").fillna(0).astype(int))
+        ]
+    juntas["oc_convenio_marco"] = (
+        pd.to_numeric(juntas["oc_convenio_marco"], errors="coerce").fillna(0).astype(int))
+    juntas = juntas[juntas["codigo_unidad"].astype(str).str.strip() != ""]
+    return (juntas[COLUMNAS_CATALOGO]
+            .sort_values(["oc_convenio_marco", "nombre_unidad"], ascending=[False, True])
+            .reset_index(drop=True))
+
+
+@st.cache_data(show_spinner=False)
+def ordenes_por_unidad(sello: str) -> dict[str, int]:
+    """Cuantas ordenes de Convenio Marco lleva cada unidad en toda la bodega."""
+    archivos = sorted((RUTA_BODEGA / "mapa").glob("*.parquet"))
+    if not archivos:
+        return {}
+    try:
+        mapa = pd.concat([pd.read_parquet(a, columns=["unidad"]) for a in archivos],
+                         ignore_index=True)
+    except Exception:
+        return {}
+    return mapa.groupby("unidad").size().to_dict()
 
 
 @st.cache_data(show_spinner=False)
@@ -2099,15 +2288,31 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
         dias = len(dias_del_barrido(desde, hasta))
         organismos_distintos = elegidas_df["codigo_organismo"].nunique()
         consultas = dias * organismos_distintos
+        # La bodega manda cuando tiene el periodo completo: es instantanea y no
+        # gasta consultas. Si le falta aunque sea un dia, se consulta en vivo
+        # para no mostrar datos a medias sin avisar.
+        en_bodega, del_rango = dias_cubiertos(desde, hasta)
+        usar_bodega = rango_listo and en_bodega == del_rango and en_bodega > 0
         with p2:
             if not rango_listo:
                 st.caption("Elige también la fecha de término.")
+            elif usar_bodega:
+                cuando = estado_bodega().get("actualizado") or ""
+                sello = f" · datos al {cuando[8:10]}-{cuando[5:7]} a las {cuando[11:16]}" if cuando else ""
+                st.caption(
+                    f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}** · "
+                    f"**está todo en la bodega**{sello}. La consulta es inmediata y no "
+                    "gasta ninguna consulta del ticket.")
             elif elegidas:
+                falta = del_rango - en_bodega
                 st.caption(
                     f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**: son **{consultas} "
                     f"consultas** para barrer el período ({dias} días × "
                     f"{organismos_distintos} organismo/s), más una por cada orden que "
                     "calce. El ticket permite 10.000 al día.")
+                if en_bodega:
+                    st.caption(f"La bodega ya tiene {en_bodega} de estos {del_rango} días; "
+                               f"faltan {falta} y por eso se consulta en vivo.")
                 if consultas > CONSULTAS_QUE_DEMORAN:
                     st.warning(
                         f"Son {dias} días: la consulta puede demorar varios minutos y "
@@ -2115,30 +2320,41 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
             else:
                 st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**.")
 
-        if not hay_ticket:
+        if not hay_ticket and not usar_bodega:
             st.warning(
                 "Falta el ticket de la API. Se anota en Streamlit ▸ Manage app ▸ "
                 'Settings ▸ Secrets así:\n\n[mercadopublico]\nticket = "TU-TICKET"')
 
         consultar = st.button(
             "🔎 Consultar Mercado Público", type="primary", width="stretch",
-            disabled=not elegidas or not hay_ticket or not rango_listo,
+            disabled=not elegidas or not rango_listo or (not hay_ticket and not usar_bodega),
             key="mp_consultar",
             help=None if elegidas else "Marca primero al menos una unidad.")
 
     # --- La consulta ---------------------------------------------------------
     if consultar:
-        barra = st.progress(0.0, text="Consultando Mercado Público...")
-        try:
-            tabla, resumen = buscar_compras_cm(
-                elegidas_df, desde, hasta,
-                avisar=lambda avance, texto: barra.progress(min(max(avance, 0.0), 1.0),
-                                                            text=texto))
-        except Exception as error:
+        # Si el bodeguero ya dejo el periodo descargado, se lee de la bodega:
+        # es instantaneo y no gasta ni una consulta del ticket.
+        if usar_bodega:
+            with st.spinner("Leyendo la bodega..."):
+                tabla = compras_desde_bodega(elegidas_df, desde, hasta)
+                crudo = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
+                                    sello_bodega())
+                if not crudo.empty:
+                    crudo = crudo[crudo["unidad"].isin(set(elegidas_df["codigo_unidad"]))]
+                resumen = resumen_bodega(tabla, desde, hasta, crudo)
+        else:
+            barra = st.progress(0.0, text="Consultando Mercado Público...")
+            try:
+                tabla, resumen = buscar_compras_cm(
+                    elegidas_df, desde, hasta,
+                    avisar=lambda avance, texto: barra.progress(min(max(avance, 0.0), 1.0),
+                                                                text=texto))
+            except Exception as error:
+                barra.empty()
+                st.error(str(error))
+                return
             barra.empty()
-            st.error(str(error))
-            return
-        barra.empty()
         st.session_state["mp_tabla"] = tabla
         st.session_state["mp_resumen"] = resumen
         st.session_state["mp_consultado"] = (desde, hasta, list(elegidas_df["nombre_unidad"]))
@@ -2187,7 +2403,12 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
             st.warning("No queda ninguna orden con esos convenios marcados.")
             return
 
-    if resumen.get("desde_real") and resumen.get("hasta_real"):
+    if resumen.get("de_bodega") and resumen.get("desde_real"):
+        st.caption(
+            f"{', '.join(unidades_c)} · **leído de la bodega**, sin gastar consultas. "
+            f"{resumen.get('ordenes', 0)} órdenes creadas entre "
+            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
+    elif resumen.get("desde_real") and resumen.get("hasta_real"):
         st.caption(
             f"{', '.join(unidades_c)} · {resumen.get('consultas', 0)} consultas a la API. "
             f"El barrido de {resumen.get('dias', 0)} días encontró "
