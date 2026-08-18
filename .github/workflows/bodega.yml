@@ -1,0 +1,64 @@
+# Llena la bodega de Mercado Publico todas las madrugadas.
+#
+# ChileCompra pide hacer las descargas grandes entre las 22:00 y las 07:00, asi
+# que corre a las 02:00 de Chile. GitHub usa UTC y Chile esta 4 horas atras en
+# horario de verano, asi que 06:00 UTC son las 02:00 alla.
+#
+# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+#
+# ANTES DE QUE FUNCIONE hay que anotar el ticket una sola vez:
+#   Settings > Secrets and variables > Actions > New repository secret
+#   Name: TICKET_MP     Secret: (el codigo de ticket-mp.txt)
+
+name: Bodega Mercado Público
+
+on:
+  schedule:
+    - cron: "0 6 * * *"      # 02:00 en Chile
+  workflow_dispatch:          # y tambien a mano, con el boton "Run workflow"
+    inputs:
+      consultas:
+        description: "Tope de consultas de esta corrida"
+        required: false
+        default: "9000"
+
+# Permiso para que la tarea pueda guardar los datos en el repositorio.
+permissions:
+  contents: write
+
+jobs:
+  llenar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330      # 5,5 horas: el bodeguero se detiene solo a las 5
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow
+
+      - name: Llenar la bodega
+        env:
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+        run: |
+          python bodeguero.py --consultas ${{ github.event.inputs.consultas || 9000 }}
+
+      - name: Guardar lo descargado en el repositorio
+        run: |
+          git config user.name "Bodeguero"
+          git config user.email "bodeguero@users.noreply.github.com"
+          git add bodega
+          if git diff --staged --quiet; then
+            echo "No hay datos nuevos que guardar."
+          else
+            git commit -m "Bodega: datos al $(date -u +'%d-%m-%Y')"
+            # Si alguien subio algo mientras corria, se reintenta sobre lo nuevo.
+            git pull --rebase --autostash origin main || true
+            git push
+          fi
