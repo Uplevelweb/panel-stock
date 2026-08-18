@@ -81,6 +81,9 @@ AZUL_TABLA = (47, 134, 203)
 
 CARPETA = Path(__file__).parent
 RUTA_LOGO = CARPETA / "LogoVec.png"
+# Version cuadrada del logo: el original es horizontal (400x225) y como
+# favicon o icono de celular sale aplastado.
+RUTA_ICONO = CARPETA / "icono.png"
 
 # Paleta tomada del Panel Armada (emergenza-mailer/Index.html) para que los
 # dos paneles se vean como un mismo sistema.
@@ -1852,14 +1855,23 @@ def aplicar_estilos() -> None:
             border-radius: 12px;
         }}
         /* El tamaño general (20% mas chico) se define en .streamlit/config.toml
-           con baseFontSize; aqui solo se ajusta el ancho y el aire de arriba. */
+           con baseFontSize; aqui solo se ajusta el ancho y el aire de arriba.
+           Sin barra lateral se aprovecha todo el ancho de la pantalla. */
         [data-testid="stMainBlockContainer"] {{
-            padding-top: 2.2rem;
-            max-width: 1500px;
+            padding-top: 1.6rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
+            max-width: 100%;
         }}
-        /* Cabecera compacta: logo y titulo en una sola franja, con el filo rojo. */
+        /* En el celular, los margenes se comen la pantalla. */
+        @media (max-width: 640px) {{
+            [data-testid="stMainBlockContainer"] {{
+                padding-left: 0.7rem; padding-right: 0.7rem; padding-top: 1rem;
+            }}
+        }}
+        /* Cabecera compacta: logo y titulo centrados, con el filo rojo. */
         .cabecera {{
-            display: flex; align-items: center; gap: 22px;
+            display: flex; align-items: center; justify-content: center; gap: 22px;
             background: {COLOR['blanco']};
             border-radius: 12px;
             border-bottom: 4px solid {COLOR['rojo']};
@@ -1867,12 +1879,21 @@ def aplicar_estilos() -> None:
             margin-bottom: 16px;
         }}
         .cabecera img {{ width: 132px; flex: none; }}
-        .cabecera-texto {{ line-height: 1.15; }}
+        .cabecera-texto {{ line-height: 1.15; text-align: center; }}
         .titulo-panel {{
             color: #24333F; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
             color: #5A7089; font-size: 12.5px; margin-top: 2px;
+        }}
+        /* En el celular: logo arriba, titulo abajo y mas chico. Este bloque va
+           AL FINAL a proposito: las reglas de arriba tienen la misma fuerza y,
+           puesto antes, el tamaño del titulo lo pisaba la regla general. */
+        @media (max-width: 640px) {{
+            .cabecera {{ flex-direction: column; gap: 8px; padding: 12px 10px; }}
+            .cabecera img {{ width: 108px; }}
+            .titulo-panel {{ font-size: 21px; letter-spacing: -0.2px; }}
+            .subtitulo-panel {{ font-size: 11px; }}
         }}
         </style>
         """,
@@ -1898,16 +1919,25 @@ def cabecera() -> None:
     )
 
 
-def panel_lateral_en_construccion() -> None:
-    """Modo 2 (cuenta de servicio): reservado mientras se gestiona la API."""
-    st.sidebar.title("Modo 2 · Conexión API")
-    st.sidebar.info(
-        "🔧 **En construcción.**\n\n"
-        "Cuando esté lista la cuenta de servicio de Google, la app leerá las hojas "
-        "privadas y la carpeta de ofertas semanales de Drive sin necesidad de "
-        "compartir enlaces."
+def icono_del_movil() -> None:
+    """El icono cuadrado para cuando se agrega la app a la pantalla del celular.
+
+    `page_icon` de Streamlit deja el favicon de la pestaña, pero el celular usa
+    otra etiqueta (`apple-touch-icon`) y sin ella pone una captura de la pagina.
+    Las etiquetas van dentro del <body>, que es lo unico que Streamlit permite
+    escribir; los navegadores igual las leen. No ocupan espacio en pantalla.
+    """
+    if not RUTA_ICONO.exists():
+        return
+    icono = f"data:image/png;base64,{base64.b64encode(RUTA_ICONO.read_bytes()).decode()}"
+    st.markdown(
+        f'<link rel="apple-touch-icon" href="{icono}">'
+        f'<link rel="apple-touch-icon-precomposed" href="{icono}">'
+        f'<link rel="icon" href="{icono}">'
+        f'<meta name="apple-mobile-web-app-title" content="{TITULO_APP}">'
+        f'<meta name="application-name" content="{TITULO_APP}">',
+        unsafe_allow_html=True,
     )
-    st.sidebar.caption("Mientras tanto, usa los enlaces del encabezado.")
 
 
 def origen_de_datos() -> tuple[str, str]:
@@ -2544,64 +2574,77 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
 # 11. PROGRAMA PRINCIPAL
 # ===========================================================================
 
-def seccion_analisis_compras() -> dict[str, float]:
-    """El panel de siempre: la hoja de compras convertida en oportunidades.
+def precios_del_catalogo(url_ofertas: str) -> tuple[dict[str, float], str, str]:
+    """(precios, archivo, error). No dibuja nada: lo necesitan las dos pestañas.
 
-    Devuelve los precios del catalogo de ofertas, porque el modulo de Mercado
-    Publico tambien los necesita. Por eso el catalogo se carga ANTES de mirar si
-    hay hoja de compras: sin esa hoja el panel no puede seguir, pero el otro
-    modulo si.
+    Se carga en `main`, antes de las pestañas, porque Mercado Público va primero
+    y tambien lo usa (para MI OFERTA y el estado de cada producto).
     """
-    url_hoja, url_ofertas = origen_de_datos()
+    if not url_ofertas:
+        return {}, "", ""
+    try:
+        precios, fuente = cargar_ofertas(url_ofertas)
+        return precios, fuente, ""
+    except Exception as error:
+        return {}, "", str(error)
 
-    precios_oferta: dict[str, float] = {}
-    if url_ofertas:
-        try:
-            precios_oferta, fuente = cargar_ofertas(url_ofertas)
-            if precios_oferta:
-                st.caption(f"✅ Catálogo de ofertas: **{fuente}** — {len(precios_oferta)} precios cargados.")
-            else:
-                st.warning("El catálogo de ofertas se leyó, pero no se encontraron columnas "
-                           "de ID y precio. Revisa que el archivo tenga esos encabezados.")
-        except Exception as error:
-            st.warning(f"No se pudo leer el catálogo de ofertas: {error}")
+
+def seccion_analisis_compras(precios_oferta: dict[str, float], fuente: str,
+                             error_ofertas: str) -> None:
+    """El panel de siempre: la hoja de compras convertida en oportunidades."""
+    url_hoja, _ = origen_de_datos()
+
+    if error_ofertas:
+        st.warning(f"No se pudo leer el catálogo de ofertas: {error_ofertas}")
+    elif precios_oferta:
+        st.caption(f"✅ Catálogo de ofertas: **{fuente}** — "
+                   f"{len(precios_oferta)} precios cargados.")
+    elif fuente:
+        st.warning("El catálogo de ofertas se leyó, pero no se encontraron columnas "
+                   "de ID y precio. Revisa que el archivo tenga esos encabezados.")
 
     if not url_hoja:
         st.info("Pega arriba el enlace de tu Google Sheet para comenzar.")
-        return precios_oferta
+        return
 
     try:
         libro = cargar_libro_por_enlace(url_hoja)
     except Exception as error:
         st.error(str(error))
-        return precios_oferta
+        return
 
     if not libro:
         st.error("El libro no tiene pestañas legibles.")
-        return precios_oferta
+        return
 
     año_actual = datetime.now().year
     render_informe(libro, precios_oferta, f"Oportunidades-{año_actual}", año_actual, clave="unico")
-    return precios_oferta
 
 
 def main() -> None:
     st.set_page_config(
         page_title=TITULO_APP,
-        page_icon=str(RUTA_LOGO) if RUTA_LOGO.exists() else "📊",
+        # El icono cuadrado, no el logo horizontal: como favicon salia aplastado.
+        page_icon=str(RUTA_ICONO) if RUTA_ICONO.exists() else "🏛️",
         layout="wide",
+        initial_sidebar_state="collapsed",
     )
     aplicar_estilos()
+    icono_del_movil()
     cabecera()
-    panel_lateral_en_construccion()
 
-    analisis, mercado = st.tabs(["📊  Análisis de compras", "🏛️  Mercado Público"])
-    # El orden importa: la primera pestaña carga el catalogo de ofertas y la
-    # segunda lo necesita para MI OFERTA y para el estado de cada producto.
-    with analisis:
-        precios_oferta = seccion_analisis_compras()
+    # El catalogo de ofertas se lee una vez y lo usan las dos pestañas. La URL
+    # sale del campo de «Análisis de compras», que se dibuja despues: en la
+    # primera pasada todavia no esta en session_state y se usa la de fabrica.
+    url_ofertas = st.session_state.get("url_ofertas", URL_OFERTAS_POR_DEFECTO)
+    precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
+
+    # Mercado Público va primero: es la pestaña con la que ella trabaja.
+    mercado, analisis = st.tabs(["🏛️  Mercado Público", "📊  Análisis de compras"])
     with mercado:
         seccion_mercado_publico(precios_oferta)
+    with analisis:
+        seccion_analisis_compras(precios_oferta, fuente_ofertas, error_ofertas)
 
 
 if __name__ == "__main__":
