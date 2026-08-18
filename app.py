@@ -1188,21 +1188,21 @@ def nombre_institucion(pestana: str) -> str:
     return re.sub(r"\s{2,}", " ", texto).strip(" -–—,") or str(pestana).strip()
 
 
-def texto_correo(contacto: str, institucion: str, cantidad: int, remitente: str) -> str:
+def texto_correo(contacto: str, remitente: str) -> str:
     """Redacta el correo con el mismo tono de los envios semanales.
 
     La firma lleva el correo desde el que se va a enviar, para que el comprador
     responda a esa misma casilla.
     """
-    de_quien = f" de {institucion.strip()}" if institucion.strip() else ""
     return "\n".join([
         saludo_correo(contacto),
         "",
         f"Le saluda {FIRMA['nombre']} de {FIRMA['empresa']}.",
         "",
-        f"Le comparto los ID disponibles en Convenio Marco según sus últimas compras{de_quien}. "
-        f"Son {cantidad} productos que podemos entregarle, con el detalle y los precios "
-        "de la oferta vigente en el archivo adjunto.",
+        # Corto y sin números: el detalle y los precios ya van en el PDF, y
+        # nombrar la institución o contar los productos sonaba a circular.
+        "Le comparto adjunto nuestros ID disponibles en Convenio Marco según "
+        "sus últimas compras.",
         "",
         "Contamos con stock permanente y flexibilidad para entregas parceladas.",
         "",
@@ -2149,7 +2149,7 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
             st.caption("Sin catálogo de ofertas cargado: el PDF saldrá sin precios. "
                        "Pega el enlace del catálogo arriba para incluirlos.")
 
-        cuerpo = texto_correo(contacto, institucion, len(seleccionados), remitente)
+        cuerpo = texto_correo(contacto, remitente)
         asunto = asunto_correo(institucion)
 
         pdf = a_pdf(seleccionados, institucion, contacto, linea_producto,
