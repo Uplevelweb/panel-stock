@@ -68,6 +68,12 @@ URL_OFERTAS_POR_DEFECTO = (
 # Panel Armada en Code.gs con CONFIG.OFERTAS_PATRON).
 PATRON_OFERTAS = "OFERTAS"
 
+# En la misma carpeta esta «CATÁLOGO CONVENIO MARCO.xlsx»: TODO lo que ella
+# vende, con una pestaña por rubro (Alimentos, Aseo, Emergencia y Prevención,
+# Escritorio) y ~22.700 productos. No trae precios; los precios son los del
+# archivo de ofertas de la semana.
+PATRON_CATALOGO = "CATALOGO"
+
 # Datos de la empresa que van en la cabecera del PDF.
 EMPRESA = {
     "razon": "Comercial Emergenza SpA",
@@ -489,11 +495,13 @@ def fecha_del_nombre(nombre: str) -> tuple[int, int, int]:
 
 
 @st.cache_data(ttl=300, show_spinner="Buscando el catálogo de ofertas más reciente...")
-def descargar_ofertas_de_carpeta(id_carpeta: str) -> tuple[str, bytes]:
-    """Busca en la carpeta de Drive el archivo de ofertas mas nuevo y lo baja.
+def descargar_ofertas_de_carpeta(id_carpeta: str, patron: str = PATRON_OFERTAS) -> tuple[str, bytes]:
+    """Busca en la carpeta de Drive el archivo mas nuevo que calce y lo baja.
 
-    La carpeta debe estar compartida como "cualquiera con el enlace". Se listan
-    sus archivos con la vista publica de Drive (no hace falta cuenta ni API).
+    Sirve para los dos archivos que viven ahi: el de ofertas de la semana y el
+    catalogo completo. La carpeta debe estar compartida como "cualquiera con el
+    enlace"; se listan sus archivos con la vista publica de Drive (no hace falta
+    cuenta ni API).
     """
     html = _descargar(
         f"https://drive.google.com/embeddedfolderview?id={id_carpeta}#list",
@@ -511,11 +519,11 @@ def descargar_ofertas_de_carpeta(id_carpeta: str) -> tuple[str, bytes]:
         )
 
     candidatos = [(fid, nombre) for fid, nombre in entradas
-                  if PATRON_OFERTAS in normalizar(nombre)]
+                  if patron in normalizar(nombre)]
     if not candidatos:
         disponibles = ", ".join(nombre for _, nombre in entradas[:6])
         raise FileNotFoundError(
-            f"En la carpeta no hay ningún archivo con la palabra «{PATRON_OFERTAS}» "
+            f"En la carpeta no hay ningún archivo con la palabra «{patron}» "
             f"en el nombre. Encontré: {disponibles}"
         )
 
@@ -568,6 +576,42 @@ def cargar_ofertas(url: str) -> tuple[dict[str, float], str]:
             if clave and valor:
                 precios.setdefault(clave, valor)
     return precios, fuente
+
+
+@st.cache_data(ttl=600, show_spinner="Leyendo tu catálogo de Convenio Marco...")
+def cargar_catalogo_propio(url: str) -> tuple[dict[str, str], str]:
+    """Todo lo que ella vende: {ID: rubro}. El rubro es la pestaña del archivo.
+
+    Es distinto del catalogo de ofertas y por eso se lee aparte:
+
+      CATÁLOGO  todo lo publicado en Convenio Marco (~22.700 productos), sin
+                precio. Dice si el producto lo vende o no.
+      OFERTAS   solo lo que esta con precio rebajado esa semana (~900).
+
+    Un producto puede estar en el catalogo y no tener oferta: se muestra igual,
+    con un guion en vez de precio.
+    """
+    id_carpeta = extraer_id_carpeta(url)
+    if not id_carpeta:
+        return {}, ""
+
+    nombre, contenido = descargar_ofertas_de_carpeta(id_carpeta, PATRON_CATALOGO)
+    hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None, dtype=str)
+
+    catalogo: dict[str, str] = {}
+    for rubro, grilla in hojas.items():
+        datos = aplicar_encabezado(grilla.fillna(""))
+        if datos.empty:
+            continue
+        posiciones = mapear_columnas(datos)
+        if "ID" not in posiciones:
+            continue
+        for id_producto in datos.iloc[:, posiciones["ID"]]:
+            clave = str(id_producto).strip()
+            # Los ID son numeros; asi se descartan los titulos y las filas sueltas.
+            if clave.isdigit():
+                catalogo.setdefault(clave, str(rubro).strip())
+    return catalogo, nombre
 
 
 # ===========================================================================
@@ -1675,7 +1719,8 @@ def _numeros_de_columna(serie: pd.Series) -> pd.Series:
     return numeros.astype("Float64")
 
 
-def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: int) -> str:
+def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: int,
+                      en_catalogo: bool = True) -> str:
     """Las señales de negocio de un producto, con los numeros a la vista.
 
     La mas valiosa es la ultima: si su oferta esta bajo lo que la institucion ya
@@ -1694,8 +1739,12 @@ def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: i
     else:
         señales.append(f"{proveedores} proveedores")
 
-    if oferta is None:
+    if not en_catalogo:
         señales.append("no está en tu catálogo")
+    elif oferta is None:
+        # Lo vende, pero esta semana no tiene precio rebajado: igual va al PDF,
+        # con un guion en la columna del precio.
+        señales.append("lo vendes, sin oferta esta semana")
     elif precio_pagado:
         diferencia = (oferta - precio_pagado) / precio_pagado * 100
         if diferencia <= -1:
@@ -1709,12 +1758,18 @@ def comentario_compra(ocs: int, proveedores: int, oferta, precio_pagado, dias: i
 
 
 def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float],
-                         dias: int) -> pd.DataFrame:
+                         dias: int, catalogo_propio: dict[str, str] | None = None) -> pd.DataFrame:
     """De una fila por linea de orden a una fila por ID, como el panel de arriba.
 
     Los precios son los que PAGO la institucion en el rango consultado. El
     promedio es el de los precios unitarios de cada linea, no ponderado por
     cantidad: asi P.MIN, P. PROM y P.MAX se leen como una misma escala.
+
+    El estado se decide contra el CATALOGO (todo lo que vende, ~22.600
+    productos), no contra las ofertas de la semana (~840). Un producto que
+    vende pero que esta semana no tiene oferta sale igual, marcado CON STOCK y
+    con la columna MI OFERTA en blanco: en el PDF le queda un guion. Si se
+    decidiera por las ofertas, se perderia el 96% de lo que ella puede vender.
     """
     columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO]
     if compras.empty:
@@ -1729,7 +1784,11 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
         precios = [p for p in grupo["PRECIO"] if p is not None and not pd.isna(p)]
         montos = [m for m in grupo["TOTAL"] if m is not None and not pd.isna(m)]
         promedio = sum(precios) / len(precios) if precios else None
-        oferta = precios_oferta.get(str(identificador).strip())
+        clave = str(identificador).strip()
+        oferta = precios_oferta.get(clave)
+        # Sin catalogo cargado se cae a las ofertas, que era el criterio viejo:
+        # asi la app sigue funcionando si el archivo no esta disponible.
+        en_catalogo = (clave in catalogo_propio) if catalogo_propio else (oferta is not None)
         ocs = int(grupo["ORDEN"].nunique())
         proveedores = int(grupo["PROVEEDOR"].nunique())
 
@@ -1745,8 +1804,9 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
             "MI OFERTA": oferta,
             "OC": ocs,
             "PROVEEDORES": proveedores,
-            "COMENTARIO": comentario_compra(ocs, proveedores, oferta, promedio, dias),
-            COLUMNA_ESTADO: "CON STOCK" if oferta is not None else "NO LO TENGO",
+            "COMENTARIO": comentario_compra(ocs, proveedores, oferta, promedio, dias,
+                                            en_catalogo),
+            COLUMNA_ESTADO: "CON STOCK" if en_catalogo else "NO LO TENGO",
         })
 
     tabla = pd.DataFrame(filas, columns=columnas)
@@ -2221,12 +2281,13 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
             st.code(cuerpo, language=None)
 
 
-def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
+def seccion_mercado_publico(precios_oferta: dict[str, float],
+                            catalogo_propio: dict[str, str]) -> None:
     """Selector de instituciones con filtros y consulta en vivo a la API.
 
-    Recibe el catalogo de ofertas ya cargado por la otra pestaña: de ahi salen
-    MI OFERTA y el estado (si el ID esta en el catalogo, se entiende que lo
-    comercializa).
+    Recibe las dos listas que la app lee de Drive:
+      - `catalogo_propio`: todo lo que ella vende. Decide el estado.
+      - `precios_oferta`: lo que esta rebajado esta semana. Llena MI OFERTA.
     """
     catalogo = cargar_catalogo_unidades()
     if catalogo.empty:
@@ -2466,7 +2527,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float]) -> None:
     dias_vista = (hasta_c - desde_c).days + 1
     if fechas_vista:
         dias_vista = max(dias_vista, (max(fechas_vista) - min(fechas_vista)).days + 1)
-    productos = agrupar_por_producto(vista, precios_oferta, dias_vista)
+    productos = agrupar_por_producto(vista, precios_oferta, dias_vista, catalogo_propio)
     if productos.empty:
         st.warning("Las órdenes encontradas no traen el ID de Convenio Marco, "
                    "así que no se pueden agrupar por producto.")
@@ -2590,7 +2651,8 @@ def precios_del_catalogo(url_ofertas: str) -> tuple[dict[str, float], str, str]:
 
 
 def seccion_analisis_compras(precios_oferta: dict[str, float], fuente: str,
-                             error_ofertas: str) -> None:
+                             error_ofertas: str, catalogo_propio: dict[str, str],
+                             fuente_catalogo: str) -> None:
     """El panel de siempre: la hoja de compras convertida en oportunidades."""
     url_hoja, _ = origen_de_datos()
 
@@ -2602,6 +2664,9 @@ def seccion_analisis_compras(precios_oferta: dict[str, float], fuente: str,
     elif fuente:
         st.warning("El catálogo de ofertas se leyó, pero no se encontraron columnas "
                    "de ID y precio. Revisa que el archivo tenga esos encabezados.")
+    if catalogo_propio:
+        st.caption(f"✅ Tu catálogo: **{fuente_catalogo}** — "
+                   f"{len(catalogo_propio)} productos que vendes.")
 
     if not url_hoja:
         st.info("Pega arriba el enlace de tu Google Sheet para comenzar.")
@@ -2638,13 +2703,19 @@ def main() -> None:
     # primera pasada todavia no esta en session_state y se usa la de fabrica.
     url_ofertas = st.session_state.get("url_ofertas", URL_OFERTAS_POR_DEFECTO)
     precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
+    # El catalogo completo (lo que vende) vive en la misma carpeta de Drive.
+    try:
+        catalogo_propio, fuente_catalogo = cargar_catalogo_propio(url_ofertas)
+    except Exception:
+        catalogo_propio, fuente_catalogo = {}, ""
 
     # Mercado Público va primero: es la pestaña con la que ella trabaja.
     mercado, analisis = st.tabs(["🏛️  Mercado Público", "📊  Análisis de compras"])
     with mercado:
-        seccion_mercado_publico(precios_oferta)
+        seccion_mercado_publico(precios_oferta, catalogo_propio)
     with analisis:
-        seccion_analisis_compras(precios_oferta, fuente_ofertas, error_ofertas)
+        seccion_analisis_compras(precios_oferta, fuente_ofertas, error_ofertas,
+                                 catalogo_propio, fuente_catalogo)
 
 
 if __name__ == "__main__":
