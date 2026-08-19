@@ -193,7 +193,8 @@ RUTA_TICKET_LOCAL = Path.home() / "ticket-mp.txt"
 # El periodo se elige con un calendario, sin topes: cada dia es una consulta por
 # organismo, asi que el largo del rango ES el costo. Se comprobo que la API
 # responde al menos hasta enero de 2023 (salio «2950-28-CM23»).
-DIAS_INICIALES_MP = 15
+# El periodo que aparece al abrir: el año en curso completo.
+PRIMER_DIA_SUGERIDO = date(2026, 1, 1)
 PRIMERA_FECHA_MP = date(2023, 1, 1)
 
 # A partir de aqui la consulta deja de ser instantanea y conviene avisarlo.
@@ -227,6 +228,11 @@ COLUMNAS_NUMERICAS_PANEL_MP = [
 # producto esta o no esta, y nada mas. Si esta, se entiende que lo comercializa
 # (CON STOCK); SIN STOCK no se puede saber desde aqui y por eso no aparece.
 ESTADOS_MP = ["CON STOCK", "NO LO TENGO", "TODOS"]
+
+# El rubro del catalogo, que hace las veces de «tipo de convenio marco»: la API
+# no entrega el convenio, pero el catalogo de ella tiene una pestaña por rubro.
+COLUMNA_RUBRO = "RUBRO"
+FUERA_DE_CATALOGO = "(fuera de tu catálogo)"
 
 # En este modulo tambien se destaca el precio, no solo la recurrencia: estar bajo
 # lo que la institucion ya pago es poco frecuente (4 de 54 productos en la prueba
@@ -838,8 +844,13 @@ TITULO_PDF = "ID DISPONIBLE SEGÚN HISTÓRICO"
 
 
 def numero_cotizacion_sugerido() -> str:
-    """Correlativo con el mismo formato que usa Serling: 3007-001 (dia+mes)."""
-    return f"{datetime.now():%d%m}-001"
+    """Numero unico por cotizacion: dia+mes y hora+minuto («1908-2304»).
+
+    Antes terminaba siempre en «-001» y se repetia en cada envio del dia. Un
+    correlativo de verdad (001, 002...) exigiria que la app escribiera el ultimo
+    numero en alguna parte, y Streamlit olvida entre sesiones.
+    """
+    return f"{datetime.now():%d%m-%H%M}"
 
 
 def _barra(pdf: FPDF, texto: str, alto: float = 9, tamaño: float = 11,
@@ -852,7 +863,7 @@ def _barra(pdf: FPDF, texto: str, alto: float = 9, tamaño: float = 11,
              new_x="LMARGIN", new_y="NEXT")
 
 
-def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str, linea_producto: str,
+def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str,
           numero: str, precios_oferta: dict[str, float]) -> bytes:
     """Genera el documento 'ID disponible según histórico'.
 
@@ -907,7 +918,7 @@ def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str, linea_producto: 
     pdf.ln(3)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(60, 60, 60)
-    for etiqueta, valor in (("CLIENTE:", institucion), ("PRODUCTO", linea_producto)):
+    for etiqueta, valor in (("CLIENTE:", institucion),):
         if not str(valor).strip():
             continue
         pdf.set_x(20)
@@ -1771,7 +1782,7 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     con la columna MI OFERTA en blanco: en el PDF le queda un guion. Si se
     decidiera por las ofertas, se perderia el 96% de lo que ella puede vender.
     """
-    columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO]
+    columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO, COLUMNA_RUBRO]
     if compras.empty:
         return pd.DataFrame(columns=columnas)
 
@@ -1807,6 +1818,10 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
             "COMENTARIO": comentario_compra(ocs, proveedores, oferta, promedio, dias,
                                             en_catalogo),
             COLUMNA_ESTADO: "CON STOCK" if en_catalogo else "NO LO TENGO",
+            # El rubro es la pestaña del catálogo: Alimentos, Aseo, Escritorio,
+            # Emergencia y Prevención. Es lo mas parecido al «tipo de convenio»
+            # que se puede saber, porque la API no lo entrega.
+            COLUMNA_RUBRO: (catalogo_propio or {}).get(clave, "") or FUERA_DE_CATALOGO,
         })
 
     tabla = pd.DataFrame(filas, columns=columnas)
@@ -1929,6 +1944,8 @@ def aplicar_estilos() -> None:
                 padding-left: 0.7rem; padding-right: 0.7rem; padding-top: 1rem;
             }}
         }}
+        /* El iframe de 1px que avisa antes de salir no debe ocupar espacio. */
+        [data-testid="stIFrame"] {{ display: none; }}
         /* Cabecera compacta: logo y titulo centrados, con el filo rojo. */
         .cabecera {{
             display: flex; align-items: center; justify-content: center; gap: 22px;
@@ -1976,6 +1993,35 @@ def cabecera() -> None:
         f'<div class="subtitulo-panel">{SUBTITULO_APP}</div>'
         f'</div></div>',
         unsafe_allow_html=True,
+    )
+
+
+def avisar_antes_de_salir(hay_resultados: bool) -> None:
+    """Pide confirmación al recargar o cerrar cuando hay una consulta en pantalla.
+
+    Una consulta larga se pierde entera si se recarga sin querer, y volver a
+    hacerla toma minutos. El aviso lo dibuja el navegador con su propio texto (no
+    se puede cambiar) y solo aparece si la persona ya interactuó con la página.
+
+    Va dentro de un iframe porque `st.markdown` no ejecuta JavaScript; desde ahi
+    se alcanza la ventana de la app, que es del mismo origen.
+    """
+    if not hay_resultados:
+        return
+    st.iframe(
+        """
+        <script>
+        const app = window.parent;
+        if (!app.__avisoDeSalida) {
+            app.__avisoDeSalida = true;
+            app.addEventListener("beforeunload", (evento) => {
+                evento.preventDefault();
+                evento.returnValue = "";
+            });
+        }
+        </script>
+        """,
+        height=1,
     )
 
 
@@ -2064,6 +2110,25 @@ def destacar_comentarios(tabla: pd.DataFrame, señales=SEÑALES_DESTACADAS):
         return [""] * len(tabla.columns)
 
     return tabla.style.apply(color, axis=1)
+
+
+def marcar_lo_nuevo(clave: str, opciones: list[str]) -> None:
+    """Deja marcado lo que ella eligió, más lo que apareció después.
+
+    Los filtros de año y de rubro se arman con lo que trae el resultado, así que
+    sus opciones cambian solas al filtrar o al consultar otra institución. Hay
+    que hacer dos cosas, y ANTES de dibujar el selector:
+
+      - soltar lo que ya no existe (si no, Streamlit reclama);
+      - marcar lo que aparece por primera vez, porque si no, un rubro que se fue
+        y volvió quedaba desmarcado sin que ella lo hubiera desmarcado.
+    """
+    antes = st.session_state.get(f"{clave}_opciones", [])
+    elegidas = st.session_state.get(clave, opciones)
+    quedan = [o for o in elegidas if o in opciones]
+    aparecidas = [o for o in opciones if o not in antes]
+    st.session_state[clave] = sorted(set(quedan) | set(aparecidas)) or list(opciones)
+    st.session_state[f"{clave}_opciones"] = list(opciones)
 
 
 def filas_seleccionadas(seleccion, total_filas: int) -> list[int]:
@@ -2189,12 +2254,9 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
         contacto = c2.text_input("Nombre del contacto", value=contacto_sugerido,
                                  key=f"cont_{clave}",
                                  placeholder="Ej: Claudia Inzunza", autocomplete="off")
-        c3, c4 = st.columns([2, 1])
-        linea_producto = c3.text_input("Producto (línea del documento)", key=f"prod_{clave}",
-                                       placeholder="Ej: CAJAS DE ALIMENTOS", autocomplete="off")
+        c4, c5, c6, c7 = st.columns([1, 1, 1, 1])
         numero = c4.text_input("N° Cotización", value=numero_cotizacion_sugerido(),
                                key=f"num_{clave}", autocomplete="off")
-        c5, c6, c7 = st.columns(3)
         remitente = c5.selectbox("Enviar desde", CORREOS_ENVIO, key=f"desde_{clave}")
         para = c6.text_input("Para", key=f"para_{clave}", placeholder="correo@institucion.cl",
                              autocomplete="off")
@@ -2212,8 +2274,7 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
         cuerpo = texto_correo(contacto, remitente)
         asunto = asunto_correo(institucion)
 
-        pdf = a_pdf(seleccionados, institucion, contacto, linea_producto,
-                    numero, precios_oferta)
+        pdf = a_pdf(seleccionados, institucion, contacto, numero, precios_oferta)
         archivo_pdf = nombre_pdf(institucion, numero)
         enviadores = urls_enviador()
         automatico = remitente in enviadores and clave_envio()
@@ -2251,8 +2312,7 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
                                                              respuesta.get("cc")] if x)
                             st.success(
                                 f"✅ Enviado desde {respuesta.get('cuenta') or remitente} "
-                                f"a {destinos} con «{archivo_pdf}» adjunto. "
-                                "Queda copia en tus Enviados de Gmail.")
+                                f"a {destinos}")
                         else:
                             st.error(f"El enviador no lo mandó: {respuesta.get('error')}")
                     except Exception as error:
@@ -2274,11 +2334,7 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
                        "script enviador y anotarlo en Streamlit ▸ Manage app ▸ Settings ▸ "
                        "Secrets. Mientras tanto, el botón abre Gmail y adjuntas el PDF a mano.")
 
-        with st.expander("Ver el texto del correo para copiarlo"):
-            st.text("Asunto:")
-            st.code(asunto, language=None)
-            st.text("Mensaje:")
-            st.code(cuerpo, language=None)
+
 
 
 def seccion_mercado_publico(precios_oferta: dict[str, float],
@@ -2370,7 +2426,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         p1, p2 = st.columns([1, 2])
         elegido = p1.date_input(
             "Período a consultar",
-            value=(hoy - timedelta(days=DIAS_INICIALES_MP - 1), hoy),
+            value=(min(PRIMER_DIA_SUGERIDO, hoy), hoy),
             min_value=PRIMERA_FECHA_MP, max_value=hoy,
             format="DD/MM/YYYY", key="mp_periodo",
             help="Elige la fecha de inicio y la de término. Puedes ir hacia atrás "
@@ -2405,18 +2461,14 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                     "gasta ninguna consulta del ticket.")
             elif elegidas:
                 falta = del_rango - en_bodega
-                st.caption(
-                    f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**: son **{consultas} "
-                    f"consultas** para barrer el período ({dias} días × "
-                    f"{organismos_distintos} organismo/s), más una por cada orden que "
-                    "calce. El ticket permite 10.000 al día.")
-                if en_bodega:
-                    st.caption(f"La bodega ya tiene {en_bodega} de estos {del_rango} días; "
-                               f"faltan {falta} y por eso se consulta en vivo.")
+                guardados = (f"La bodega tiene {en_bodega} de estos {del_rango} días"
+                             if en_bodega else "La bodega todavía no tiene estos días")
+                st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**. {guardados}, "
+                           f"así que **los {falta} que faltan se consultan en vivo**.")
                 if consultas > CONSULTAS_QUE_DEMORAN:
                     st.warning(
-                        f"Son {dias} días: la consulta puede demorar varios minutos y "
-                        "no hay que cerrar la página mientras avanza.")
+                        f"Puede demorar varios minutos: no cierres la página. Cuando la "
+                        "descarga nocturna llegue a estas fechas, será inmediato.")
             else:
                 st.caption(f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}**.")
 
@@ -2465,6 +2517,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         st.info("Elige una o más unidades y toca **Consultar Mercado Público**.")
         return
 
+    avisar_antes_de_salir(True)
     resumen = st.session_state.get("mp_resumen", {})
     desde_c, hasta_c, unidades_c = st.session_state.get("mp_consultado", (desde, hasta, []))
 
@@ -2478,9 +2531,15 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # La fecha con que se filtra es la de creacion de la orden, que es la real.
     # El barrido trae ordenes mas antiguas porque la API lista por dia de
     # movimiento; se avisa y se deja elegir.
+    # Mercado Público publica cada orden el dia que se MUEVE, no el dia que se
+    # compra, asi que un barrido de agosto arrastra compras de meses anteriores.
+    # Son reales y suman historia; la casilla deja quedarse solo con el periodo.
     solo_periodo = st.checkbox(
-        f"Mostrar solo las órdenes creadas entre el {desde_c:%d-%m-%Y} y el {hasta_c:%d-%m-%Y}",
-        value=False, key="mp_solo_periodo")
+        f"Ocultar las compras anteriores al {desde_c:%d-%m-%Y}",
+        value=False, key="mp_solo_periodo",
+        help="Mercado Público publica cada orden el día que tiene movimiento, no el día "
+             "de la compra, así que junto con el período pedido llegan compras más "
+             "antiguas. Son reales.")
     vista = tabla
     if solo_periodo:
         vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
@@ -2488,16 +2547,13 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # --- Filtro por convenio (el año del CM) --------------------------------
     convenios = sorted({convenio_del_codigo(c) for c in vista["ORDEN"] if c}, reverse=True)
     if len(convenios) > 1:
-        # Igual que con las unidades: al reconsultar otra institucion los
-        # convenios cambian, y hay que soltar los que ya no existen antes de
-        # dibujar el selector.
-        vigentes = [c for c in st.session_state.get("mp_convenio", convenios) if c in convenios]
-        st.session_state["mp_convenio"] = vigentes or convenios
-
+        marcar_lo_nuevo("mp_convenio", convenios)
+        # Se llama «Año» y no «Convenio» para no chocar con el filtro de rubro,
+        # que es el que ella entiende por tipo de convenio marco.
         elegidos = st.multiselect(
-            "Convenio", convenios, key="mp_convenio",
+            "Año del convenio", convenios, key="mp_convenio",
             help="El año del Convenio Marco, sacado del código de cada orden. El "
-                 "barrido trae órdenes de convenios anteriores que siguen vivos.")
+                 "barrido trae órdenes de convenios anteriores que siguen vigentes.")
         vista = vista[[convenio_del_codigo(c) in elegidos for c in vista["ORDEN"]]]
         if vista.empty:
             st.warning("No queda ninguna orden con esos convenios marcados.")
@@ -2510,13 +2566,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
     elif resumen.get("desde_real") and resumen.get("hasta_real"):
         st.caption(
-            f"{', '.join(unidades_c)} · {resumen.get('consultas', 0)} consultas a la API. "
-            f"El barrido de {resumen.get('dias', 0)} días encontró "
-            f"{resumen.get('ordenes', 0)} órdenes, creadas entre "
-            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**: "
-            f"{resumen.get('ordenes_en_periodo', 0)} son del período consultado y el resto "
-            "son anteriores. La API lista las órdenes por día de movimiento, no por fecha "
-            "de creación, así que esas compras más antiguas aparecen solas y son reales.")
+            f"{', '.join(unidades_c)} · {resumen.get('ordenes', 0)} órdenes compradas entre "
+            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
 
     # --- La tabla de trabajo: una fila por producto --------------------------
     # Los dias que dice el comentario son los que de verdad cubren las ordenes
@@ -2536,13 +2587,27 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # Arranca en TODOS, al reves que el panel de arriba: al abrir una institucion
     # nueva lo primero que interesa es TODO lo que compra. Empezando en CON STOCK
     # se veian 7 de 54 productos y parecia que la consulta habia fallado.
-    estado = st.radio("Estado", ESTADOS_MP, horizontal=True, key="mp_estado",
-                      index=ESTADOS_MP.index("TODOS"),
-                      help="CON STOCK son los ID que están en tu catálogo de ofertas; "
-                           "NO LO TENGO, los que no están en él.")
+    izquierda, derecha = st.columns([1, 1])
+    with izquierda:
+        estado = st.radio("Estado", ESTADOS_MP, horizontal=True, key="mp_estado",
+                          index=ESTADOS_MP.index("TODOS"),
+                          help="CON STOCK son los ID que están en tu catálogo; "
+                               "NO LO TENGO, los que no vendes.")
+    with derecha:
+        rubros = sorted(r for r in productos[COLUMNA_RUBRO].unique() if r)
+        marcar_lo_nuevo("mp_rubro", rubros)
+        elegidos_rubro = st.multiselect(
+            "Convenio", rubros, key="mp_rubro",
+            help="El rubro de tu catálogo. La API de Mercado Público no entrega el "
+                 "convenio de cada orden, así que esto sale de tus propias planillas.")
     if estado != "TODOS":
         productos = productos[productos[COLUMNA_ESTADO] == estado]
+    if elegidos_rubro:
+        productos = productos[productos[COLUMNA_RUBRO].isin(elegidos_rubro)]
     productos = productos.reset_index(drop=True)
+    if productos.empty:
+        st.warning("Ningún producto calza con esos filtros.")
+        return
 
     monto = sum(v for v in productos["MONTO"].tolist() if v is not None and not pd.isna(v))
     en_catalogo = int((productos[COLUMNA_ESTADO] == "CON STOCK").sum())
@@ -2574,7 +2639,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                   }.get(columna, "En pesos"))
 
     seleccion = st.dataframe(
-        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO]), SEÑALES_DESTACADAS_MP),
+        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO]),
+                             SEÑALES_DESTACADAS_MP),
         width="stretch",
         hide_index=True,
         on_select="rerun",
@@ -2587,7 +2653,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     nombre_base = normalizar(unidades_c[0])[:20] if unidades_c else "consulta"
     st.download_button(
         "⬇️ Descargar Excel de esta vista",
-        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO]), nombre_hoja="Mercado Público"),
+        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO]),
+                     nombre_hoja="Mercado Público"),
         file_name=f"MercadoPublico-{nombre_base}-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         disabled=productos.empty,
@@ -2709,13 +2776,10 @@ def main() -> None:
     except Exception:
         catalogo_propio, fuente_catalogo = {}, ""
 
-    # Mercado Público va primero: es la pestaña con la que ella trabaja.
-    mercado, analisis = st.tabs(["🏛️  Mercado Público", "📊  Análisis de compras"])
-    with mercado:
-        seccion_mercado_publico(precios_oferta, catalogo_propio)
-    with analisis:
-        seccion_analisis_compras(precios_oferta, fuente_ofertas, error_ofertas,
-                                 catalogo_propio, fuente_catalogo)
+    # Solo Mercado Público: la pestaña «Análisis de compras» se deshabilitó el
+    # 18-08 porque el módulo nuevo la reemplaza. El código queda
+    # (`seccion_analisis_compras`) por si hay que volver a mostrarla.
+    seccion_mercado_publico(precios_oferta, catalogo_propio)
 
 
 if __name__ == "__main__":
