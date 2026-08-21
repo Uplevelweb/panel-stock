@@ -20,7 +20,7 @@ on:
       consultas:
         description: "Tope de consultas de esta corrida"
         required: false
-        default: "9000"
+        default: "9800"
 
 # Permiso para que la tarea pueda guardar los datos en el repositorio.
 permissions:
