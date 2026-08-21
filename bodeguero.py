@@ -48,9 +48,17 @@ ESTADO = BODEGA / "estado.json"
 # Desde donde se guarda historia. Antes de esto no se baja nada.
 PRIMER_DIA = date(2025, 1, 1)
 
-# El ticket permite 10.000 consultas al dia. Se deja margen por si ella consulta
-# desde la app mientras el bodeguero trabaja.
-PRESUPUESTO = 9000
+# El ticket permite 10.000 consultas al dia. Se deja un margen chico por si ella
+# consulta desde la app mientras el bodeguero trabaja; mientras mas alto, antes
+# se termina de llenar la bodega.
+PRESUPUESTO = 9800
+
+# Pausa entre consultas. Medido el 18-08: sin pausa la API rechaza el 34% de las
+# peticiones y con 0,6 s baja al 22%, **sin que el tiempo por orden cambie**
+# (1,15 s en ambos casos, porque cada rechazo obliga a reintentar). Si los
+# rechazos consumen cupo del ticket, esto son ~15% mas ordenes por noche; si no
+# lo consumen, no cuesta nada. Por eso conviene igual.
+PAUSA_ENTRE_CONSULTAS = 0.6
 
 # Tope de tiempo de una corrida. GitHub Actions corta a las 6 horas; se para
 # antes para alcanzar a guardar.
@@ -66,6 +74,10 @@ def ticket() -> str:
     if local.exists():
         return local.read_text(encoding="utf-8-sig").strip()
     raise SystemExit("Falta el ticket: define TICKET_MP o deja ~/ticket-mp.txt")
+
+
+class CuotaAgotada(Exception):
+    """Se acabaron las consultas del dia. Hay que parar, no seguir intentando."""
 
 
 class Contador:
@@ -105,7 +117,16 @@ def pedir(recurso: str, contador: Contador) -> dict | None:
                 url, headers={"User-Agent": "panel-oportunidades"})
             with urllib.request.urlopen(peticion, timeout=120) as respuesta:
                 contador.consultas += 1
-                return json.loads(respuesta.read().decode("utf-8"))
+                datos = json.loads(respuesta.read().decode("utf-8"))
+            # La cuota agotada llega como HTTP 203 (un codigo de EXITO) con
+            # {"Codigo":203,...}. Si no se detecta, el bodeguero cree que el dia
+            # no tuvo ordenes, lo marca como listo y deja un hueco para siempre.
+            if datos.get("Codigo") == 203 or ("Listado" not in datos and datos.get("Mensaje")):
+                raise CuotaAgotada(str(datos.get("Mensaje") or "cuota diaria agotada"))
+            time.sleep(PAUSA_ENTRE_CONSULTAS)
+            return datos
+        except CuotaAgotada:
+            raise
         except urllib.error.HTTPError as error:
             contador.reintentos += 1
             if error.code not in (429, 500, 502, 503):
@@ -314,6 +335,15 @@ def dias_por_llenar(listos: list[str], hasta: date) -> list[date]:
 
 
 def main() -> None:
+    try:
+        llenar()
+    except CuotaAgotada as fin:
+        # No es un fallo: es el techo del ticket. Lo que alcanzo a bajar ya
+        # quedo guardado, y manana sigue donde quedo.
+        print(f"\nSE ACABÓ LA CUOTA DEL DÍA ({fin}). Lo descargado quedó guardado.")
+
+
+def llenar() -> None:
     argumentos = argparse.ArgumentParser(description="Llena la bodega de Mercado Publico")
     argumentos.add_argument("--consultas", type=int, default=PRESUPUESTO,
                             help="tope de consultas de esta corrida")

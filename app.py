@@ -218,7 +218,7 @@ SIN_REGION = "(sin región informada)"
 # el rango consultado, no precios de mercado.
 COLUMNAS_PANEL_MP = [
     "ID", "PRODUCTO", "MONTO", "P.MIN", "P. PROM", "P.MAX",
-    "MI OFERTA", "OC", "PROVEEDORES", "COMENTARIO",
+    "MI OFERTA", "DIF%", "OC", "PROVEEDORES", "COMENTARIO",
 ]
 COLUMNAS_NUMERICAS_PANEL_MP = [
     "MONTO", "P.MIN", "P. PROM", "P.MAX", "MI OFERTA", "OC", "PROVEEDORES",
@@ -1333,7 +1333,18 @@ def consultar_mp(recurso: str) -> dict:
         try:
             peticion = urllib.request.Request(url, headers={"User-Agent": TITULO_APP})
             with urllib.request.urlopen(peticion, timeout=90) as respuesta:
-                return json.loads(respuesta.read().decode("utf-8"))
+                datos = json.loads(respuesta.read().decode("utf-8"))
+            # OJO: cuando se acaba la cuota diaria, la API responde HTTP 203 —que
+            # es un codigo de EXITO— con {"Codigo":203,"Mensaje":"Ticket superó
+            # la cuota diaria asignada."}. Sin esta comprobacion pasaba por
+            # respuesta buena, no traia «Listado» y la app decia «esta
+            # institución no compró nada», que es falso.
+            if datos.get("Codigo") == 203 or ("Listado" not in datos and datos.get("Mensaje")):
+                raise RuntimeError(
+                    "Se acabaron las 10.000 consultas del día del ticket. Los datos que "
+                    "ya están en la bodega se siguen viendo; para consultar en vivo hay "
+                    "que esperar hasta mañana.")
+            return datos
         except urllib.error.HTTPError as error:
             # El 429 («peticiones simultaneas») y los 500/502/503 (la API
             # saturada) son pasajeros: se reintentan igual que en el bodeguero.
@@ -1813,6 +1824,10 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
             # Solo se llena si existe oferta: un precio normal no sirve para
             # cotizar y en el PDF sale con un guion.
             "MI OFERTA": oferta,
+            # Cuánto más barata (o más cara) está tu oferta que lo que ya pagó
+            # esa institución. Negativo es a favor: ahí hay argumento de venta.
+            "DIF%": (round((oferta - promedio) / promedio * 100, 1)
+                     if oferta is not None and promedio else None),
             "OC": ocs,
             "PROVEEDORES": proveedores,
             "COMENTARIO": comentario_compra(ocs, proveedores, oferta, promedio, dias,
@@ -2271,68 +2286,89 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
             st.caption("Sin catálogo de ofertas cargado: el PDF saldrá sin precios. "
                        "Pega el enlace del catálogo arriba para incluirlos.")
 
-        cuerpo = texto_correo(contacto, remitente)
-        asunto = asunto_correo(institucion)
-
-        pdf = a_pdf(seleccionados, institucion, contacto, numero, precios_oferta)
-        archivo_pdf = nombre_pdf(institucion, numero)
-        enviadores = urls_enviador()
-        automatico = remitente in enviadores and clave_envio()
-
-        boton_pdf, boton_envio = st.columns(2)
-        boton_pdf.download_button(
-            f"⬇️ Descargar PDF ({len(seleccionados)} productos)",
-            data=pdf,
-            file_name=archivo_pdf,
-            mime="application/pdf",
-            width="stretch",
-            key=f"pdf_{clave}",
-        )
-
-        if automatico:
-            # --- Envio con un clic (necesita las claves en los secrets) -----
-            with boton_envio:
-                clave_escrita = st.text_input(
-                    "Clave de envío", type="password", key=f"clave_{clave}",
-                    placeholder="Requerida: la app es pública")
-                enviar = st.button(f"📧 Enviar ahora desde {remitente}", width="stretch",
-                                   type="primary", disabled=not para.strip(),
-                                   key=f"enviar_{clave}")
-            if enviar:
-                if clave_escrita != clave_envio():
-                    st.error("Clave de envío incorrecta. El correo no se envió.")
-                else:
-                    try:
-                        with st.spinner("Enviando..."):
-                            envio = armar_envio(remitente, para, copia, asunto, cuerpo,
-                                                pdf, archivo_pdf, clave_escrita)
-                            respuesta = enviar_por_script(enviadores[remitente], envio)
-                        if respuesta.get("ok"):
-                            destinos = ", ".join(x for x in [respuesta.get("para"),
-                                                             respuesta.get("cc")] if x)
-                            st.success(
-                                f"✅ Enviado desde {respuesta.get('cuenta') or remitente} "
-                                f"a {destinos}")
-                        else:
-                            st.error(f"El enviador no lo mandó: {respuesta.get('error')}")
-                    except Exception as error:
-                        st.error(f"No se pudo enviar: {error}")
+        # Una propuesta por rubro: mezclar alimentos con aseo en un mismo PDF
+        # obliga al comprador a separarlo, y cada convenio se compra aparte.
+        if COLUMNA_RUBRO in seleccionados.columns:
+            grupos = [(str(rubro), grupo) for rubro, grupo
+                      in seleccionados.groupby(COLUMNA_RUBRO, sort=False)]
         else:
-            # --- Sin claves configuradas: se abre Gmail redactado ------------
-            if para.strip():
-                boton_envio.link_button(
-                    f"📧 Abrir correo en {remitente}",
-                    url=enlace_gmail(remitente, para, copia, asunto, cuerpo),
-                    width="stretch",
-                    help="Abre Gmail con el mensaje ya escrito. Adjunta el PDF y envía.",
-                )
+            grupos = [("", seleccionados)]
+
+        for rubro, grupo in grupos:
+            sufijo = normalizar(rubro)[:3]
+            if len(grupos) > 1:
+                st.markdown(f"**{rubro or 'Sin rubro'}** · {len(grupo)} productos")
+            propuesta(grupo, precios_oferta, institucion, contacto,
+                      f"{numero}-{sufijo}" if len(grupos) > 1 else numero,
+                      remitente, para, copia, f"{clave}_{sufijo or 'uno'}")
+
+
+def propuesta(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
+              institucion: str, contacto: str, numero: str, remitente: str,
+              para: str, copia: str, clave: str) -> None:
+    """El PDF y el envío de UNA propuesta (un rubro, o todo si no hay rubros)."""
+    cuerpo = texto_correo(contacto, remitente)
+    asunto = asunto_correo(institucion)
+
+    pdf = a_pdf(seleccionados, institucion, contacto, numero, precios_oferta)
+    archivo_pdf = nombre_pdf(institucion, numero)
+    enviadores = urls_enviador()
+    automatico = remitente in enviadores and clave_envio()
+
+    boton_pdf, boton_envio = st.columns(2)
+    boton_pdf.download_button(
+        f"⬇️ Descargar PDF ({len(seleccionados)} productos)",
+        data=pdf,
+        file_name=archivo_pdf,
+        mime="application/pdf",
+        width="stretch",
+        key=f"pdf_{clave}",
+    )
+
+    if automatico:
+        # --- Envio con un clic (necesita las claves en los secrets) -----
+        with boton_envio:
+            clave_escrita = st.text_input(
+                "Clave de envío", type="password", key=f"clave_{clave}",
+                placeholder="Requerida: la app es pública")
+            enviar = st.button(f"📧 Enviar ahora desde {remitente}", width="stretch",
+                               type="primary", disabled=not para.strip(),
+                               key=f"enviar_{clave}")
+        if enviar:
+            if clave_escrita != clave_envio():
+                st.error("Clave de envío incorrecta. El correo no se envió.")
             else:
-                boton_envio.button("📧 Abrir correo", disabled=True, width="stretch",
-                                   help="Escribe primero la dirección en «Para».",
-                                   key=f"sin_para_{clave}")
-            st.caption("Envío con un clic desactivado para esta cuenta: falta instalar su "
-                       "script enviador y anotarlo en Streamlit ▸ Manage app ▸ Settings ▸ "
-                       "Secrets. Mientras tanto, el botón abre Gmail y adjuntas el PDF a mano.")
+                try:
+                    with st.spinner("Enviando..."):
+                        envio = armar_envio(remitente, para, copia, asunto, cuerpo,
+                                            pdf, archivo_pdf, clave_escrita)
+                        respuesta = enviar_por_script(enviadores[remitente], envio)
+                    if respuesta.get("ok"):
+                        destinos = ", ".join(x for x in [respuesta.get("para"),
+                                                         respuesta.get("cc")] if x)
+                        st.success(
+                            f"✅ Enviado desde {respuesta.get('cuenta') or remitente} "
+                            f"a {destinos}")
+                    else:
+                        st.error(f"El enviador no lo mandó: {respuesta.get('error')}")
+                except Exception as error:
+                    st.error(f"No se pudo enviar: {error}")
+    else:
+        # --- Sin claves configuradas: se abre Gmail redactado ------------
+        if para.strip():
+            boton_envio.link_button(
+                f"📧 Abrir correo en {remitente}",
+                url=enlace_gmail(remitente, para, copia, asunto, cuerpo),
+                width="stretch",
+                help="Abre Gmail con el mensaje ya escrito. Adjunta el PDF y envía.",
+            )
+        else:
+            boton_envio.button("📧 Abrir correo", disabled=True, width="stretch",
+                               help="Escribe primero la dirección en «Para».",
+                               key=f"sin_para_{clave}")
+        st.caption("Envío con un clic desactivado para esta cuenta: falta instalar su "
+                   "script enviador y anotarlo en Streamlit ▸ Manage app ▸ Settings ▸ "
+                   "Secrets. Mientras tanto, el botón abre Gmail y adjuntas el PDF a mano.")
 
 
 
@@ -2528,36 +2564,16 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             "Con un período más largo pueden aparecer.")
         return
 
-    # La fecha con que se filtra es la de creacion de la orden, que es la real.
-    # El barrido trae ordenes mas antiguas porque la API lista por dia de
-    # movimiento; se avisa y se deja elegir.
-    # Mercado Público publica cada orden el dia que se MUEVE, no el dia que se
-    # compra, asi que un barrido de agosto arrastra compras de meses anteriores.
-    # Son reales y suman historia; la casilla deja quedarse solo con el periodo.
-    solo_periodo = st.checkbox(
-        f"Ocultar las compras anteriores al {desde_c:%d-%m-%Y}",
-        value=False, key="mp_solo_periodo",
-        help="Mercado Público publica cada orden el día que tiene movimiento, no el día "
-             "de la compra, así que junto con el período pedido llegan compras más "
-             "antiguas. Son reales.")
-    vista = tabla
-    if solo_periodo:
-        vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
-
-    # --- Filtro por convenio (el año del CM) --------------------------------
-    convenios = sorted({convenio_del_codigo(c) for c in vista["ORDEN"] if c}, reverse=True)
-    if len(convenios) > 1:
-        marcar_lo_nuevo("mp_convenio", convenios)
-        # Se llama «Año» y no «Convenio» para no chocar con el filtro de rubro,
-        # que es el que ella entiende por tipo de convenio marco.
-        elegidos = st.multiselect(
-            "Año del convenio", convenios, key="mp_convenio",
-            help="El año del Convenio Marco, sacado del código de cada orden. El "
-                 "barrido trae órdenes de convenios anteriores que siguen vigentes.")
-        vista = vista[[convenio_del_codigo(c) in elegidos for c in vista["ORDEN"]]]
-        if vista.empty:
-            st.warning("No queda ninguna orden con esos convenios marcados.")
-            return
+    # El período manda: se muestra solo lo COMPRADO dentro de esas fechas. El
+    # barrido arrastra compras anteriores (la API publica cada orden el día que
+    # se mueve, no el día que se compra) y antes había una casilla para
+    # esconderlas; se quitó porque si se pide un período, se espera ese período.
+    vista = tabla[[bool(f and desde_c <= f <= hasta_c) for f in tabla["FECHA"]]]
+    if vista.empty:
+        st.warning(
+            f"No hay compras hechas entre el {desde_c:%d-%m-%Y} y el {hasta_c:%d-%m-%Y}. "
+            "Prueba con un período más largo.")
+        return
 
     if resumen.get("de_bodega") and resumen.get("desde_real"):
         st.caption(
@@ -2637,6 +2653,11 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                   "PROVEEDORES": "Cuántos proveedores le vendieron este ID",
                   "MI OFERTA": "Tu precio de oferta de la semana, si ese ID la tiene",
                   }.get(columna, "En pesos"))
+    # El signo importa mas que el numero: negativo es que tu oferta gana.
+    configuracion["DIF%"] = st.column_config.NumberColumn(
+        "DIF%", format="%+.1f%%",
+        help="Tu oferta comparada con el precio promedio que pagó esta institución. "
+             "Negativo: estás más barata.")
 
     seleccion = st.dataframe(
         destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO]),
