@@ -146,6 +146,14 @@ ALIAS_COLUMNAS: dict[str, list[str]] = {
     # Solo aparece en el catalogo de ofertas semanales (mismos alias que usa
     # el Panel Armada en Code.gs).
     "PRECIO OFERTA":      ["PRECIOOFERTA", "PRECIODEOFERTA", "OFERTA", "PRECIO", "VALOROFERTA", "VALOR"],
+    # Donde esta publicado cada ID. Es lo que decide si entra o no a la
+    # cotizacion: un ID de Valparaiso no se le puede ofrecer a Magallanes.
+    "REGIÓN":             ["REGION", "REGIONES", "REGIONDISPONIBLE", "REGIONESDISPONIBLES",
+                           "DISPONIBILIDAD", "DISPONIBILIDADREGIONAL", "COBERTURA", "ZONA",
+                           "REGIONDESPACHO", "REGIONENTREGA"],
+    # La pide el requerimiento que manda la institucion, no el catalogo.
+    "CANTIDAD":           ["CANTIDAD", "CANT", "CANTIDADSOLICITADA", "CANTIDADREQUERIDA",
+                           "UNIDADES", "SOLICITADO", "PEDIDO", "QTY"],
 }
 
 # Palabras que delatan una pestaña de un periodo pasado cuando el nombre no
@@ -2873,7 +2881,627 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
 
 
 # ===========================================================================
-# 11. PROGRAMA PRINCIPAL
+# 11. COTIZACION FILTRADA POR REGION
+# ===========================================================================
+# El requerimiento llega como planilla (ID + cantidad). Aqui se cruza contra el
+# CATALOGO de Drive y pasa SOLO lo que esta publicado en la region que compra:
+# un ID disponible en Valparaiso no se le puede ofrecer a Magallanes.
+#
+# Lo que no esta disponible en esa region NO entra a la tabla principal; sale
+# en un bloque aparte marcado N/D, para que el comprador vea que fue revisado.
+
+TITULO_PDF_REGION = "ID DISPONIBLE POR REGIÓN"
+TITULO_PDF_COTIZACION = "COTIZACIÓN"
+
+# Marca del producto que se vende en todo Chile: no limita por region.
+TODAS_LAS_REGIONES = "*"
+
+# Los 16 nombres se escriben igual que en `catalogo_unidades.csv`, para que el
+# selector de aqui diga lo mismo que el de Mercado Publico.
+#
+# Cada region trae las palabras que la delatan dentro de la celda del catalogo.
+# Se buscan como trozo del texto normalizado ("REGIONDEVALPARAISO" contiene
+# "VALPARAISO"), asi que sirve tanto "Valparaíso" como "Región de Valparaíso".
+PALABRAS_REGION: dict[str, tuple[str, ...]] = {
+    "Región de Arica y Parinacota":                     ("ARICA", "PARINACOTA"),
+    "Región de Tarapacá":                               ("TARAPACA", "IQUIQUE"),
+    "Región de Antofagasta":                            ("ANTOFAGASTA",),
+    "Región de Atacama":                                ("ATACAMA", "COPIAPO"),
+    "Región de Coquimbo":                               ("COQUIMBO", "LASERENA"),
+    "Región de Valparaíso":                             ("VALPARAISO", "VALPO"),
+    # Las dos islas van como zona propia y NO dentro de Valparaíso: el catálogo
+    # las publica aparte («IP», «JF») porque el despacho es distinto, y meterlas
+    # en Valparaíso haría ofrecer en el continente un ID que es solo de isla.
+    "Isla de Pascua":                                   ("ISLADEPASCUA", "RAPANUI"),
+    "Juan Fernández":                                   ("JUANFERNANDEZ", "ROBINSONCRUSOE"),
+    "Región Metropolitana de Santiago":                 ("METROPOLITANA", "SANTIAGO"),
+    "Región del Libertador General Bernardo O’Higgins": ("OHIGGINS", "LIBERTADOR", "RANCAGUA"),
+    "Región del Maule":                                 ("MAULE", "TALCA"),
+    "Región del Ñuble":                                 ("NUBLE", "CHILLAN"),
+    "Región del Biobío":                                ("BIOBIO", "CONCEPCION"),
+    "Región de la Araucanía":                           ("ARAUCANIA", "TEMUCO"),
+    "Región de Los Ríos":                               ("LOSRIOS", "VALDIVIA"),
+    "Región de los Lagos":                              ("LOSLAGOS", "PUERTOMONTT"),
+    "Región Aysén del General Carlos Ibáñez del Campo": ("AYSEN", "AISEN", "COYHAIQUE"),
+    "Región de Magallanes y de la Antártica":           ("MAGALLANES", "ANTARTICA", "PUNTAARENAS"),
+}
+
+# Codigos que solo valen si la palabra ENTERA es esa: "V" buscado como trozo
+# aparece dentro de cualquier texto y ensuciaria todo.
+CODIGOS_REGION: dict[str, str] = {
+    "XV": "Región de Arica y Parinacota",
+    "I": "Región de Tarapacá",
+    "II": "Región de Antofagasta",
+    "III": "Región de Atacama",
+    "IV": "Región de Coquimbo",
+    "V": "Región de Valparaíso",
+    "RM": "Región Metropolitana de Santiago",
+    "XIII": "Región Metropolitana de Santiago",
+    "VI": "Región del Libertador General Bernardo O’Higgins",
+    "VII": "Región del Maule",
+    "XVI": "Región del Ñuble",
+    "VIII": "Región del Biobío",
+    "IX": "Región de la Araucanía",
+    "XIV": "Región de Los Ríos",
+    "X": "Región de los Lagos",
+    "XI": "Región Aysén del General Carlos Ibáñez del Campo",
+    "XII": "Región de Magallanes y de la Antártica",
+    "IP": "Isla de Pascua",
+    "JF": "Juan Fernández",
+}
+
+# Lo que en la celda significa "en todas partes".
+PALABRAS_TODO_CHILE = ("TODASLASREGIONES", "TODAS", "NACIONAL", "TODOCHILE",
+                       "TODOELPAIS", "SINRESTRICCION")
+
+
+def regiones_de_celda(celda) -> set[str]:
+    """Las regiones que nombra una celda del catalogo.
+
+    Acepta las formas en que suele venir escrito:
+      "Región de Valparaíso"        -> {Valparaíso}
+      "RM, V, VIII"                 -> {Metropolitana, Valparaíso, Biobío}
+      "Metropolitana y Valparaíso"  -> {Metropolitana, Valparaíso}
+      "Todas las regiones"          -> {TODAS_LAS_REGIONES}
+
+    Devuelve vacio si la celda no nombra ninguna region conocida: ese producto
+    queda fuera de toda cotizacion hasta que el catalogo diga donde se vende.
+    """
+    texto = normalizar(celda)
+    if not texto:
+        return set()
+
+    if any(p in texto for p in PALABRAS_TODO_CHILE):
+        return {TODAS_LAS_REGIONES}
+
+    encontradas = {region for region, palabras in PALABRAS_REGION.items()
+                   if any(palabra in texto for palabra in palabras)}
+
+    # Los codigos ("RM", "VIII") se leen solo si no se reconocio ningun nombre,
+    # asi "Región VIII del Biobío" no se cuenta dos veces.
+    if not encontradas:
+        for trozo in re.split(r"[^A-Za-z0-9]+", str(celda or "")):
+            region = CODIGOS_REGION.get(normalizar(trozo))
+            if region:
+                encontradas.add(region)
+
+    return encontradas
+
+
+def esta_en_region(regiones: set[str], region_pedida: str) -> bool:
+    """Filtro duro: el ID entra solo si esa region esta en su lista."""
+    return bool(regiones) and (TODAS_LAS_REGIONES in regiones or region_pedida in regiones)
+
+
+@st.cache_data(ttl=600, show_spinner="Leyendo el catálogo con las regiones...")
+def cargar_catalogo_regional(url: str) -> tuple[pd.DataFrame, str, str]:
+    """(catalogo, archivo, aviso). Una fila por ID, con sus regiones y su precio.
+
+    Lee el mismo archivo CATALOGO de la carpeta de Drive que ya usa
+    `cargar_catalogo_propio`, pero se queda con todo lo que hace falta para
+    cotizar: PRODUCTO, RUBRO (la pestaña), REGIONES y MI PUBLICADO.
+
+    Un mismo ID puede venir repetido, una fila por region: se juntan todas sus
+    regiones en un solo registro.
+    """
+    id_carpeta = extraer_id_carpeta(url)
+    if not id_carpeta:
+        return pd.DataFrame(), "", ("El enlace del catálogo no es una carpeta de Drive. "
+                                    "Pega el enlace de la carpeta, no el del archivo.")
+
+    nombre, contenido = descargar_ofertas_de_carpeta(id_carpeta, PATRON_CATALOGO)
+    hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None, header=None, dtype=str)
+
+    registros: dict[str, dict] = {}
+    encabezados_vistos: list[str] = []
+    hojas_sin_region: list[str] = []
+
+    for rubro, grilla in hojas.items():
+        datos = aplicar_encabezado(grilla.fillna(""))
+        if datos.empty:
+            continue
+        posiciones = mapear_columnas(datos)
+        if "ID" not in posiciones:
+            continue
+        if "REGIÓN" not in posiciones:
+            hojas_sin_region.append(str(rubro))
+            encabezados_vistos.extend(str(c) for c in datos.columns)
+            continue
+
+        columnas = {clave: datos.iloc[:, pos] for clave, pos in posiciones.items()}
+        for fila in range(len(datos)):
+            clave = str(columnas["ID"].iat[fila]).strip()
+            # Los ID son numeros: asi se descartan titulos y filas sueltas.
+            if not clave.isdigit():
+                continue
+            registro = registros.get(clave)
+            if registro is None:
+                registro = registros[clave] = {
+                    "ID": clave,
+                    "PRODUCTO": "",
+                    COLUMNA_RUBRO: str(rubro).strip(),
+                    "REGIONES": set(),
+                    "MI PUBLICADO": None,
+                }
+            registro["REGIONES"] |= regiones_de_celda(columnas["REGIÓN"].iat[fila])
+            if not registro["PRODUCTO"] and "PRODUCTO" in columnas:
+                registro["PRODUCTO"] = str(columnas["PRODUCTO"].iat[fila]).strip()
+            if registro["MI PUBLICADO"] is None and "MI PUBLICADO" in columnas:
+                registro["MI PUBLICADO"] = a_numero(columnas["MI PUBLICADO"].iat[fila])
+
+    if not registros:
+        if hojas_sin_region:
+            titulos = ", ".join(dict.fromkeys(c for c in encabezados_vistos if c))[:400]
+            return pd.DataFrame(), nombre, (
+                "El catálogo se leyó, pero ninguna pestaña tiene una columna de región. "
+                f"Encabezados encontrados: {titulos}. Ponle «REGIÓN» de título a esa "
+                "columna y vuelve a subir el archivo a la carpeta de Drive.")
+        return pd.DataFrame(), nombre, "El catálogo no tiene filas con ID."
+
+    catalogo = pd.DataFrame(list(registros.values()))
+    aviso = ""
+    if hojas_sin_region:
+        aviso = ("Estas pestañas se ignoraron porque no tienen columna de región: "
+                 + ", ".join(hojas_sin_region))
+    return catalogo, nombre, aviso
+
+
+def regiones_del_catalogo(catalogo: pd.DataFrame) -> list[str]:
+    """Las regiones que aparecen en el catalogo, ordenadas de norte a sur."""
+    if catalogo.empty:
+        return list(PALABRAS_REGION)
+    nombradas: set[str] = set()
+    for regiones in catalogo["REGIONES"]:
+        nombradas |= {r for r in regiones if r != TODAS_LAS_REGIONES}
+    # PALABRAS_REGION ya esta de norte a sur: se respeta ese orden.
+    ordenadas = [r for r in PALABRAS_REGION if r in nombradas]
+    return ordenadas or list(PALABRAS_REGION)
+
+
+def leer_requerimiento(archivo) -> tuple[pd.DataFrame, str]:
+    """(requerimiento, error). La planilla que manda la institución: ID y cantidad.
+
+    Acepta .xlsx y .csv, con los encabezados en cualquier fila y escritos como
+    sea ("ID", "Código", "SKU"; "Cantidad", "Cant", "Unidades").
+    """
+    nombre = (getattr(archivo, "name", "") or "").lower()
+    try:
+        if nombre.endswith(".csv"):
+            crudo = archivo.getvalue().decode("utf-8-sig", "replace")
+            # Las planillas chilenas salen con punto y coma casi siempre.
+            separador = ";" if crudo.count(";") >= crudo.count(",") else ","
+            grilla = pd.read_csv(io.StringIO(crudo), sep=separador, header=None,
+                                 dtype=str, keep_default_na=False)
+        else:
+            grilla = pd.read_excel(io.BytesIO(archivo.getvalue()), sheet_name=0,
+                                   header=None, dtype=str).fillna("")
+    except Exception as error:
+        return pd.DataFrame(), f"No se pudo leer el archivo: {error}"
+
+    datos = aplicar_encabezado(grilla)
+    if datos.empty:
+        return pd.DataFrame(), "El archivo está vacío."
+
+    posiciones = mapear_columnas(datos)
+    if "ID" not in posiciones:
+        titulos = ", ".join(str(c) for c in datos.columns)[:300]
+        return pd.DataFrame(), ("El archivo no tiene una columna de ID. "
+                                f"Encabezados encontrados: {titulos}")
+
+    columna_id = datos.iloc[:, posiciones["ID"]]
+    vacia = pd.Series([""] * len(datos))
+    cantidades = datos.iloc[:, posiciones["CANTIDAD"]] if "CANTIDAD" in posiciones else vacia
+    productos = datos.iloc[:, posiciones["PRODUCTO"]] if "PRODUCTO" in posiciones else vacia
+
+    filas = []
+    for i in range(len(datos)):
+        clave = str(columna_id.iat[i]).strip()
+        if not clave.isdigit():
+            continue
+        cantidad = a_numero(cantidades.iat[i])
+        filas.append({
+            "ID": clave,
+            "PRODUCTO PEDIDO": str(productos.iat[i]).strip(),
+            # Sin columna de cantidad se asume 1: el requerimiento igual sirve
+            # para saber que ID puede ofrecer en esa region.
+            "CANTIDAD": int(cantidad) if cantidad and cantidad > 0 else 1,
+        })
+
+    if not filas:
+        return pd.DataFrame(), ("Ninguna fila trae un ID numérico. Revisa que la "
+                                "columna de ID tenga los números del Convenio Marco.")
+
+    # El mismo ID repetido se suma: es un pedido de N unidades, no dos lineas.
+    requerimiento = (pd.DataFrame(filas)
+                     .groupby("ID", as_index=False)
+                     .agg({"PRODUCTO PEDIDO": "first", "CANTIDAD": "sum"}))
+    return requerimiento, ""
+
+
+def cruzar_por_region(requerimiento: pd.DataFrame, catalogo: pd.DataFrame, region: str,
+                      precios_oferta: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(disponibles, no_disponibles) para la region pedida.
+
+    El filtro es estricto: un ID entra a `disponibles` solo si el catalogo dice
+    que esta publicado en esa region (o en todas). Todo lo demas cae en
+    `no_disponibles` con el motivo, y en el documento sale como N/D.
+    """
+    por_id = ({str(fila["ID"]): fila for _, fila in catalogo.iterrows()}
+              if not catalogo.empty else {})
+
+    disponibles, no_disponibles = [], []
+    for _, pedido in requerimiento.iterrows():
+        clave = str(pedido["ID"])
+        registro = por_id.get(clave)
+
+        if registro is None:
+            no_disponibles.append({
+                "ID": clave,
+                "PRODUCTO": pedido["PRODUCTO PEDIDO"] or "(no está en tu catálogo)",
+                "CANTIDAD": pedido["CANTIDAD"],
+                "MOTIVO": "No está en tu catálogo",
+            })
+            continue
+
+        if not esta_en_region(registro["REGIONES"], region):
+            donde = ", ".join(sorted(registro["REGIONES"])) or "sin región informada"
+            no_disponibles.append({
+                "ID": clave,
+                "PRODUCTO": registro["PRODUCTO"] or pedido["PRODUCTO PEDIDO"],
+                "CANTIDAD": pedido["CANTIDAD"],
+                "MOTIVO": f"Sin disponibilidad regional (publicado en: {donde})",
+            })
+            continue
+
+        disponibles.append({
+            "ID": clave,
+            "PRODUCTO": registro["PRODUCTO"] or pedido["PRODUCTO PEDIDO"],
+            COLUMNA_RUBRO: registro[COLUMNA_RUBRO],
+            "CANTIDAD": pedido["CANTIDAD"],
+            "PRECIO OFERTA": precios_oferta.get(clave),
+            "MI PUBLICADO": registro["MI PUBLICADO"],
+        })
+
+    return pd.DataFrame(disponibles), pd.DataFrame(no_disponibles)
+
+
+def con_precio_y_total(tabla: pd.DataFrame, modo_precio: str,
+                       con_cantidad: bool) -> pd.DataFrame:
+    """Agrega las columnas PRECIO y TOTAL segun el modo elegido.
+
+    modo_precio:  "sin"       -> solo ID y articulo (listado de disponibilidad)
+                  "oferta"    -> el precio rebajado de la semana
+                  "publicado" -> MI PUBLICADO, el precio publicado en Convenio Marco
+    """
+    if tabla.empty:
+        return tabla
+    final = tabla.copy()
+    columna = {"oferta": "PRECIO OFERTA", "publicado": "MI PUBLICADO"}.get(modo_precio)
+    final["PRECIO"] = final[columna] if columna else None
+    if con_cantidad and columna:
+        final["TOTAL"] = [(p * c) if p else None
+                          for p, c in zip(final["PRECIO"], final["CANTIDAD"])]
+    return final
+
+
+def columnas_del_documento(modo_precio: str,
+                           con_cantidad: bool) -> list[tuple[str, float, str]]:
+    """(titulo, ancho en mm, alineacion) de cada columna. Suman los 186 mm utiles."""
+    columnas = [("ID", 24, "CENTER"), ("ARTÍCULO", 0, "LEFT")]
+    if con_cantidad:
+        columnas.append(("CANT.", 18, "CENTER"))
+    if modo_precio != "sin":
+        columnas.append(("P. UNITARIO", 28, "CENTER"))
+        if con_cantidad:
+            columnas.append(("TOTAL", 28, "CENTER"))
+    # El articulo se queda con lo que sobra del ancho util de la pagina.
+    usado = sum(ancho for _, ancho, _ in columnas)
+    return [(t, (186 - usado) if ancho == 0 else ancho, alineacion)
+            for t, ancho, alineacion in columnas]
+
+
+def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucion: str,
+                   region: str, numero: str, modo_precio: str, con_cantidad: bool) -> bytes:
+    """El documento de la cotizacion filtrada por region.
+
+    Mismo formato que el PDF que ella ya envia (franja azul, datos de la empresa,
+    bloque ENVIAR A, franja de despacho); cambian las columnas segun lo elegido
+    y se agrega la REGION, que es lo que manda en este documento.
+    """
+    lleva_totales = con_cantidad and modo_precio != "sin"
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_margins(12, 10, 12)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # --- 1) Franja del titulo ---------------------------------------------
+    _barra(pdf, TITULO_PDF_COTIZACION if lleva_totales else TITULO_PDF_REGION,
+           alto=10, tamaño=13)
+    pdf.ln(3)
+
+    # --- 2) Datos de la empresa (izquierda) y del documento (derecha) ------
+    y_bloque = pdf.get_y()
+    if RUTA_LOGO.exists():
+        pdf.image(str(RUTA_LOGO), x=12, y=y_bloque, w=34)
+
+    # El logo mide ~19 mm de alto con w=34: el texto arranca despues de eso.
+    pdf.set_xy(12, y_bloque + 21)
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(60, 60, 60)
+    for linea in (EMPRESA["razon"], EMPRESA["rut"], EMPRESA["direccion"],
+                  f"Contacto: {FIRMA['fono']}",
+                  f"{FIRMA['correo']} / {FIRMA['correo_alt']}"):
+        pdf.set_x(12)
+        pdf.cell(120, 3.8, _limpiar_pdf(linea), new_x="LMARGIN", new_y="NEXT")
+
+    validez = datetime.now() + pd.Timedelta(days=60)
+    pdf.set_font("Helvetica", "", 8)
+    for i, (etiqueta, valor) in enumerate((
+            ("N° Cotización", numero.strip() or numero_cotizacion_sugerido()),
+            ("Fecha", f"{datetime.now():%d-%m-%Y}"),
+            ("Validez", f"{validez:%d-%m-%Y}"))):
+        pdf.set_xy(135, y_bloque + 21 + i * 4.5)
+        pdf.set_text_color(60, 60, 60)
+        pdf.cell(32, 4, _limpiar_pdf(etiqueta))
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(31, 4, _limpiar_pdf(valor), align="R")
+
+    # Linea de sangria entre los correos y la franja ENVIAR A.
+    pdf.set_y(max(pdf.get_y() + 5, y_bloque + 45))
+
+    # --- 3) A quien va dirigido, y en que region --------------------------
+    _barra(pdf, "  ENVIAR A:", alto=6, tamaño=8.5, alineacion="L")
+    pdf.ln(3)
+    for etiqueta, valor in (("INSTITUCIÓN:", institucion), ("REGIÓN:", region)):
+        if not str(valor).strip():
+            continue
+        pdf.set_x(20)
+        pdf.set_font("Helvetica", "B", 8.5)
+        pdf.set_text_color(90, 90, 90)
+        pdf.cell(40, 5, _limpiar_pdf(etiqueta))
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(0, 5, _limpiar_pdf(str(valor).strip().upper()),
+                 new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # --- 4) Tabla de lo disponible en la region ---------------------------
+    columnas = columnas_del_documento(modo_precio, con_cantidad)
+    pdf.set_fill_color(255, 255, 255)      # si no, las filas heredan el azul de las franjas
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_font("Helvetica", "", 8)
+    with pdf.table(
+        col_widths=tuple(ancho for _, ancho, _ in columnas),
+        text_align=tuple(alineacion for _, _, alineacion in columnas),
+        headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=AZUL_TABLA),
+        cell_fill_color=(238, 243, 248),
+        cell_fill_mode="ROWS",
+        line_height=4.5,
+        padding=1.2,
+        borders_layout="MINIMAL",
+    ) as tabla_pdf:
+        fila = tabla_pdf.row()
+        for titulo, _, _ in columnas:
+            fila.cell(_limpiar_pdf(titulo))
+
+        for _, registro in tabla.iterrows():
+            precio = registro.get("PRECIO")
+            fila = tabla_pdf.row()
+            fila.cell(_limpiar_pdf(str(registro.get("ID", "")).strip()))
+            fila.cell(_limpiar_pdf(registro.get("PRODUCTO", "")))
+            if con_cantidad:
+                fila.cell(_limpiar_pdf(str(int(registro.get("CANTIDAD", 1)))))
+            if modo_precio != "sin":
+                # Sin precio en el catalogo se cotiza a solicitud: no se inventa un valor.
+                fila.cell(_limpiar_pdf(pesos(precio) if precio else "A solicitud"))
+                if con_cantidad:
+                    total = registro.get("TOTAL")
+                    fila.cell(_limpiar_pdf(pesos(total) if total else "-"))
+
+    # --- 5) Total general --------------------------------------------------
+    if lleva_totales:
+        suma = sum(t for t in tabla.get("TOTAL", []) if t)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(20, 20, 20)
+        pdf.cell(146, 6, _limpiar_pdf("TOTAL NETO"), align="R")
+        pdf.cell(40, 6, _limpiar_pdf(pesos(suma)), align="R",
+                 new_x="LMARGIN", new_y="NEXT")
+        sin_precio = sum(1 for p in tabla.get("PRECIO", []) if not p)
+        if sin_precio:
+            pdf.set_font("Helvetica", "I", 7)
+            pdf.set_text_color(120, 130, 140)
+            pdf.multi_cell(0, 3.6, _limpiar_pdf(
+                f"El total no incluye {sin_precio} producto(s) sin precio en el "
+                "catálogo, que se cotizan a solicitud."))
+
+    # --- 6) Lo que no esta disponible en la region: N/D --------------------
+    if not no_disponibles.empty:
+        pdf.ln(4)
+        _barra(pdf, "  SIN DISPONIBILIDAD REGIONAL (N/D)", alto=6, tamaño=8.5, alineacion="L")
+        pdf.ln(3)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font("Helvetica", "", 8)
+        with pdf.table(
+            col_widths=(24, 134, 28),
+            text_align=("CENTER", "LEFT", "CENTER"),
+            headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=AZUL_TABLA),
+            cell_fill_color=(238, 243, 248),
+            cell_fill_mode="ROWS",
+            line_height=4.5,
+            padding=1.2,
+            borders_layout="MINIMAL",
+        ) as tabla_nd:
+            fila = tabla_nd.row()
+            for titulo in ("ID", "ARTÍCULO", "DISPONIBILIDAD"):
+                fila.cell(_limpiar_pdf(titulo))
+            for _, registro in no_disponibles.iterrows():
+                fila = tabla_nd.row()
+                fila.cell(_limpiar_pdf(str(registro.get("ID", "")).strip()))
+                fila.cell(_limpiar_pdf(registro.get("PRODUCTO", "")))
+                fila.cell("N/D")
+
+    # --- 7) Pie ------------------------------------------------------------
+    pdf.ln(4)
+    _barra(pdf, "DESPACHO INCLUIDO", alto=7, tamaño=9.5)
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(120, 130, 140)
+    pdf.multi_cell(0, 3.6, _limpiar_pdf(
+        f"Productos verificados como disponibles en {region} dentro del Convenio Marco. "
+        "Los marcados N/D no están publicados para esa región. Precios netos sujetos a "
+        f"disponibilidad de stock. Contacto: {FIRMA['nombre']}, {FIRMA['cargo']}, "
+        f"{FIRMA['fono']}."
+    ))
+
+    return bytes(pdf.output())
+
+
+def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, float]) -> None:
+    """La pantalla: elegir región, subir el requerimiento y bajar el PDF."""
+    with st.container(border=True):
+        st.markdown("##### 📍 Región de la institución que compra")
+        try:
+            catalogo, fuente, aviso = cargar_catalogo_regional(url_ofertas)
+        except Exception as error:
+            st.error(f"No se pudo leer el catálogo desde Drive: {error}")
+            return
+
+        if catalogo.empty:
+            st.error(aviso or "El catálogo no trae productos con región.")
+            return
+        if aviso:
+            st.warning(aviso)
+
+        region = st.selectbox("Región", regiones_del_catalogo(catalogo), key="reg_region")
+        con_region = sum(1 for r in catalogo["REGIONES"] if esta_en_region(r, region))
+        st.caption(f"✅ Catálogo: **{fuente}** — {len(catalogo)} ID en total, "
+                   f"**{con_region} disponibles en {region}**.")
+
+    with st.container(border=True):
+        st.markdown("##### 📄 Requerimiento que te enviaron")
+        archivo = st.file_uploader(
+            "Planilla con los productos pedidos (Excel o CSV)",
+            type=["xlsx", "xlsm", "csv"], key="reg_archivo",
+            help="Debe tener una columna de ID. Si trae columna de cantidad se usa; "
+                 "si no, se asume 1 por producto.")
+        if archivo is None:
+            st.info("Sube la planilla del requerimiento para cruzarla con el catálogo.")
+            return
+
+        requerimiento, error = leer_requerimiento(archivo)
+        if error:
+            st.error(error)
+            return
+        st.caption(f"{len(requerimiento)} productos distintos en el requerimiento.")
+
+    disponibles, no_disponibles = cruzar_por_region(
+        requerimiento, catalogo, region, precios_oferta)
+
+    with st.container(border=True):
+        st.markdown("##### ⚙️ Qué debe mostrar el documento")
+        c1, c2 = st.columns([2, 1])
+        etiquetas_precio = {
+            "sin": "Solo ID (sin precios)",
+            "oferta": "ID + precio de oferta de la semana",
+            "publicado": "ID + mi precio publicado",
+        }
+        modo_precio = c1.radio("Precio", list(etiquetas_precio),
+                               format_func=etiquetas_precio.get, key="reg_modo")
+        con_cantidad = c2.checkbox("Incluir cantidad y total", value=True, key="reg_cant")
+
+    tabla = con_precio_y_total(disponibles, modo_precio, con_cantidad)
+
+    # --- Lo que entra al documento ------------------------------------------
+    with st.container(border=True):
+        st.markdown(f"##### ✅ Disponibles en {region} — {len(tabla)} productos")
+        if tabla.empty:
+            st.warning("Ninguno de los productos pedidos está publicado en esta región.")
+        else:
+            columnas_vista = ["ID", "PRODUCTO", COLUMNA_RUBRO]
+            if con_cantidad:
+                columnas_vista.append("CANTIDAD")
+            if modo_precio != "sin":
+                columnas_vista.append("PRECIO")
+                if con_cantidad:
+                    columnas_vista.append("TOTAL")
+            st.dataframe(tabla[columnas_vista], width="stretch", hide_index=True,
+                         column_config={
+                             "PRECIO": st.column_config.NumberColumn(format="localized"),
+                             "TOTAL": st.column_config.NumberColumn(format="localized"),
+                         })
+            if modo_precio != "sin":
+                sin_precio = sum(1 for p in tabla["PRECIO"] if not p)
+                if sin_precio == len(tabla) and modo_precio == "publicado":
+                    # Hoy el CATÁLOGO de Drive no tiene columna de precio: si no
+                    # se avisa, el PDF sale entero con «A solicitud» sin explicar
+                    # por qué.
+                    st.warning("Tu catálogo no trae una columna con tu precio publicado, "
+                               "así que todos saldrían como «A solicitud». Agrégale al "
+                               "archivo del catálogo una columna «MI PUBLICADO», o usa el "
+                               "precio de oferta de la semana.")
+                elif sin_precio:
+                    st.caption(f"{sin_precio} producto(s) sin precio en el catálogo: "
+                               "salen como «A solicitud».")
+
+    # --- Lo que queda fuera: N/D --------------------------------------------
+    if not no_disponibles.empty:
+        with st.container(border=True):
+            st.markdown(f"##### 🚫 Sin disponibilidad regional — "
+                        f"{len(no_disponibles)} productos (N/D)")
+            st.dataframe(no_disponibles, width="stretch", hide_index=True)
+
+    if tabla.empty and no_disponibles.empty:
+        return
+
+    # --- El documento --------------------------------------------------------
+    with st.container(border=True):
+        st.markdown("##### 📄 Documento")
+        c1, c2 = st.columns(2)
+        institucion = c1.text_input("Institución", key="reg_inst", autocomplete="off",
+                                    placeholder="Ej: Hospital de Talca")
+        numero = c2.text_input("N° Cotización", value=numero_cotizacion_sugerido(),
+                               key="reg_num", autocomplete="off")
+        try:
+            pdf = a_pdf_regional(tabla, no_disponibles, institucion, region,
+                                 numero, modo_precio, con_cantidad)
+        except Exception as error:
+            st.error(f"No se pudo generar el PDF: {error}")
+            return
+        st.download_button(
+            f"⬇️ Descargar PDF ({len(tabla)} disponibles, {len(no_disponibles)} N/D)",
+            data=pdf,
+            file_name=nombre_pdf(institucion or region, numero),
+            mime="application/pdf",
+            width="stretch",
+            type="primary",
+            key="reg_pdf",
+        )
+
+
+# ===========================================================================
+# 12. PROGRAMA PRINCIPAL
 # ===========================================================================
 
 def precios_del_catalogo(url_ofertas: str) -> tuple[dict[str, float], str, str]:
@@ -2950,10 +3578,14 @@ def main() -> None:
     except Exception:
         catalogo_propio, fuente_catalogo = {}, ""
 
-    # Solo Mercado Público: la pestaña «Análisis de compras» se deshabilitó el
-    # 18-08 porque el módulo nuevo la reemplaza. El código queda
-    # (`seccion_analisis_compras`) por si hay que volver a mostrarla.
-    seccion_mercado_publico(precios_oferta, catalogo_propio)
+    # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
+    # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
+    pestana_mp, pestana_region = st.tabs(
+        ["🏛️ Mercado Público", "📍 Cotización por región"])
+    with pestana_mp:
+        seccion_mercado_publico(precios_oferta, catalogo_propio)
+    with pestana_region:
+        seccion_cotizacion_regional(url_ofertas, precios_oferta)
 
 
 if __name__ == "__main__":
