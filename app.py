@@ -38,6 +38,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import quote
 
@@ -2883,12 +2884,17 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
 # ===========================================================================
 # 11. COTIZACION FILTRADA POR REGION
 # ===========================================================================
-# El requerimiento llega como planilla (ID + cantidad). Aqui se cruza contra el
-# CATALOGO de Drive y pasa SOLO lo que esta publicado en la region que compra:
-# un ID disponible en Valparaiso no se le puede ofrecer a Magallanes.
+# El requerimiento que manda una institucion NO trae ID de Convenio Marco:
+# trae su codigo interno ("0130012") y un nombre generico ("MARGARINA",
+# "MAICENA"). Por eso el cruce es POR NOMBRE contra el catalogo, no por ID.
 #
-# Lo que no esta disponible en esa region NO entra a la tabla principal; sale
-# en un bloque aparte marcado N/D, para que el comprador vea que fue revisado.
+# Dos filtros, en este orden:
+#   1. REGION. Un ID publicado en Valparaiso no se le puede ofrecer a
+#      Magallanes. Solo se busca dentro de lo publicado en esa region.
+#   2. NOMBRE. "maicena" tiene que encontrar "ALMIDON DE MAIZ ...".
+#
+# El buscador propone; ella elige en pantalla. Nunca decide sola: marca lo
+# mas conveniente y ella agrega o quita antes de generar el documento.
 
 TITULO_PDF_REGION = "ID DISPONIBLE POR REGIÓN"
 TITULO_PDF_COTIZACION = "COTIZACIÓN"
@@ -3078,11 +3084,178 @@ def regiones_del_catalogo(catalogo: pd.DataFrame) -> list[str]:
     return ordenadas or list(PALABRAS_REGION)
 
 
-def leer_requerimiento(archivo) -> tuple[pd.DataFrame, str]:
-    """(requerimiento, error). La planilla que manda la institución: ID y cantidad.
+# ---------------------------------------------------------------------------
+# El buscador por nombre
+# ---------------------------------------------------------------------------
+# Palabras que no distinguen nada: si "de" o "unidad" contaran como acierto,
+# cualquier producto calzaria con cualquier pedido.
+PALABRAS_VACIAS = {"DE", "DEL", "LA", "EL", "LOS", "LAS", "EN", "CON", "SIN", "PARA",
+                   "POR", "Y", "A", "UN", "UNA", "AL", "X", "UNIDAD", "UNIDADES",
+                   "TIPO", "CLASE", "REGION"}
 
-    Acepta .xlsx y .csv, con los encabezados en cualquier fila y escritos como
-    sea ("ID", "Código", "SKU"; "Cantidad", "Cant", "Unidades").
+# Lo que la institucion escribe vs como se llama en el catalogo. Es la lista
+# que hay que ir engordando: cada vez que un producto salga como "sin
+# equivalencia" y en realidad exista con otro nombre, se agrega aqui.
+#
+# Se compara sobre el texto ya normalizado (mayusculas, sin tildes).
+SINONIMOS_PRODUCTO: dict[str, str] = {
+    "MAICENA": "ALMIDON DE MAIZ",
+    "MAIZENA": "ALMIDON DE MAIZ",
+    "CHUÑO": "ALMIDON DE MAIZ",
+    "ACEITE VEGETAL": "ACEITE MARAVILLA",
+    "ACEITE COMESTIBLE": "ACEITE MARAVILLA",
+    "TE EN HOJAS": "TE EN HOJA",
+    "TE EN BOLSITAS": "TE EN BOLSA",
+    "POSTA MOLIDA": "CARNE MOLIDA",
+    "YOGU YOGU": "YOGURT",
+    "YOGURT INDIVIDUAL": "YOGURT",
+    "PAPEL CONFORT": "PAPEL HIGIENICO",
+    "CONFORT": "PAPEL HIGIENICO",
+    "NESCAFE": "CAFE INSTANTANEO",
+    "CLORO": "CLORO GEL",
+    "LAVALOZA": "LAVALOZAS",
+    "TOALLA NOVA": "TOALLA DE PAPEL",
+    "NOVA": "TOALLA DE PAPEL",
+}
+
+
+def palabras_utiles(texto) -> list[str]:
+    """Las palabras que sirven para comparar, en singular y sin tildes.
+
+    "Té en Hojas, 250 g" -> ["TE", "HOJA", "250", "G"]
+    """
+    limpio = unicodedata.normalize("NFKD", str(texto or ""))
+    limpio = "".join(c for c in limpio if not unicodedata.combining(c))
+    limpio = re.sub(r"[^A-Z0-9 ]", " ", limpio.upper())
+
+    utiles = []
+    for palabra in limpio.split():
+        if palabra in PALABRAS_VACIAS or len(palabra) < 2:
+            continue
+        # Plural simple: "HOJAS" -> "HOJA", "PANES" -> "PAN".
+        if len(palabra) > 4 and palabra.endswith("ES"):
+            palabra = palabra[:-2]
+        elif len(palabra) > 3 and palabra.endswith("S"):
+            palabra = palabra[:-1]
+        utiles.append(palabra)
+    return utiles
+
+
+def aplicar_sinonimos(pedido: str) -> str:
+    """Cambia el nombre del pedido por el que usa el catálogo, si se conoce."""
+    limpio = unicodedata.normalize("NFKD", str(pedido or ""))
+    limpio = "".join(c for c in limpio if not unicodedata.combining(c))
+    texto = re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]", " ", limpio.upper())).strip()
+    for escrito, del_catalogo in SINONIMOS_PRODUCTO.items():
+        clave = re.sub(r"[^A-Z0-9 ]", " ", escrito.upper())
+        if clave in texto:
+            texto = texto.replace(clave, del_catalogo)
+    return texto
+
+
+def se_parecen(una: str, otra: str) -> bool:
+    """Si dos palabras son la misma escrita distinto (o con un dedazo).
+
+    Exige la misma inicial: sin eso «QUESILLO» calzaba con «HUESILLO», que es
+    otro producto.
+    """
+    if una == otra:
+        return True
+    if len(una) > 3 and (otra.startswith(una) or una.startswith(otra)):
+        return True
+    if una[:1] != otra[:1] or abs(len(una) - len(otra)) > 2:
+        return False
+    return SequenceMatcher(None, una, otra).ratio() >= 0.88
+
+
+def indice_del_catalogo(catalogo_region: pd.DataFrame) -> dict[str, list[int]]:
+    """{palabra: filas donde aparece}. Evita recorrer el catálogo entero por pedido."""
+    indice: dict[str, list[int]] = {}
+    for posicion, nombre in enumerate(catalogo_region["PRODUCTO"]):
+        for palabra in set(palabras_utiles(nombre)):
+            indice.setdefault(palabra, []).append(posicion)
+    return indice
+
+
+def buscar_candidatos(pedido: str, catalogo_region: pd.DataFrame,
+                      indice: dict[str, list[int]], nombres: list[list[str]],
+                      precios: dict[str, float], tope: int = 6) -> list[dict]:
+    """Los ID del catálogo que pueden ser lo que la institución pidió.
+
+    La primera palabra del pedido es el tipo de producto ("ACEITE", "TE",
+    "MARGARINA"): si esa no aparece, no es. Con el tipo calzando se mide cuánto
+    del resto coincide.
+
+    Ordena por lo que calza mejor y, dentro de eso, **del más barato al más
+    caro** (los sin precio en el catálogo van al final).
+    """
+    buscado = palabras_utiles(aplicar_sinonimos(pedido))
+    if not buscado:
+        return []
+    cabeza = buscado[0]
+
+    # Filas donde aparece el tipo de producto, buscando también las variantes
+    # escritas distinto ("ALMIDON"/"ALMIDONES").
+    filas: set[int] = set()
+    for palabra, posiciones in indice.items():
+        if se_parecen(cabeza, palabra):
+            filas.update(posiciones)
+    if not filas:
+        return []
+
+    hallados = []
+    for posicion in filas:
+        del_catalogo = nombres[posicion]
+        aciertos = sum(1 for p in buscado if any(se_parecen(p, n) for n in del_catalogo))
+        puntaje = aciertos / len(buscado)
+        # Con una sola palabra pedida ("MARGARINA") basta el tipo. Con varias se
+        # exige que calce más de la mitad, o queda cualquier cosa del rubro.
+        if puntaje < (0.6 if len(buscado) > 1 else 1.0):
+            continue
+        hallados.append(_candidato(catalogo_region, posicion, precios, puntaje,
+                                   cabeza, del_catalogo))
+
+    # Segunda pasada: si nada calzó lo suficiente, se ofrecen igual los del
+    # mismo tipo de producto. "AJI SALSA" no existe, pero "AJI EN CREMA" sí y
+    # es lo que quieren; se muestran como sugerencia y NO vienen marcados.
+    if not hallados:
+        for posicion in filas:
+            del_catalogo = nombres[posicion]
+            if not (del_catalogo and se_parecen(cabeza, del_catalogo[0])):
+                continue
+            hallados.append(_candidato(catalogo_region, posicion, precios, 0.0,
+                                       cabeza, del_catalogo))
+
+    hallados.sort(key=lambda h: (-round(h["puntaje"], 1), h["de_entrada"],
+                                 h["PRECIO"] if h["PRECIO"] else float("inf")))
+    return hallados[:tope]
+
+
+def _candidato(catalogo_region: pd.DataFrame, posicion: int, precios: dict[str, float],
+               puntaje: float, cabeza: str, del_catalogo: list[str]) -> dict:
+    """Una fila del catálogo convertida en candidato, con qué tan seguro es el calce."""
+    registro = catalogo_region.iloc[posicion]
+    # El tipo de producto al principio del nombre ("ACEITE MARAVILLA...") vale
+    # más que mencionado al pasar ("ATÚN EN ACEITE...").
+    de_entrada = 0 if del_catalogo and se_parecen(cabeza, del_catalogo[0]) else 1
+    return {
+        "puntaje": puntaje,
+        "de_entrada": de_entrada,
+        "CALCE": "exacto" if puntaje >= 1 else ("parecido" if puntaje else "sugerencia"),
+        "ID": registro["ID"],
+        "ARTÍCULO": registro["PRODUCTO"],
+        COLUMNA_RUBRO: registro[COLUMNA_RUBRO],
+        "PRECIO": precios.get(registro["ID"]),
+        "MI PUBLICADO": registro["MI PUBLICADO"],
+    }
+
+
+def leer_requerimiento(archivo) -> tuple[pd.DataFrame, str]:
+    """(requerimiento, error). La planilla que manda la institución.
+
+    Lo que importa es la DESCRIPCIÓN del producto ("MAICENA"), no el código:
+    el código que traen es interno de ellos y no existe en Convenio Marco. Si
+    igual viene, se conserva para mostrarlo y por si resultara ser un ID real.
     """
     nombre = (getattr(archivo, "name", "") or "").lower()
     try:
@@ -3103,91 +3276,106 @@ def leer_requerimiento(archivo) -> tuple[pd.DataFrame, str]:
         return pd.DataFrame(), "El archivo está vacío."
 
     posiciones = mapear_columnas(datos)
-    if "ID" not in posiciones:
+    if "PRODUCTO" not in posiciones:
         titulos = ", ".join(str(c) for c in datos.columns)[:300]
-        return pd.DataFrame(), ("El archivo no tiene una columna de ID. "
-                                f"Encabezados encontrados: {titulos}")
+        return pd.DataFrame(), (
+            "El archivo no tiene una columna con el nombre del producto. "
+            f"Encabezados encontrados: {titulos}. Ponle «PRODUCTO» o «DESCRIPCIÓN» "
+            "de título a la columna que dice qué piden.")
 
-    columna_id = datos.iloc[:, posiciones["ID"]]
     vacia = pd.Series([""] * len(datos))
+    productos = datos.iloc[:, posiciones["PRODUCTO"]]
+    codigos = datos.iloc[:, posiciones["ID"]] if "ID" in posiciones else vacia
     cantidades = datos.iloc[:, posiciones["CANTIDAD"]] if "CANTIDAD" in posiciones else vacia
-    productos = datos.iloc[:, posiciones["PRODUCTO"]] if "PRODUCTO" in posiciones else vacia
 
     filas = []
     for i in range(len(datos)):
-        clave = str(columna_id.iat[i]).strip()
-        if not clave.isdigit():
+        pedido = str(productos.iat[i]).strip()
+        if not pedido or not palabras_utiles(pedido):
             continue
         cantidad = a_numero(cantidades.iat[i])
         filas.append({
-            "ID": clave,
-            "PRODUCTO PEDIDO": str(productos.iat[i]).strip(),
-            # Sin columna de cantidad se asume 1: el requerimiento igual sirve
-            # para saber que ID puede ofrecer en esa region.
+            "CÓDIGO": str(codigos.iat[i]).strip(),
+            "PEDIDO": pedido,
+            # Sin columna de cantidad se asume 1: el documento igual sirve
+            # para saber qué ID puede ofrecer en esa región.
             "CANTIDAD": int(cantidad) if cantidad and cantidad > 0 else 1,
         })
 
     if not filas:
-        return pd.DataFrame(), ("Ninguna fila trae un ID numérico. Revisa que la "
-                                "columna de ID tenga los números del Convenio Marco.")
-
-    # El mismo ID repetido se suma: es un pedido de N unidades, no dos lineas.
-    requerimiento = (pd.DataFrame(filas)
-                     .groupby("ID", as_index=False)
-                     .agg({"PRODUCTO PEDIDO": "first", "CANTIDAD": "sum"}))
-    return requerimiento, ""
+        return pd.DataFrame(), ("Ninguna fila trae el nombre de un producto. Revisa "
+                                "que la columna de descripción tenga texto.")
+    return pd.DataFrame(filas), ""
 
 
-def cruzar_por_region(requerimiento: pd.DataFrame, catalogo: pd.DataFrame, region: str,
-                      precios_oferta: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(disponibles, no_disponibles) para la region pedida.
+def cruzar_requerimiento(requerimiento: pd.DataFrame, catalogo: pd.DataFrame, region: str,
+                         precios: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(candidatos, sin_equivalencia) para la región pedida.
 
-    El filtro es estricto: un ID entra a `disponibles` solo si el catalogo dice
-    que esta publicado en esa region (o en todas). Todo lo demas cae en
-    `no_disponibles` con el motivo, y en el documento sale como N/D.
+    Por cada línea del requerimiento busca en el catálogo los ID publicados en
+    esa región que pueden ser lo que piden. Deja marcado el primero —el que
+    mejor calza y más barato—, y ella ajusta en pantalla.
+
+    Lo que no tiene ningún candidato cae en `sin_equivalencia` y en el
+    documento sale abajo, como N/D.
     """
-    por_id = ({str(fila["ID"]): fila for _, fila in catalogo.iterrows()}
-              if not catalogo.empty else {})
+    en_region = catalogo[[esta_en_region(r, region) for r in catalogo["REGIONES"]]]
+    en_region = en_region.reset_index(drop=True)
+    if en_region.empty:
+        return pd.DataFrame(), requerimiento.assign(MOTIVO="Sin catálogo en esta región")
 
-    disponibles, no_disponibles = [], []
-    for _, pedido in requerimiento.iterrows():
-        clave = str(pedido["ID"])
-        registro = por_id.get(clave)
+    por_id = dict(zip(en_region["ID"], range(len(en_region))))
+    indice = indice_del_catalogo(en_region)
+    nombres = [palabras_utiles(n) for n in en_region["PRODUCTO"]]
 
-        if registro is None:
-            no_disponibles.append({
-                "ID": clave,
-                "PRODUCTO": pedido["PRODUCTO PEDIDO"] or "(no está en tu catálogo)",
-                "CANTIDAD": pedido["CANTIDAD"],
-                "MOTIVO": "No está en tu catálogo",
+    candidatos, sin_equivalencia = [], []
+    for _, linea in requerimiento.iterrows():
+        # Si el código que mandaron resulta ser un ID de Convenio Marco de
+        # verdad, ese manda: no hay nada que adivinar.
+        posicion = por_id.get(str(linea["CÓDIGO"]).strip())
+        if posicion is not None:
+            registro = en_region.iloc[posicion]
+            hallados = [{
+                "puntaje": 1.0, "de_entrada": 0, "CALCE": "exacto",
+                "ID": registro["ID"], "ARTÍCULO": registro["PRODUCTO"],
+                COLUMNA_RUBRO: registro[COLUMNA_RUBRO],
+                "PRECIO": precios.get(registro["ID"]),
+                "MI PUBLICADO": registro["MI PUBLICADO"],
+            }]
+        else:
+            hallados = buscar_candidatos(linea["PEDIDO"], en_region, indice, nombres, precios)
+
+        if not hallados:
+            sin_equivalencia.append({
+                "CÓDIGO": linea["CÓDIGO"],
+                "PEDIDO": linea["PEDIDO"],
+                "CANTIDAD": linea["CANTIDAD"],
+                "MOTIVO": f"Sin equivalencia disponible en {region}",
             })
             continue
 
-        if not esta_en_region(registro["REGIONES"], region):
-            donde = ", ".join(sorted(registro["REGIONES"])) or "sin región informada"
-            no_disponibles.append({
-                "ID": clave,
-                "PRODUCTO": registro["PRODUCTO"] or pedido["PRODUCTO PEDIDO"],
-                "CANTIDAD": pedido["CANTIDAD"],
-                "MOTIVO": f"Sin disponibilidad regional (publicado en: {donde})",
+        for numero, hallado in enumerate(hallados):
+            candidatos.append({
+                # Solo el primero viene marcado, y solo si de verdad calza: una
+                # sugerencia marcada sola terminaría cotizando un ID equivocado.
+                "✓": numero == 0 and hallado["CALCE"] != "sugerencia",
+                "CALCE": hallado["CALCE"],
+                "PEDIDO": linea["PEDIDO"],
+                "CÓDIGO": linea["CÓDIGO"],
+                "ID": hallado["ID"],
+                "ARTÍCULO": hallado["ARTÍCULO"],
+                "PRECIO": hallado["PRECIO"],
+                "MI PUBLICADO": hallado["MI PUBLICADO"],
+                COLUMNA_RUBRO: hallado[COLUMNA_RUBRO],
+                "CANTIDAD": linea["CANTIDAD"],
             })
-            continue
 
-        disponibles.append({
-            "ID": clave,
-            "PRODUCTO": registro["PRODUCTO"] or pedido["PRODUCTO PEDIDO"],
-            COLUMNA_RUBRO: registro[COLUMNA_RUBRO],
-            "CANTIDAD": pedido["CANTIDAD"],
-            "PRECIO OFERTA": precios_oferta.get(clave),
-            "MI PUBLICADO": registro["MI PUBLICADO"],
-        })
-
-    return pd.DataFrame(disponibles), pd.DataFrame(no_disponibles)
+    return pd.DataFrame(candidatos), pd.DataFrame(sin_equivalencia)
 
 
 def con_precio_y_total(tabla: pd.DataFrame, modo_precio: str,
                        con_cantidad: bool) -> pd.DataFrame:
-    """Agrega las columnas PRECIO y TOTAL segun el modo elegido.
+    """Deja las columnas PRECIO y TOTAL segun el modo elegido.
 
     modo_precio:  "sin"       -> solo ID y articulo (listado de disponibilidad)
                   "oferta"    -> el precio rebajado de la semana
@@ -3196,9 +3384,11 @@ def con_precio_y_total(tabla: pd.DataFrame, modo_precio: str,
     if tabla.empty:
         return tabla
     final = tabla.copy()
-    columna = {"oferta": "PRECIO OFERTA", "publicado": "MI PUBLICADO"}.get(modo_precio)
-    final["PRECIO"] = final[columna] if columna else None
-    if con_cantidad and columna:
+    if modo_precio == "publicado":
+        final["PRECIO"] = final["MI PUBLICADO"]
+    elif modo_precio == "sin":
+        final["PRECIO"] = None
+    if con_cantidad and modo_precio != "sin":
         final["TOTAL"] = [(p * c) if p else None
                           for p, c in zip(final["PRECIO"], final["CANTIDAD"])]
     return final
@@ -3222,11 +3412,11 @@ def columnas_del_documento(modo_precio: str,
 
 def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucion: str,
                    region: str, numero: str, modo_precio: str, con_cantidad: bool) -> bytes:
-    """El documento de la cotizacion filtrada por region.
+    """El documento: ID de Convenio Marco y la descripcion del catalogo.
 
-    Mismo formato que el PDF que ella ya envia (franja azul, datos de la empresa,
-    bloque ENVIAR A, franja de despacho); cambian las columnas segun lo elegido
-    y se agrega la REGION, que es lo que manda en este documento.
+    El comprador usa ese ID para generar la compra, asi que es lo primero que
+    tiene que ver. Lo que no se pudo ofrecer va abajo, con el nombre que ellos
+    pidieron y su codigo, marcado N/D.
     """
     lleva_totales = con_cantidad and modo_precio != "sin"
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -3308,7 +3498,7 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
             precio = registro.get("PRECIO")
             fila = tabla_pdf.row()
             fila.cell(_limpiar_pdf(str(registro.get("ID", "")).strip()))
-            fila.cell(_limpiar_pdf(registro.get("PRODUCTO", "")))
+            fila.cell(_limpiar_pdf(registro.get("ARTÍCULO", "")))
             if con_cantidad:
                 fila.cell(_limpiar_pdf(str(int(registro.get("CANTIDAD", 1)))))
             if modo_precio != "sin":
@@ -3335,7 +3525,7 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
                 f"El total no incluye {sin_precio} producto(s) sin precio en el "
                 "catálogo, que se cotizan a solicitud."))
 
-    # --- 6) Lo que no esta disponible en la region: N/D --------------------
+    # --- 6) Lo que no se pudo ofrecer en la region: N/D --------------------
     if not no_disponibles.empty:
         pdf.ln(4)
         _barra(pdf, "  SIN DISPONIBILIDAD REGIONAL (N/D)", alto=6, tamaño=8.5, alineacion="L")
@@ -3343,9 +3533,14 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
         pdf.set_fill_color(255, 255, 255)
         pdf.set_text_color(30, 30, 30)
         pdf.set_font("Helvetica", "", 8)
+        # Se muestra el codigo de ellos: es como identifican su propio pedido.
+        lleva_codigo = any(str(c).strip() for c in no_disponibles.get("CÓDIGO", []))
+        anchos = (28, 130, 28) if lleva_codigo else (158, 28)
+        titulos = ("CÓDIGO", "PRODUCTO SOLICITADO", "DISPONIBILIDAD") if lleva_codigo \
+            else ("PRODUCTO SOLICITADO", "DISPONIBILIDAD")
         with pdf.table(
-            col_widths=(24, 134, 28),
-            text_align=("CENTER", "LEFT", "CENTER"),
+            col_widths=anchos,
+            text_align=("CENTER", "LEFT", "CENTER") if lleva_codigo else ("LEFT", "CENTER"),
             headings_style=FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=AZUL_TABLA),
             cell_fill_color=(238, 243, 248),
             cell_fill_mode="ROWS",
@@ -3354,12 +3549,13 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
             borders_layout="MINIMAL",
         ) as tabla_nd:
             fila = tabla_nd.row()
-            for titulo in ("ID", "ARTÍCULO", "DISPONIBILIDAD"):
+            for titulo in titulos:
                 fila.cell(_limpiar_pdf(titulo))
             for _, registro in no_disponibles.iterrows():
                 fila = tabla_nd.row()
-                fila.cell(_limpiar_pdf(str(registro.get("ID", "")).strip()))
-                fila.cell(_limpiar_pdf(registro.get("PRODUCTO", "")))
+                if lleva_codigo:
+                    fila.cell(_limpiar_pdf(str(registro.get("CÓDIGO", "")).strip()))
+                fila.cell(_limpiar_pdf(registro.get("PEDIDO", "")))
                 fila.cell("N/D")
 
     # --- 7) Pie ------------------------------------------------------------
@@ -3369,17 +3565,16 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
     pdf.set_font("Helvetica", "I", 7.5)
     pdf.set_text_color(120, 130, 140)
     pdf.multi_cell(0, 3.6, _limpiar_pdf(
-        f"Productos verificados como disponibles en {region} dentro del Convenio Marco. "
-        "Los marcados N/D no están publicados para esa región. Precios netos sujetos a "
-        f"disponibilidad de stock. Contacto: {FIRMA['nombre']}, {FIRMA['cargo']}, "
-        f"{FIRMA['fono']}."
+        f"ID de Convenio Marco disponibles en {region}. Los marcados N/D no están "
+        "publicados para esa región. Precios netos sujetos a disponibilidad de stock. "
+        f"Contacto: {FIRMA['nombre']}, {FIRMA['cargo']}, {FIRMA['fono']}."
     ))
 
     return bytes(pdf.output())
 
 
 def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, float]) -> None:
-    """La pantalla: elegir región, subir el requerimiento y bajar el PDF."""
+    """La pantalla: región, requerimiento, elegir los ID y bajar el PDF."""
     with st.container(border=True):
         st.markdown("##### 📍 Región de la institución que compra")
         try:
@@ -3404,20 +3599,25 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
         archivo = st.file_uploader(
             "Planilla con los productos pedidos (Excel o CSV)",
             type=["xlsx", "xlsm", "csv"], key="reg_archivo",
-            help="Debe tener una columna de ID. Si trae columna de cantidad se usa; "
-                 "si no, se asume 1 por producto.")
+            help="Necesita una columna con el nombre del producto («PRODUCTO» o "
+                 "«DESCRIPCIÓN»). El código de ellos y la cantidad son opcionales.")
         if archivo is None:
-            st.info("Sube la planilla del requerimiento para cruzarla con el catálogo.")
+            st.info("Sube la planilla del requerimiento para buscar cada producto "
+                    "en tu catálogo.")
             return
 
         requerimiento, error = leer_requerimiento(archivo)
         if error:
             st.error(error)
             return
-        st.caption(f"{len(requerimiento)} productos distintos en el requerimiento.")
 
-    disponibles, no_disponibles = cruzar_por_region(
-        requerimiento, catalogo, region, precios_oferta)
+    with st.spinner("Buscando cada producto en tu catálogo..."):
+        candidatos, sin_equivalencia = cruzar_requerimiento(
+            requerimiento, catalogo, region, precios_oferta)
+
+    encontrados = candidatos["PEDIDO"].nunique() if not candidatos.empty else 0
+    st.caption(f"{len(requerimiento)} productos pedidos · **{encontrados} con "
+               f"equivalencia en {region}** · {len(sin_equivalencia)} sin equivalencia.")
 
     with st.container(border=True):
         st.markdown("##### ⚙️ Qué debe mostrar el documento")
@@ -3431,48 +3631,68 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
                                format_func=etiquetas_precio.get, key="reg_modo")
         con_cantidad = c2.checkbox("Incluir cantidad y total", value=True, key="reg_cant")
 
-    tabla = con_precio_y_total(disponibles, modo_precio, con_cantidad)
-
-    # --- Lo que entra al documento ------------------------------------------
-    with st.container(border=True):
-        st.markdown(f"##### ✅ Disponibles en {region} — {len(tabla)} productos")
-        if tabla.empty:
-            st.warning("Ninguno de los productos pedidos está publicado en esta región.")
-        else:
-            columnas_vista = ["ID", "PRODUCTO", COLUMNA_RUBRO]
-            if con_cantidad:
-                columnas_vista.append("CANTIDAD")
-            if modo_precio != "sin":
-                columnas_vista.append("PRECIO")
-                if con_cantidad:
-                    columnas_vista.append("TOTAL")
-            st.dataframe(tabla[columnas_vista], width="stretch", hide_index=True,
-                         column_config={
-                             "PRECIO": st.column_config.NumberColumn(format="localized"),
-                             "TOTAL": st.column_config.NumberColumn(format="localized"),
-                         })
-            if modo_precio != "sin":
-                sin_precio = sum(1 for p in tabla["PRECIO"] if not p)
-                if sin_precio == len(tabla) and modo_precio == "publicado":
-                    # Hoy el CATÁLOGO de Drive no tiene columna de precio: si no
-                    # se avisa, el PDF sale entero con «A solicitud» sin explicar
-                    # por qué.
-                    st.warning("Tu catálogo no trae una columna con tu precio publicado, "
-                               "así que todos saldrían como «A solicitud». Agrégale al "
-                               "archivo del catálogo una columna «MI PUBLICADO», o usa el "
-                               "precio de oferta de la semana.")
-                elif sin_precio:
-                    st.caption(f"{sin_precio} producto(s) sin precio en el catálogo: "
-                               "salen como «A solicitud».")
-
-    # --- Lo que queda fuera: N/D --------------------------------------------
-    if not no_disponibles.empty:
+    # --- Elegir los ID -------------------------------------------------------
+    elegidos = pd.DataFrame()
+    if not candidatos.empty:
         with st.container(border=True):
-            st.markdown(f"##### 🚫 Sin disponibilidad regional — "
-                        f"{len(no_disponibles)} productos (N/D)")
-            st.dataframe(no_disponibles, width="stretch", hide_index=True)
+            st.markdown("##### ✅ Elige los ID que van en el documento")
+            st.caption("Viene marcado el que mejor calza con lo que pidieron y, entre "
+                       "iguales, el más barato. Puedes marcar varios del mismo pedido, "
+                       "cambiar la cantidad o desmarcar lo que no ofrecerás. Las "
+                       "**sugerencias** nunca vienen marcadas: son del mismo tipo de "
+                       "producto pero hay que revisarlas.")
+            vista = ["✓", "PEDIDO", "CALCE", "ID", "ARTÍCULO", "PRECIO", "CANTIDAD"]
+            editada = st.data_editor(
+                candidatos[vista],
+                width="stretch",
+                hide_index=True,
+                height=420,
+                key="reg_editor",
+                disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "PRECIO"],
+                column_config={
+                    "✓": st.column_config.CheckboxColumn("✓", help="Marca lo que va en el PDF"),
+                    "PEDIDO": st.column_config.TextColumn("LO QUE PIDIERON", width="medium"),
+                    "CALCE": st.column_config.TextColumn(
+                        "CALCE", width="small",
+                        help="exacto: el nombre coincide entero · parecido: coincide en "
+                             "parte · sugerencia: es del mismo tipo de producto, revísalo"),
+                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO"),
+                    "ARTÍCULO": st.column_config.TextColumn("ARTÍCULO DEL CATÁLOGO",
+                                                            width="large"),
+                    "PRECIO": st.column_config.NumberColumn("PRECIO OFERTA",
+                                                            format="localized"),
+                    "CANTIDAD": st.column_config.NumberColumn("CANT.", min_value=1, step=1),
+                },
+            )
+            marcadas = editada["✓"].fillna(False)
+            elegidos = candidatos.loc[marcadas.values].copy()
+            elegidos["CANTIDAD"] = editada.loc[marcadas.values, "CANTIDAD"].values
+            st.caption(f"**{len(elegidos)} ID marcados** de {len(candidatos)} propuestos.")
 
-    if tabla.empty and no_disponibles.empty:
+    tabla = con_precio_y_total(elegidos, modo_precio, con_cantidad)
+    if not tabla.empty and modo_precio != "sin":
+        sin_precio = sum(1 for p in tabla["PRECIO"] if not p)
+        if sin_precio == len(tabla) and modo_precio == "publicado":
+            # Hoy el CATÁLOGO de Drive no tiene columna de precio: si no se avisa,
+            # el PDF sale entero con «A solicitud» sin explicar por qué.
+            st.warning("Tu catálogo no trae una columna con tu precio publicado, así que "
+                       "todos saldrían como «A solicitud». Agrégale al archivo del catálogo "
+                       "una columna «MI PUBLICADO», o usa el precio de oferta de la semana.")
+        elif sin_precio:
+            st.caption(f"{sin_precio} de los marcados no tienen precio en el catálogo: "
+                       "salen como «A solicitud».")
+
+    # --- Lo que no tiene equivalencia: N/D -----------------------------------
+    if not sin_equivalencia.empty:
+        with st.container(border=True):
+            st.markdown(f"##### 🚫 Sin equivalencia en {region} — "
+                        f"{len(sin_equivalencia)} productos (N/D)")
+            st.caption("Van al final del documento marcados N/D. Si alguno sí existe en tu "
+                       "catálogo con otro nombre, avísame y lo agrego a la lista de "
+                       "equivalencias para que lo encuentre solo.")
+            st.dataframe(sin_equivalencia, width="stretch", hide_index=True)
+
+    if tabla.empty and sin_equivalencia.empty:
         return
 
     # --- El documento --------------------------------------------------------
@@ -3484,13 +3704,13 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
         numero = c2.text_input("N° Cotización", value=numero_cotizacion_sugerido(),
                                key="reg_num", autocomplete="off")
         try:
-            pdf = a_pdf_regional(tabla, no_disponibles, institucion, region,
+            pdf = a_pdf_regional(tabla, sin_equivalencia, institucion, region,
                                  numero, modo_precio, con_cantidad)
         except Exception as error:
             st.error(f"No se pudo generar el PDF: {error}")
             return
         st.download_button(
-            f"⬇️ Descargar PDF ({len(tabla)} disponibles, {len(no_disponibles)} N/D)",
+            f"⬇️ Descargar PDF ({len(tabla)} ID cotizados, {len(sin_equivalencia)} N/D)",
             data=pdf,
             file_name=nombre_pdf(institucion or region, numero),
             mime="application/pdf",
