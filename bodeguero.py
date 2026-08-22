@@ -18,7 +18,7 @@ no al del archivo de donde salieron.
 """
 import argparse
 import csv, io, json, os, sys, time, urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -117,7 +117,12 @@ def nombres_de_convenios(codigos: set[str]) -> dict[str, str]:
     if archivo.exists():
         guardados = json.loads(archivo.read_text(encoding="utf-8"))
 
-    faltan = sorted(c for c in codigos if c and c not in guardados)
+    # Solo textos: si en la bodega queda un parquet sin la columna del convenio
+    # (los que dejo el bodeguero de la API), aqui llegan NaN, que son float, y
+    # `sorted` revienta al compararlos con los codigos. Tiro abajo la tarea del
+    # 21-08 despues de 6 minutos de descarga.
+    faltan = sorted(c for c in codigos
+                    if isinstance(c, str) and c and c not in guardados)
     if not faltan:
         return guardados
 
@@ -144,6 +149,48 @@ def nombres_de_convenios(codigos: set[str]) -> dict[str, str]:
         time.sleep(1)
     archivo.write_text(json.dumps(guardados, indent=1, ensure_ascii=False), encoding="utf-8")
     return guardados
+
+
+def anotar_cobertura() -> str:
+    """Deja anotado en `bodega/estado.json` hasta que dia llega la bodega.
+
+    Es el archivo que lee la APP para decidir si responde con lo guardado o va
+    en vivo a la API. El bodeguero escribe los parquet en `bodega/detalle/`,
+    pero si no actualiza este archivo la app sigue creyendo que la bodega esta
+    casi vacia y consulta en vivo aunque los datos ya esten en disco.
+
+    Se cubre desde el primer mes descargado hasta el ultimo dia con compras: los
+    archivos de datos abiertos traen el mes entero, asi que dentro de ese tramo
+    no hay huecos. Los meses ANTERIORES a PRIMER_MES que aparecen en la bodega
+    no se cuentan: solo tienen las ordenes que se colaron por fecha de creacion,
+    no el mes completo, y declararlos seria mostrar datos a medias sin avisar.
+    """
+    ultimo = ""
+    for archivo in BODEGA.glob("*.parquet"):
+        dias = pd.read_parquet(archivo, columns=["dia"])["dia"].dropna()
+        if len(dias):
+            ultimo = max(ultimo, str(dias.max())[:10])
+    if len(ultimo) != 10:
+        return ""
+
+    cursor, final = date(*PRIMER_MES, 1), date.fromisoformat(ultimo)
+    dias_cubiertos = []
+    while cursor <= final:
+        dias_cubiertos.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+
+    archivo = BODEGA.parent / "estado.json"
+    estado = {}
+    if archivo.exists():
+        try:
+            estado = json.loads(archivo.read_text(encoding="utf-8"))
+        except Exception:
+            estado = {}
+    estado["detalle"] = dias_cubiertos
+    estado["fuente_detalle"] = "datos abiertos ChileCompra (oc-da)"
+    estado["actualizado"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    archivo.write_text(json.dumps(estado, indent=1, ensure_ascii=False), encoding="utf-8")
+    return ultimo
 
 
 def guardar(por_mes: dict[str, list[dict]]) -> None:
@@ -186,11 +233,20 @@ def main() -> None:
     total = 0
     procesados = []
     pendientes = meses_por_procesar(opciones.completo)
+    if opciones.completo:
+        # Se vacia ANTES de bajar: rehacer la historia sobre los parquet que ya
+        # estaban duplica las lineas (y si son del bodeguero viejo, ni siquiera
+        # traen la columna del convenio).
+        for parquet_viejo in BODEGA.glob("*.parquet"):
+            parquet_viejo.unlink()
     print(f"BODEGUERO · {len(pendientes)} mes/es por procesar\n", flush=True)
     for año, mes in pendientes:
         inicio = time.time()
         archivo = bajar(año, mes)
         if archivo is None:
+            if opciones.completo:
+                raise SystemExit(f"Se detiene: falto el archivo de {año}-{mes:02d}. "
+                                 "Media historia es peor que la de ayer completa.")
             continue
         por_mes: dict[str, list[dict]] = {}
         n = 0
@@ -208,6 +264,9 @@ def main() -> None:
         convenios |= set(pd.read_parquet(archivo, columns=["convenio_marco"])["convenio_marco"])
     nombres = nombres_de_convenios(convenios)
     print(f"  convenios con nombre: {len(nombres)} de {len(convenios)}")
+
+    hasta_donde = anotar_cobertura()
+    print(f"  la app puede consultar hasta: {hasta_donde or 'sin datos'}")
 
     for zip_viejo in DESCARGAS.glob("*.zip"):
         zip_viejo.unlink()          # pesan 100 MB cada uno, no se guardan
