@@ -165,11 +165,16 @@ FIRMA = {
 # Cuentas desde las que Serling puede enviar el correo.
 CORREOS_ENVIO = ["svera@emergenza.cl", "serlingvera@gmail.com"]
 
-def asunto_correo(institucion: str) -> str:
-    """«ID disponibles en Convenio Marco - Escuela Naval | Comercial Emergenza»."""
-    nombre = institucion.strip()
-    medio = f" - {nombre}" if nombre else ""
-    return f"ID disponibles en Convenio Marco{medio} | Comercial Emergenza"
+def asunto_correo(numero: str) -> str:
+    """«ID disponibles en Convenio Marco | Comercial Emergenza 2208-0235».
+
+    Sin el nombre de la institucion: el asunto lo lee el comprador, que ya sabe
+    donde trabaja. El numero de cotizacion si sirve, porque es con lo que se
+    identifica el documento adjunto cuando responde.
+    """
+    codigo = numero.strip()
+    return ("ID disponibles en Convenio Marco | Comercial Emergenza"
+            + (f" {codigo}" if codigo else ""))
 
 # Ambitos minimos de lectura para el Modo 2 (cuenta de servicio, en construccion).
 SCOPES_GOOGLE = [
@@ -924,7 +929,7 @@ def a_pdf(tabla: pd.DataFrame, institucion: str, contacto: str,
     pdf.ln(3)
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_text_color(60, 60, 60)
-    for etiqueta, valor in (("CLIENTE:", institucion),):
+    for etiqueta, valor in (("INSTITUCIÓN:", institucion),):
         if not str(valor).strip():
             continue
         pdf.set_x(20)
@@ -1501,6 +1506,28 @@ def nombres_convenios(sello: str) -> dict[str, str]:
         return json.loads(archivo.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+@st.cache_data(show_spinner=False)
+def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
+                          desde: date, hasta: date, sello: str) -> list[str]:
+    """Los convenios marco que esas unidades compraron en ese periodo.
+
+    Existe para que ella elija el convenio ANTES de consultar, en vez de filtrar
+    una tabla que ya salio. Solo se puede leyendo la bodega: en una consulta en
+    vivo el convenio no viene.
+    """
+    detalle = leer_bodega("detalle", meses, sello)
+    if detalle.empty or "convenio_marco" not in detalle.columns:
+        return []
+    dias = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
+    suyas = detalle[dias.between(desde, hasta).values
+                    & detalle["unidad"].isin(set(codigos)).values]
+    if suyas.empty:
+        return []
+    nombres = nombres_convenios(sello)
+    return sorted({nombres.get(c, c) or SIN_CONVENIO
+                   for c in suyas["convenio_marco"] if isinstance(c, str)})
 
 
 def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
@@ -2364,7 +2391,10 @@ def propuesta(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
               para: str, copia: str, clave: str) -> None:
     """El PDF y el envío de UNA propuesta (un rubro, o todo si no hay rubros)."""
     cuerpo = texto_correo(contacto, remitente)
-    asunto = asunto_correo(institucion)
+    # Se resuelve una sola vez: el numero sugerido lleva la hora, y pedirlo dos
+    # veces podia dar dos numeros distintos entre el asunto y el documento.
+    numero = numero.strip() or numero_cotizacion_sugerido()
+    asunto = asunto_correo(numero)
 
     pdf = a_pdf(seleccionados, institucion, contacto, numero, precios_oferta)
     archivo_pdf = nombre_pdf(institucion, numero)
@@ -2576,6 +2606,21 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 "Falta el ticket de la API. Se anota en Streamlit ▸ Manage app ▸ "
                 'Settings ▸ Secrets así:\n\n[mercadopublico]\nticket = "TU-TICKET"')
 
+        # El convenio se elige ANTES de consultar: ella pidio filtrar lo que
+        # quiere ver, no filtrar una tabla que ya salio. Solo se puede cuando la
+        # respuesta sale de la bodega; en vivo el convenio no existe.
+        if usar_bodega and elegidas:
+            disponibles = convenios_del_periodo(
+                tuple(sorted(elegidas_df["codigo_unidad"])),
+                tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
+            if disponibles:
+                marcar_lo_nuevo("mp_convenio", disponibles)
+                st.multiselect(
+                    "Convenio Marco a consultar", disponibles, key="mp_convenio",
+                    help="Los convenios por los que compró esta institución en el "
+                         "período. Deja marcados solo los que te interesan y la "
+                         "tabla saldrá con esos.")
+
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)
         consultar = st.button(
@@ -2679,13 +2724,19 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                           help="CON STOCK son los ID que están en tu catálogo; "
                                "NO LO TENGO, los que no vendes.")
     with derecha:
-        rubros = sorted(r for r in productos[columna_filtro].unique() if r)
-        marcar_lo_nuevo("mp_rubro", rubros)
-        elegidos_rubro = st.multiselect(
-            "Convenio Marco", rubros, key="mp_rubro",
-            help=("El convenio marco de cada orden, tal como lo publica ChileCompra."
-                  if por_convenio else
-                  "El rubro de tu catálogo: la consulta en vivo no trae el convenio."))
+        if por_convenio:
+            # Ya se eligió arriba, antes de consultar: aquí solo se respeta.
+            # Repetir el selector obligaba a filtrar dos veces lo mismo.
+            elegidos_rubro = [r for r in st.session_state.get("mp_convenio", [])
+                              if r in set(productos[columna_filtro])]
+            if elegidos_rubro:
+                st.caption("**Convenio Marco:** " + " · ".join(elegidos_rubro))
+        else:
+            rubros = sorted(r for r in productos[columna_filtro].unique() if r)
+            marcar_lo_nuevo("mp_rubro", rubros)
+            elegidos_rubro = st.multiselect(
+                "Convenio Marco", rubros, key="mp_rubro",
+                help="El rubro de tu catálogo: la consulta en vivo no trae el convenio.")
     if estado != "TODOS":
         productos = productos[productos[COLUMNA_ESTADO] == estado]
     if elegidos_rubro:
