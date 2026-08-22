@@ -201,6 +201,10 @@ RUTA_TICKET_LOCAL = Path.home() / "ticket-mp.txt"
 # El periodo que aparece al abrir: el año en curso completo.
 PRIMER_DIA_SUGERIDO = date(2026, 1, 1)
 PRIMERA_FECHA_MP = date(2023, 1, 1)
+# Atajos del periodo, contados hacia atras desde el ultimo dia de la bodega.
+# El 0 es «Libre»: no toca las fechas y ella las elige en el calendario.
+ATAJOS_PERIODO = {"7 días": 7, "15 días": 15, "30 días": 30, "90 días": 90,
+                  "1 año": 365, "Libre": 0}
 
 # A partir de aqui la consulta deja de ser instantanea y conviene avisarlo.
 CONSULTAS_QUE_DEMORAN = 120
@@ -244,6 +248,7 @@ FUERA_DE_CATALOGO = "(fuera de tu catálogo)"
 # al pendiente que la API no permitía resolver.
 COLUMNA_CONVENIO = "CONVENIO"
 SIN_CONVENIO = "(sin convenio informado)"
+TODOS_CONVENIOS = "Todos los convenios"
 
 # En este modulo tambien se destaca el precio, no solo la recurrencia: estar bajo
 # lo que la institucion ya pago es poco frecuente (4 de 54 productos en la prueba
@@ -2383,18 +2388,22 @@ def cotizacion_y_correo(seleccionados: pd.DataFrame, precios_oferta: dict[str, f
                 st.markdown(f"**{rubro or 'Sin rubro'}** · {len(grupo)} productos")
             propuesta(grupo, precios_oferta, institucion, contacto,
                       f"{numero}-{sufijo}" if len(grupos) > 1 else numero,
-                      remitente, para, copia, f"{clave}_{sufijo or 'uno'}")
+                      remitente, para, copia, f"{clave}_{sufijo or 'uno'}",
+                      numero_asunto=numero)
 
 
 def propuesta(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
               institucion: str, contacto: str, numero: str, remitente: str,
-              para: str, copia: str, clave: str) -> None:
+              para: str, copia: str, clave: str, numero_asunto: str = "") -> None:
     """El PDF y el envío de UNA propuesta (un rubro, o todo si no hay rubros)."""
     cuerpo = texto_correo(contacto, remitente)
     # Se resuelve una sola vez: el numero sugerido lleva la hora, y pedirlo dos
     # veces podia dar dos numeros distintos entre el asunto y el documento.
     numero = numero.strip() or numero_cotizacion_sugerido()
-    asunto = asunto_correo(numero)
+    # El asunto termina en el numero de cotizacion y nada mas. Cuando hay dos
+    # rubros el documento lleva un sufijo («-ALI», «-ASE») para distinguirlos,
+    # pero eso identifica al archivo, no al correo.
+    asunto = asunto_correo(numero_asunto.strip() or numero)
 
     pdf = a_pdf(seleccionados, institucion, contacto, numero, precios_oferta)
     archivo_pdf = nombre_pdf(institucion, numero)
@@ -2552,10 +2561,30 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # teniendo el dato en disco. Ahora se propone hasta donde la bodega
         # llega; si ella estira el rango, la app avisa que ira en vivo.
         tope = min(ultimo_dia_en_bodega() or hoy, hoy)
+        # Atajos de período: se habían quitado el 17-08 para dejar solo el
+        # calendario, y ella los pidió de vuelta. Conviven: el atajo mueve las
+        # fechas y «Libre» deja el calendario tal como estaba.
+        atajo = st.radio("Período a consultar", list(ATAJOS_PERIODO),
+                         horizontal=True, key="mp_atajo",
+                         index=list(ATAJOS_PERIODO).index("Libre"),
+                         help="Los atajos terminan en el último día que tiene la "
+                              "bodega. Con «Libre» eliges las dos fechas a mano.")
+        # Solo actúa cuando ella CAMBIA el atajo. Si se aplicara en cada
+        # dibujado, no podría mover una fecha a mano sin que se le volviera atrás.
+        if atajo != st.session_state.get("mp_atajo_aplicado"):
+            st.session_state["mp_atajo_aplicado"] = atajo
+            if ATAJOS_PERIODO[atajo]:
+                st.session_state["mp_periodo"] = (
+                    max(PRIMERA_FECHA_MP,
+                        tope - timedelta(days=ATAJOS_PERIODO[atajo] - 1)), tope)
+        # El valor inicial se deja en session_state y NO como `value=`: dar los
+        # dos a la vez es lo que Streamlit reclama en el registro, porque el
+        # atajo también escribe ahí.
+        if "mp_periodo" not in st.session_state:
+            st.session_state["mp_periodo"] = (min(PRIMER_DIA_SUGERIDO, tope), tope)
         p1, p2 = st.columns([1, 2])
         elegido = p1.date_input(
-            "Período a consultar",
-            value=(min(PRIMER_DIA_SUGERIDO, tope), tope),
+            "Fechas",
             min_value=PRIMERA_FECHA_MP, max_value=hoy,
             format="DD/MM/YYYY", key="mp_periodo",
             help="Elige la fecha de inicio y la de término. Puedes ir hacia atrás "
@@ -2614,12 +2643,16 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 tuple(sorted(elegidas_df["codigo_unidad"])),
                 tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
             if disponibles:
-                marcar_lo_nuevo("mp_convenio", disponibles)
-                st.multiselect(
-                    "Convenio Marco a consultar", disponibles, key="mp_convenio",
+                # Una lista de la que se elige UNO, no un multiselect: con las
+                # etiquetas de todos marcadas habia que ir sacandolas una por
+                # una, y en el celular ocupaban media pantalla.
+                opciones = [TODOS_CONVENIOS] + disponibles
+                if st.session_state.get("mp_convenio_uno") not in opciones:
+                    st.session_state["mp_convenio_uno"] = TODOS_CONVENIOS
+                st.selectbox(
+                    "Convenio Marco a consultar", opciones, key="mp_convenio_uno",
                     help="Los convenios por los que compró esta institución en el "
-                         "período. Deja marcados solo los que te interesan y la "
-                         "tabla saldrá con esos.")
+                         "período. Elige uno para ver solo esas compras.")
 
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)
@@ -2727,10 +2760,9 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         if por_convenio:
             # Ya se eligió arriba, antes de consultar: aquí solo se respeta.
             # Repetir el selector obligaba a filtrar dos veces lo mismo.
-            elegidos_rubro = [r for r in st.session_state.get("mp_convenio", [])
-                              if r in set(productos[columna_filtro])]
-            if elegidos_rubro:
-                st.caption("**Convenio Marco:** " + " · ".join(elegidos_rubro))
+            uno = st.session_state.get("mp_convenio_uno", TODOS_CONVENIOS)
+            elegidos_rubro = [] if uno == TODOS_CONVENIOS else [uno]
+            st.caption("**Convenio Marco:** " + uno)
         else:
             rubros = sorted(r for r in productos[columna_filtro].unique() if r)
             marcar_lo_nuevo("mp_rubro", rubros)
