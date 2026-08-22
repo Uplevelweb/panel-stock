@@ -1,434 +1,232 @@
 """
-BODEGUERO — descarga Mercado Publico y lo guarda en la bodega
-==============================================================
+BODEGUERO MASIVO — llena la bodega desde los datos abiertos de ChileCompra
+==========================================================================
 
-Corre de madrugada en GitHub Actions (ver .github/workflows/bodega.yml) y deja
-los datos listos para que el Panel Oportunidades los consulte al instante, sin
-tocar la API.
+Reemplaza al bodeguero que consultaba la API orden por orden. La diferencia:
 
-Dos capas, porque cuestan cosas muy distintas (medido el 17-08-2026):
+  API           1 consulta por orden, 10.000 al dia -> 51 dias para 2025-2026
+  DATOS ABIERTOS 1 archivo por mes (~80 MB) con TODAS las ordenes -> minutos
 
-  MAPA     El listado de un dia completo de Chile cuesta UNA consulta y trae
-           ~16.000 ordenes (2.000 de Convenio Marco) con su codigo y estado.
-           Del codigo sale la unidad compradora. 594 dias = 594 consultas.
+Los archivos viven en `oc-da/AAAA-M.zip` y se actualizan a diario con un dia de
+desfase. Traen una fila por producto comprado, con el **convenio marco** de cada
+orden, que la API nunca entrego.
 
-  DETALLE  Los productos, precios y proveedores hay que pedirlos orden por
-           orden: ~2.000 consultas por dia de calendario, a 1,16 s cada una
-           (la API rechaza casi la mitad de las peticiones y hay que reintentar).
-
-Por eso el mapa se completa en una noche y el detalle se va llenando de a poco,
-empezando por lo mas reciente, que es lo que sirve para vender.
-
-Se puede cortar en cualquier momento: `estado.json` recuerda que dias estan
-listos y la corrida siguiente sigue donde quedo.
-
-Uso:
-    python bodeguero.py                 # respeta el presupuesto por defecto
-    python bodeguero.py --consultas 500 # una corrida corta, para probar
+OJO: el archivo de un mes agrupa por fecha de ENVIO, pero la fecha que importa
+para vender es la de CREACION, y una orden enviada en enero pudo crearse en
+diciembre. Por eso las filas se reparten al parquet del mes en que se CREARON,
+no al del archivo de donde salieron.
 """
-
-from __future__ import annotations
-
 import argparse
-import json
-import os
-import time
-import urllib.error
-import urllib.request
-from datetime import date, datetime, timedelta
+import csv, io, json, os, sys, time, urllib.request
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
-API = "https://api.mercadopublico.cl/servicios/v1/publico/"
-CARPETA = Path(__file__).parent
-BODEGA = CARPETA / "bodega"
-ESTADO = BODEGA / "estado.json"
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-# Desde donde se guarda historia. Antes de esto no se baja nada.
-PRIMER_DIA = date(2025, 1, 1)
+BASE = "https://transparenciachc.blob.core.windows.net/oc-da/"
+AQUI = Path(__file__).parent
+BODEGA = AQUI / "bodega" / "detalle"
+DESCARGAS = AQUI / "descargas_temporales"
+PRIMER_MES = (2025, 1)
 
-# El ticket permite 10.000 consultas al dia. Se deja un margen chico por si ella
-# consulta desde la app mientras el bodeguero trabaja; mientras mas alto, antes
-# se termina de llenar la bodega.
-PRESUPUESTO = 9800
-
-# Pausa entre consultas. Medido el 18-08: sin pausa la API rechaza el 34% de las
-# peticiones y con 0,6 s baja al 22%, **sin que el tiempo por orden cambie**
-# (1,15 s en ambos casos, porque cada rechazo obliga a reintentar). Si los
-# rechazos consumen cupo del ticket, esto son ~15% mas ordenes por noche; si no
-# lo consumen, no cuesta nada. Por eso conviene igual.
-PAUSA_ENTRE_CONSULTAS = 0.6
-
-# Tope de tiempo de una corrida. GitHub Actions corta a las 6 horas; se para
-# antes para alcanzar a guardar.
-HORAS_MAXIMO = 5.0
+COLUMNAS = ["dia", "fecha", "orden", "estado", "unidad", "organismo", "convenio",
+            "convenio_marco", "contacto", "proveedor", "rut_proveedor",
+            "id_producto", "producto", "cantidad", "precio", "total"]
 
 
-def ticket() -> str:
-    """En GitHub viene del secreto TICKET_MP; en el PC, del archivo de siempre."""
-    del_entorno = os.environ.get("TICKET_MP", "").strip()
-    if del_entorno:
-        return del_entorno
-    local = Path.home() / "ticket-mp.txt"
-    if local.exists():
-        return local.read_text(encoding="utf-8-sig").strip()
-    raise SystemExit("Falta el ticket: define TICKET_MP o deja ~/ticket-mp.txt")
+def meses_hasta_hoy():
+    """(2025,1), (2025,2)... hasta el mes en curso."""
+    hoy = date.today()
+    año, mes = PRIMER_MES
+    while (año, mes) <= (hoy.year, hoy.month):
+        yield año, mes
+        mes += 1
+        if mes > 12:
+            año, mes = año + 1, 1
 
 
-class CuotaAgotada(Exception):
-    """Se acabaron las consultas del dia. Hay que parar, no seguir intentando."""
-
-
-class Contador:
-    """Lleva la cuenta de lo gastado para no pasarse del presupuesto ni del reloj."""
-
-    def __init__(self, presupuesto: int, horas: float):
-        self.presupuesto = presupuesto
-        self.horas = horas
-        self.consultas = 0
-        self.reintentos = 0
-        self.inicio = time.time()
-
-    @property
-    def transcurrido(self) -> float:
-        return time.time() - self.inicio
-
-    def queda(self) -> bool:
-        return (self.consultas < self.presupuesto
-                and self.transcurrido < self.horas * 3600)
-
-    def resumen(self) -> str:
-        return (f"{self.consultas} consultas ({self.reintentos} reintentos) "
-                f"en {self.transcurrido / 60:.1f} min")
-
-
-def pedir(recurso: str, contador: Contador) -> dict | None:
-    """Una consulta a la API, reintentando el 429.
-
-    La URL lleva el ticket pegado, asi que nunca se imprime en los mensajes.
-    """
-    separador = "&" if "?" in recurso else "?"
-    url = f"{API}{recurso}{separador}ticket={ticket()}"
-    espera = 1.5
-    for _ in range(6):
-        try:
-            peticion = urllib.request.Request(
-                url, headers={"User-Agent": "panel-oportunidades"})
-            with urllib.request.urlopen(peticion, timeout=120) as respuesta:
-                contador.consultas += 1
-                datos = json.loads(respuesta.read().decode("utf-8"))
-            # La cuota agotada llega como HTTP 203 (un codigo de EXITO) con
-            # {"Codigo":203,...}. Si no se detecta, el bodeguero cree que el dia
-            # no tuvo ordenes, lo marca como listo y deja un hueco para siempre.
-            if datos.get("Codigo") == 203 or ("Listado" not in datos and datos.get("Mensaje")):
-                raise CuotaAgotada(str(datos.get("Mensaje") or "cuota diaria agotada"))
-            time.sleep(PAUSA_ENTRE_CONSULTAS)
-            return datos
-        except CuotaAgotada:
-            raise
-        except urllib.error.HTTPError as error:
-            contador.reintentos += 1
-            if error.code not in (429, 500, 502, 503):
-                print(f"    HTTP {error.code} en {recurso.split('?')[0]}", flush=True)
-                return None
-            time.sleep(espera)
-            espera = min(espera * 2, 30)
-        except Exception:
-            contador.reintentos += 1
-            time.sleep(espera)
-            espera = min(espera * 2, 30)
-    return None
-
-
-def es_convenio_marco(codigo: str) -> bool:
-    """«2950-485-CM26» si; «1002584-259-AG26» no."""
-    tramos = str(codigo).split("-")
-    return len(tramos) >= 3 and tramos[-1].strip().upper().startswith("CM")
-
-
-def leer_estado() -> dict:
-    if ESTADO.exists():
-        return json.loads(ESTADO.read_text(encoding="utf-8"))
-    return {"mapa": [], "detalle": [], "actualizado": None}
-
-
-def guardar_estado(estado: dict) -> None:
-    BODEGA.mkdir(exist_ok=True)
-    estado["actualizado"] = datetime.now().isoformat(timespec="seconds")
-    ESTADO.write_text(json.dumps(estado, indent=1, ensure_ascii=False), encoding="utf-8")
-
-
-def guardar_mes(filas: list[dict], capa: str, mes: str) -> None:
-    """Agrega filas al parquet del mes, reemplazando los dias que se reprocesan.
-
-    Un archivo por mes porque un año entero pasa de los 100 MB que admite
-    GitHub; por mes son ~10 MB.
-    """
-    if not filas:
-        return
-    carpeta = BODEGA / capa
-    carpeta.mkdir(parents=True, exist_ok=True)
-    archivo = carpeta / f"{mes}.parquet"
-
-    nuevas = pd.DataFrame(filas)
-    if archivo.exists():
-        viejas = pd.read_parquet(archivo)
-        nuevas = pd.concat([viejas[~viejas["dia"].isin(set(nuevas["dia"]))], nuevas],
-                           ignore_index=True)
-    nuevas.to_parquet(archivo, index=False, compression="zstd")
-
-
-def bajar_mapa(dia: date, contador: Contador) -> list[dict] | None:
-    """El listado de un dia: UNA consulta para todo Chile."""
-    datos = pedir(f"ordenesdecompra.json?fecha={dia:%d%m%Y}", contador)
-    if datos is None:
+def bajar(año: int, mes: int) -> Path | None:
+    """Baja el zip del mes si no esta ya en disco."""
+    DESCARGAS.mkdir(exist_ok=True)
+    destino = DESCARGAS / f"{año}-{mes}.zip"
+    if destino.exists():
+        return destino
+    url = f"{BASE}{año}-{mes}.zip"
+    try:
+        peticion = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(peticion, timeout=900) as respuesta:
+            destino.write_bytes(respuesta.read())
+        return destino
+    except Exception as error:
+        print(f"    no se pudo bajar {año}-{mes}: {type(error).__name__}", flush=True)
         return None
-    filas = []
-    for orden in datos.get("Listado") or []:
-        codigo = str(orden.get("Codigo") or "")
-        if not es_convenio_marco(codigo):
-            continue
-        filas.append({
-            "dia": dia.isoformat(),
-            "orden": codigo,
-            "unidad": codigo.split("-")[0],
-            "convenio": codigo.split("-")[-1].upper(),
-            "estado_codigo": orden.get("CodigoEstado"),
-        })
-    return filas
 
 
-def filas_de_orden(codigo: str, dia: date, orden: dict) -> list[dict]:
-    """Una fila por producto comprado.
+def filas_de_convenio_marco(archivo: Path):
+    """Las lineas de Convenio Marco del archivo, ya en el formato de la bodega."""
+    import zipfile
+    z = zipfile.ZipFile(archivo)
+    with z.open(z.namelist()[0]) as bruto:
+        texto = io.TextIOWrapper(bruto, encoding="latin-1", newline="")
+        for fila in csv.DictReader(texto, delimiter=";"):
+            codigo = str(fila.get("Codigo") or "")
+            tramos = codigo.split("-")
+            if len(tramos) < 3 or not tramos[-1].upper().startswith("CM"):
+                continue
+            fecha = str(fila.get("FechaCreacion") or "")[:10]
+            if len(fecha) != 10 or not fecha[:4].isdigit():
+                continue
+            # El ID de Convenio Marco viene entre parentesis, igual que en la API.
+            especificacion = str(fila.get("EspecificacionComprador") or "").lstrip()
+            identificador = ""
+            if especificacion.startswith("("):
+                posible = especificacion[1:].split(")")[0]
+                identificador = posible if posible.isdigit() else ""
+            yield {
+                "dia": fecha, "fecha": fecha, "orden": codigo,
+                "estado": str(fila.get("Estado") or "").strip(),
+                # OJO: la unidad es el PREFIJO DEL CODIGO de la orden, no la
+                # columna CodigoUnidadCompra del archivo. Son dos numeros
+                # distintos y solo coinciden en el 37% de los casos; el resto
+                # del sistema (catalogo, filtros, API) usa el prefijo.
+                "unidad": tramos[0].strip(),
+                "organismo": str(fila.get("CodigoOrganismoPublico") or "").strip(),
+                "convenio": tramos[-1].upper(),
+                "convenio_marco": str(fila.get("Codigo_ConvenioMarco") or "").strip(),
+                "contacto": "",
+                "proveedor": str(fila.get("NombreProveedor") or "").strip(),
+                "rut_proveedor": str(fila.get("RutSucursal") or "").strip(),
+                "id_producto": identificador,
+                "producto": str(fila.get("EspecificacionComprador") or "").strip(),
+                "cantidad": fila.get("cantidad"),
+                "precio": fila.get("precioNeto"),
+                "total": fila.get("totalLineaNeto"),
+            }
 
-    Los nombres de unidad y organismo NO se guardan: ya viajan en
-    catalogo_unidades.csv y repetirlos millones de veces engorda la bodega.
+
+def nombres_de_convenios(codigos: set[str]) -> dict[str, str]:
+    """«2239-9-LR24» -> «Convenio Marco para la adquisición de Alimentos».
+
+    Cada convenio marco es una licitacion, y su nombre se pide a la API de
+    licitaciones. Son ~28 consultas una sola vez: el nombre no cambia.
     """
-    comprador = orden.get("Comprador") or {}
-    proveedor = orden.get("Proveedor") or {}
-    fechas = orden.get("Fechas") or {}
-    comun = {
-        "dia": dia.isoformat(),
-        "fecha": (fechas.get("FechaCreacion") or "")[:10],
-        "orden": codigo,
-        "estado": str(orden.get("Estado") or "").strip(),
-        "unidad": str(comprador.get("CodigoUnidad") or "").strip(),
-        "organismo": str(comprador.get("CodigoOrganismo") or "").strip(),
-        "convenio": codigo.split("-")[-1].upper(),
-        "contacto": str(comprador.get("NombreContacto") or "").strip(),
-        "proveedor": str(proveedor.get("Nombre") or "").strip(),
-        "rut_proveedor": str(proveedor.get("RutSucursal") or "").strip(),
-    }
-
-    items = (orden.get("Items") or {}).get("Listado") or []
-    if not items:
-        return [comun | {"id_producto": "", "producto": "", "cantidad": None,
-                         "precio": None, "total": orden.get("Total")}]
-
-    filas = []
-    for item in items:
-        # El ID de Convenio Marco viene entre parentesis: «(4427537) GOMA...»
-        especificacion = str(item.get("EspecificacionComprador") or "").lstrip()
-        identificador = ""
-        if especificacion.startswith("("):
-            posible = especificacion[1:].split(")")[0]
-            identificador = posible if posible.isdigit() else ""
-        filas.append(comun | {
-            "id_producto": identificador,
-            "producto": str(item.get("Producto") or "").strip(),
-            "cantidad": item.get("Cantidad"),
-            "precio": item.get("PrecioNeto"),
-            "total": item.get("Total"),
-        })
-    return filas
-
-
-def bajar_detalle(dia: date, ordenes: list[str],
-                  contador: Contador) -> tuple[list[dict], bool]:
-    """El detalle de cada orden. Devuelve (filas, si alcanzo a terminar el dia)."""
-    filas: list[dict] = []
-    for codigo in ordenes:
-        if not contador.queda():
-            return filas, False
-        datos = pedir(f"ordenesdecompra.json?codigo={codigo}", contador)
-        listado = (datos or {}).get("Listado") or []
-        if listado:
-            filas.extend(filas_de_orden(codigo, dia, listado[0]))
-    return filas, True
-
-
-def unidades_conocidas() -> pd.DataFrame:
-    """Las unidades cuyo nombre ya se averiguo."""
-    archivo = BODEGA / "unidades.parquet"
+    guardados = {}
+    archivo = BODEGA.parent / "convenios.json"
     if archivo.exists():
-        return pd.read_parquet(archivo)
-    return pd.DataFrame(columns=["codigo_unidad", "nombre_unidad", "codigo_organismo",
-                                 "nombre_organismo", "region", "comuna"])
+        guardados = json.loads(archivo.read_text(encoding="utf-8"))
 
-
-def completar_nombres(mapa: pd.DataFrame, contador: Contador) -> int:
-    """Averigua como se llama cada unidad nueva, con UNA consulta por unidad.
-
-    El mapa trae solo el codigo de la unidad («2950»), pero para buscarla hay que
-    saber que es la Escuela Naval. El nombre esta en el detalle de cualquiera de
-    sus ordenes, asi que basta pedir una: 2.190 unidades nuevas son 2.190
-    consultas, una noche, y despues no se vuelven a preguntar nunca.
-
-    Se empieza por las que mas compran, que son las que ella va a buscar.
-    """
-    conocidas = unidades_conocidas()
-    ya_estan = set(conocidas["codigo_unidad"])
-
-    # Cuantas ordenes tiene cada unidad en toda la bodega: es la frecuencia real
-    # de compra, medida sobre 594 dias y no sobre 8.
-    frecuencia = mapa.groupby("unidad").size().sort_values(ascending=False)
-    faltan = [u for u in frecuencia.index if u not in ya_estan]
+    faltan = sorted(c for c in codigos if c and c not in guardados)
     if not faltan:
-        return 0
+        return guardados
 
-    print(f"NOMBRES: faltan {len(faltan)} unidades por identificar", flush=True)
-    nuevas = []
-    for unidad in faltan:
-        if not contador.queda():
-            break
-        ordenes = mapa[mapa["unidad"] == unidad]["orden"]
-        if ordenes.empty:
-            continue
-        datos = pedir(f"ordenesdecompra.json?codigo={ordenes.iloc[0]}", contador)
-        listado = (datos or {}).get("Listado") or []
-        if not listado:
-            continue
-        comprador = listado[0].get("Comprador") or {}
-        nuevas.append({
-            "codigo_unidad": unidad,
-            "nombre_unidad": str(comprador.get("NombreUnidad") or "").strip(),
-            "codigo_organismo": str(comprador.get("CodigoOrganismo") or "").strip(),
-            "nombre_organismo": str(comprador.get("NombreOrganismo") or "").strip(),
-            "region": str(comprador.get("RegionUnidad") or "").strip(),
-            "comuna": str(comprador.get("ComunaUnidad") or "").strip(),
-        })
-        if len(nuevas) % 100 == 0:
-            print(f"  {len(nuevas)} identificadas · {contador.resumen()}", flush=True)
+    ticket = os.environ.get("TICKET_MP", "").strip()
+    if not ticket:
+        local = Path.home() / "ticket-mp.txt"
+        ticket = local.read_text(encoding="utf-8-sig").strip() if local.exists() else ""
+    if not ticket:
+        return guardados
 
-    if nuevas:
-        juntas = pd.concat([conocidas, pd.DataFrame(nuevas)], ignore_index=True)
-        juntas = juntas.drop_duplicates("codigo_unidad", keep="last")
-        juntas.to_parquet(BODEGA / "unidades.parquet", index=False, compression="zstd")
-    return len(nuevas)
+    print(f"NOMBRES: preguntando por {len(faltan)} convenios", flush=True)
+    for codigo in faltan:
+        url = (f"https://api.mercadopublico.cl/servicios/v1/publico/"
+               f"licitaciones.json?codigo={codigo}&ticket={ticket}")
+        try:
+            peticion = urllib.request.Request(url, headers={"User-Agent": "panel"})
+            with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+                datos = json.loads(respuesta.read().decode("utf-8"))
+            listado = datos.get("Listado") or []
+            if listado:
+                guardados[codigo] = str(listado[0].get("Nombre") or "").strip()
+        except Exception:
+            pass
+        time.sleep(1)
+    archivo.write_text(json.dumps(guardados, indent=1, ensure_ascii=False), encoding="utf-8")
+    return guardados
 
 
-def dias_por_llenar(listos: list[str], hasta: date) -> list[date]:
-    """Los dias que faltan, del mas reciente al mas antiguo.
+def guardar(por_mes: dict[str, list[dict]]) -> None:
+    """Escribe cada mes, mezclando con lo que ya hubiera y sin repetir lineas."""
+    BODEGA.mkdir(exist_ok=True)
+    for mes, filas in por_mes.items():
+        nuevas = pd.DataFrame(filas, columns=COLUMNAS)
+        for c in ("cantidad", "precio", "total"):
+            nuevas[c] = pd.to_numeric(nuevas[c], errors="coerce")
+        archivo = BODEGA / f"{mes}.parquet"
+        if archivo.exists():
+            nuevas = pd.concat([pd.read_parquet(archivo), nuevas], ignore_index=True)
+        # Una linea es unica por orden + producto + correlativo de precio.
+        nuevas = nuevas.drop_duplicates(
+            subset=["orden", "id_producto", "producto", "cantidad", "precio"])
+        nuevas.to_parquet(archivo, index=False, compression="zstd")
 
-    Lo reciente primero porque es lo que sirve para vender: el mes pasado
-    importa mucho mas que enero de 2025.
+
+def meses_por_procesar(completo: bool) -> list[tuple[int, int]]:
+    """Que meses bajar en esta corrida.
+
+    La primera vez hay que bajarlos todos (~50 minutos). Despues basta el mes en
+    curso y el anterior: los archivos se rehacen a diario, y una orden puede
+    aparecer con retraso, pero no cambia meses hacia atras. Bajar los 20 cada
+    noche serian 50 minutos para nada.
     """
-    hechos = set(listos)
-    faltan = []
-    dia = hasta
-    while dia >= PRIMER_DIA:
-        if dia.isoformat() not in hechos:
-            faltan.append(dia)
-        dia -= timedelta(days=1)
-    return faltan
+    todos = list(meses_hasta_hoy())
+    if completo or not any(BODEGA.glob("*.parquet")):
+        return todos
+    return todos[-2:]
 
 
 def main() -> None:
-    try:
-        llenar()
-    except CuotaAgotada as fin:
-        # No es un fallo: es el techo del ticket. Lo que alcanzo a bajar ya
-        # quedo guardado, y manana sigue donde quedo.
-        print(f"\nSE ACABÓ LA CUOTA DEL DÍA ({fin}). Lo descargado quedó guardado.")
-
-
-def llenar() -> None:
-    argumentos = argparse.ArgumentParser(description="Llena la bodega de Mercado Publico")
-    argumentos.add_argument("--consultas", type=int, default=PRESUPUESTO,
-                            help="tope de consultas de esta corrida")
-    argumentos.add_argument("--horas", type=float, default=HORAS_MAXIMO)
-    argumentos.add_argument("--refrescar", type=int, default=7,
-                            help="dias recientes que se vuelven a bajar (llegan tarde)")
+    argumentos = argparse.ArgumentParser(description="Llena la bodega desde datos abiertos")
+    argumentos.add_argument("--completo", action="store_true",
+                            help="rehacer toda la historia, no solo los últimos meses")
     opciones = argumentos.parse_args()
 
-    contador = Contador(opciones.consultas, opciones.horas)
-    estado = leer_estado()
-    hoy = date.today()
-    print(f"BODEGUERO · {datetime.now():%d-%m-%Y %H:%M} · "
-          f"presupuesto {opciones.consultas} consultas")
-    print(f"bodega al empezar: mapa {len(estado['mapa'])} días · "
-          f"detalle {len(estado['detalle'])} días\n", flush=True)
-
-    # Los ultimos dias se vuelven a bajar siempre: una orden puede aparecer en la
-    # API varios dias despues de emitida (la API lista por dia de movimiento).
-    recientes = {(hoy - timedelta(days=n)).isoformat() for n in range(opciones.refrescar)}
-
-    # --- 1. El mapa: barato, se completa primero ---------------------------
-    faltan_mapa = dias_por_llenar([d for d in estado["mapa"] if d not in recientes], hoy)
-    print(f"MAPA: faltan {len(faltan_mapa)} días", flush=True)
-    pendientes: dict[str, list[dict]] = {}
-    for dia in faltan_mapa:
-        if not contador.queda():
-            break
-        filas = bajar_mapa(dia, contador)
-        if filas is None:
+    t0 = time.time()
+    total = 0
+    procesados = []
+    pendientes = meses_por_procesar(opciones.completo)
+    print(f"BODEGUERO · {len(pendientes)} mes/es por procesar\n", flush=True)
+    for año, mes in pendientes:
+        inicio = time.time()
+        archivo = bajar(año, mes)
+        if archivo is None:
             continue
-        pendientes.setdefault(f"{dia:%Y-%m}", []).extend(filas)
-        if dia.isoformat() not in estado["mapa"]:
-            estado["mapa"].append(dia.isoformat())
-        if len(pendientes) > 2:            # se guarda de a poco, por si se corta
-            for mes, filas_mes in pendientes.items():
-                guardar_mes(filas_mes, "mapa", mes)
-            pendientes = {}
-            guardar_estado(estado)
-    for mes, filas_mes in pendientes.items():
-        guardar_mes(filas_mes, "mapa", mes)
-    guardar_estado(estado)
-    print(f"  mapa: {len(estado['mapa'])} días listos · {contador.resumen()}\n", flush=True)
+        por_mes: dict[str, list[dict]] = {}
+        n = 0
+        for fila in filas_de_convenio_marco(archivo):
+            por_mes.setdefault(fila["fecha"][:7], []).append(fila)
+            n += 1
+        guardar(por_mes)
+        total += n
+        procesados.append(f"{año}-{mes:02d}")
+        print(f"  {año}-{mes:02d}: {n:>7,} líneas de Convenio Marco · "
+              f"{archivo.stat().st_size/1e6:.0f} MB · {time.time()-inicio:.0f}s", flush=True)
 
-    # --- 2. Los nombres de las unidades: una consulta por unidad, una vez --
-    archivos_mapa = sorted((BODEGA / "mapa").glob("*.parquet"))
-    if archivos_mapa and contador.queda():
-        todo_el_mapa = pd.concat([pd.read_parquet(a) for a in archivos_mapa],
-                                 ignore_index=True)
-        identificadas = completar_nombres(todo_el_mapa, contador)
-        if identificadas:
-            print(f"  {identificadas} unidades identificadas · {contador.resumen()}\n",
-                  flush=True)
+    convenios = set()
+    for archivo in BODEGA.glob("*.parquet"):
+        convenios |= set(pd.read_parquet(archivo, columns=["convenio_marco"])["convenio_marco"])
+    nombres = nombres_de_convenios(convenios)
+    print(f"  convenios con nombre: {len(nombres)} de {len(convenios)}")
 
-    # --- 3. El detalle: caro, se llena de a poco ---------------------------
-    faltan_detalle = dias_por_llenar([d for d in estado["detalle"] if d not in recientes], hoy)
-    print(f"DETALLE: faltan {len(faltan_detalle)} días (se empieza por el más reciente)",
-          flush=True)
-    for dia in faltan_detalle:
-        if not contador.queda():
-            print("  se acabó el presupuesto de esta corrida", flush=True)
-            break
-        mes = f"{dia:%Y-%m}"
-        archivo_mapa = BODEGA / "mapa" / f"{mes}.parquet"
-        if not archivo_mapa.exists():
-            continue
-        mapa = pd.read_parquet(archivo_mapa)
-        ordenes = sorted(mapa[mapa["dia"] == dia.isoformat()]["orden"].unique())
-        if not ordenes:
-            if dia.isoformat() not in estado["detalle"]:
-                estado["detalle"].append(dia.isoformat())
-            continue
+    for zip_viejo in DESCARGAS.glob("*.zip"):
+        zip_viejo.unlink()          # pesan 100 MB cada uno, no se guardan
 
-        filas, completo = bajar_detalle(dia, ordenes, contador)
-        guardar_mes(filas, "detalle", mes)
-        if completo:
-            if dia.isoformat() not in estado["detalle"]:
-                estado["detalle"].append(dia.isoformat())
-            print(f"  {dia:%d-%m-%Y}: {len(ordenes)} órdenes, {len(filas)} líneas · "
-                  f"{contador.resumen()}", flush=True)
-        guardar_estado(estado)
-        if not completo:
-            break
+    peso = sum(p.stat().st_size for p in BODEGA.glob("*.parquet"))
+    BODEGA.mkdir(exist_ok=True)
+    (BODEGA / "estado.json").write_text(json.dumps({
+        "fuente": "datos abiertos ChileCompra (oc-da)",
+        "meses": procesados,
+        "lineas": total,
+        "actualizado": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }, indent=1, ensure_ascii=False), encoding="utf-8")
 
-    print(f"\nFIN · {contador.resumen()}")
-    print(f"bodega: mapa {len(estado['mapa'])} días · detalle {len(estado['detalle'])} días")
+    print()
+    print(f"{'='*60}")
+    print(f"  meses procesados : {len(procesados)}")
+    print(f"  líneas guardadas : {total:,}")
+    print(f"  peso de la bodega: {peso/1e6:.1f} MB")
+    print(f"  tiempo total     : {(time.time()-t0)/60:.1f} minutos")
 
 
 if __name__ == "__main__":

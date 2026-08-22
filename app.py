@@ -234,6 +234,12 @@ ESTADOS_MP = ["CON STOCK", "NO LO TENGO", "TODOS"]
 COLUMNA_RUBRO = "RUBRO"
 FUERA_DE_CATALOGO = "(fuera de tu catálogo)"
 
+# El convenio marco de verdad, tal como lo publica ChileCompra en los datos
+# abiertos: «Convenio Marco para la adquisición de Alimentos». Es la respuesta
+# al pendiente que la API no permitía resolver.
+COLUMNA_CONVENIO = "CONVENIO"
+SIN_CONVENIO = "(sin convenio informado)"
+
 # En este modulo tambien se destaca el precio, no solo la recurrencia: estar bajo
 # lo que la institucion ya pago es poco frecuente (4 de 54 productos en la prueba
 # con la Escuela Naval) y es el mejor argumento de venta que da la consulta.
@@ -1465,6 +1471,18 @@ def dias_cubiertos(desde: date, hasta: date) -> tuple[int, int]:
     return sum(1 for d in dias if d.isoformat() in listos), len(dias)
 
 
+@st.cache_data(show_spinner=False)
+def nombres_convenios(sello: str) -> dict[str, str]:
+    """«2239-9-LR24» -> «Convenio Marco para la adquisición de Alimentos»."""
+    archivo = RUTA_BODEGA / "convenios.json"
+    if not archivo.exists():
+        return {}
+    try:
+        return json.loads(archivo.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
                          hasta: date) -> pd.DataFrame:
     """Las compras guardadas, en el mismo formato que devuelve la consulta viva."""
@@ -1499,6 +1517,12 @@ def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
         "PROVEEDOR": elegidas["proveedor"].astype(str),
         "RUT PROVEEDOR": elegidas["rut_proveedor"].astype(str),
     })
+    # El convenio marco de cada orden viene en los datos abiertos (la API nunca
+    # lo entregó). Viaja aparte de las columnas visibles, para el filtro.
+    if "convenio_marco" in elegidas.columns:
+        nombres = nombres_convenios(sello_bodega())
+        tabla[COLUMNA_CONVENIO] = [
+            nombres.get(c, c) or SIN_CONVENIO for c in elegidas["convenio_marco"]]
     for columna in COLUMNAS_NUMERICAS_MP:
         tabla[columna] = _numeros_de_columna(tabla[columna])
     return (tabla.sort_values(["ORDEN"], ascending=False)
@@ -1793,7 +1817,7 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     con la columna MI OFERTA en blanco: en el PDF le queda un guion. Si se
     decidiera por las ofertas, se perderia el 96% de lo que ella puede vender.
     """
-    columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO, COLUMNA_RUBRO]
+    columnas = COLUMNAS_PANEL_MP + [COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]
     if compras.empty:
         return pd.DataFrame(columns=columnas)
 
@@ -1837,6 +1861,8 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
             # Emergencia y Prevención. Es lo mas parecido al «tipo de convenio»
             # que se puede saber, porque la API no lo entrega.
             COLUMNA_RUBRO: (catalogo_propio or {}).get(clave, "") or FUERA_DE_CATALOGO,
+            COLUMNA_CONVENIO: (str(grupo[COLUMNA_CONVENIO].iloc[0])
+                               if COLUMNA_CONVENIO in grupo.columns else ""),
         })
 
     tabla = pd.DataFrame(filas, columns=columnas)
@@ -2603,6 +2629,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # Arranca en TODOS, al reves que el panel de arriba: al abrir una institucion
     # nueva lo primero que interesa es TODO lo que compra. Empezando en CON STOCK
     # se veian 7 de 54 productos y parecia que la consulta habia fallado.
+    # El convenio real solo viene con los datos de la bodega; en una consulta en
+    # vivo no existe, y ahí se cae al rubro del catálogo de ella.
+    por_convenio = COLUMNA_CONVENIO in productos.columns
+    columna_filtro = COLUMNA_CONVENIO if por_convenio else COLUMNA_RUBRO
     izquierda, derecha = st.columns([1, 1])
     with izquierda:
         estado = st.radio("Estado", ESTADOS_MP, horizontal=True, key="mp_estado",
@@ -2610,16 +2640,17 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                           help="CON STOCK son los ID que están en tu catálogo; "
                                "NO LO TENGO, los que no vendes.")
     with derecha:
-        rubros = sorted(r for r in productos[COLUMNA_RUBRO].unique() if r)
+        rubros = sorted(r for r in productos[columna_filtro].unique() if r)
         marcar_lo_nuevo("mp_rubro", rubros)
         elegidos_rubro = st.multiselect(
-            "Convenio", rubros, key="mp_rubro",
-            help="El rubro de tu catálogo. La API de Mercado Público no entrega el "
-                 "convenio de cada orden, así que esto sale de tus propias planillas.")
+            "Convenio Marco", rubros, key="mp_rubro",
+            help=("El convenio marco de cada orden, tal como lo publica ChileCompra."
+                  if por_convenio else
+                  "El rubro de tu catálogo: la consulta en vivo no trae el convenio."))
     if estado != "TODOS":
         productos = productos[productos[COLUMNA_ESTADO] == estado]
     if elegidos_rubro:
-        productos = productos[productos[COLUMNA_RUBRO].isin(elegidos_rubro)]
+        productos = productos[productos[columna_filtro].isin(elegidos_rubro)]
     productos = productos.reset_index(drop=True)
     if productos.empty:
         st.warning("Ningún producto calza con esos filtros.")
@@ -2660,7 +2691,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
              "Negativo: estás más barata.")
 
     seleccion = st.dataframe(
-        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO]),
+        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]),
                              SEÑALES_DESTACADAS_MP),
         width="stretch",
         hide_index=True,
@@ -2674,7 +2705,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     nombre_base = normalizar(unidades_c[0])[:20] if unidades_c else "consulta"
     st.download_button(
         "⬇️ Descargar Excel de esta vista",
-        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO]),
+        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]),
                      nombre_hoja="Mercado Público"),
         file_name=f"MercadoPublico-{nombre_base}-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
