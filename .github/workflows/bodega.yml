@@ -1,14 +1,16 @@
 # Llena la bodega de Mercado Publico todas las madrugadas.
 #
-# ChileCompra pide hacer las descargas grandes entre las 22:00 y las 07:00, asi
-# que corre a las 02:00 de Chile. GitHub usa UTC y Chile esta 4 horas atras en
-# horario de verano, asi que 06:00 UTC son las 02:00 alla.
+# Desde el 21-08-2026 NO usa la API orden por orden, sino los archivos de datos
+# abiertos de ChileCompra (oc-da/AAAA-M.zip): un archivo por mes con TODAS las
+# ordenes de Chile, actualizado a diario con un dia de desfase. Bajar 2025-2026
+# entero pasa de 51 dias a menos de una hora, y ademas trae el convenio marco de
+# cada orden, que la API no entrega.
 #
-# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+# Corre a las 02:00 de Chile (06:00 UTC). Es gratis: los repositorios publicos no
+# pagan minutos de GitHub Actions.
 #
-# ANTES DE QUE FUNCIONE hay que anotar el ticket una sola vez:
-#   Settings > Secrets and variables > Actions > New repository secret
-#   Name: TICKET_MP     Secret: (el codigo de ticket-mp.txt)
+# El secreto TICKET_MP se sigue usando, pero solo para preguntar el NOMBRE de
+# cada convenio (~28 consultas, una sola vez).
 
 name: Bodega Mercado Público
 
@@ -17,10 +19,11 @@ on:
     - cron: "0 6 * * *"      # 02:00 en Chile
   workflow_dispatch:          # y tambien a mano, con el boton "Run workflow"
     inputs:
-      consultas:
-        description: "Tope de consultas de esta corrida"
+      completo:
+        description: "Rehacer toda la historia desde enero 2025 (tarda ~1 hora)"
         required: false
-        default: "9800"
+        type: boolean
+        default: false
 
 # Permiso para que la tarea pueda guardar los datos en el repositorio.
 permissions:
@@ -29,7 +32,7 @@ permissions:
 jobs:
   llenar:
     runs-on: ubuntu-latest
-    timeout-minutes: 330      # 5,5 horas: el bodeguero se detiene solo a las 5
+    timeout-minutes: 180
 
     steps:
       - name: Bajar el repositorio
@@ -47,7 +50,7 @@ jobs:
         env:
           TICKET_MP: ${{ secrets.TICKET_MP }}
         run: |
-          python bodeguero.py --consultas ${{ github.event.inputs.consultas || 9000 }}
+          python bodeguero.py ${{ github.event.inputs.completo == 'true' && '--completo' || '' }}
 
       - name: Guardar lo descargado en el repositorio
         run: |
