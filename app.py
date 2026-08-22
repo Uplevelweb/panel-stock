@@ -37,7 +37,7 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1471,6 +1471,26 @@ def dias_cubiertos(desde: date, hasta: date) -> tuple[int, int]:
     return sum(1 for d in dias if d.isoformat() in listos), len(dias)
 
 
+def hoy_en_chile() -> date:
+    """El dia de hoy en Chile, no en el servidor.
+
+    Streamlit Cloud corre en UTC, que despues de las 20:00 de Chile ya va en el
+    dia siguiente. Con `date.today()` la app proponia consultar hasta una fecha
+    que aqui todavia no existe, y que la bodega no podia tener nunca.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Santiago")).date()
+    except Exception:
+        return (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+
+
+def ultimo_dia_en_bodega() -> date | None:
+    """El dia mas nuevo que la bodega tiene guardado, o None si esta vacia."""
+    dias = estado_bodega().get("detalle") or []
+    return date.fromisoformat(max(dias)) if dias else None
+
+
 @st.cache_data(show_spinner=False)
 def nombres_convenios(sello: str) -> dict[str, str]:
     """«2239-9-LR24» -> «Convenio Marco para la adquisición de Alimentos»."""
@@ -1979,6 +1999,16 @@ def aplicar_estilos() -> None:
             padding-right: 2rem;
             max-width: 100%;
         }}
+        /* La lista de unidades se abre ENCIMA de lo que viene abajo y tapaba
+           el boton de consultar. Se le limita el alto y se deja un respiro
+           antes del boton, para que el boton siga a la vista con la lista
+           desplegada. */
+        div[data-baseweb="popover"] ul[role="listbox"] {{
+            max-height: 190px;
+        }}
+        .aire-antes-del-boton {{
+            height: 90px;
+        }}
         /* En el celular, los margenes se comen la pantalla. */
         @media (max-width: 640px) {{
             [data-testid="stMainBlockContainer"] {{
@@ -2484,11 +2514,18 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                  "compra seguido.")
 
         # --- Periodo y costo de la consulta ---------------------------------
-        hoy = date.today()
+        hoy = hoy_en_chile()
+        # La bodega SIEMPRE va un dia atras: los datos abiertos se publican con
+        # un dia de desfase. Proponer «hasta hoy» hacia que faltara ese unico
+        # dia, y como la regla es todo-o-nada, los 234 dias del rango se
+        # consultaban en vivo: varios minutos y 234 consultas del ticket,
+        # teniendo el dato en disco. Ahora se propone hasta donde la bodega
+        # llega; si ella estira el rango, la app avisa que ira en vivo.
+        tope = min(ultimo_dia_en_bodega() or hoy, hoy)
         p1, p2 = st.columns([1, 2])
         elegido = p1.date_input(
             "Período a consultar",
-            value=(min(PRIMER_DIA_SUGERIDO, hoy), hoy),
+            value=(min(PRIMER_DIA_SUGERIDO, tope), tope),
             min_value=PRIMERA_FECHA_MP, max_value=hoy,
             format="DD/MM/YYYY", key="mp_periodo",
             help="Elige la fecha de inicio y la de término. Puedes ir hacia atrás "
@@ -2539,6 +2576,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 "Falta el ticket de la API. Se anota en Streamlit ▸ Manage app ▸ "
                 'Settings ▸ Secrets así:\n\n[mercadopublico]\nticket = "TU-TICKET"')
 
+        st.markdown('<div class="aire-antes-del-boton"></div>',
+                    unsafe_allow_html=True)
         consultar = st.button(
             "🔎 Consultar Mercado Público", type="primary", width="stretch",
             disabled=not elegidas or not rango_listo or (not hay_ticket and not usar_bodega),
