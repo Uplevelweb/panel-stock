@@ -34,6 +34,7 @@ import io
 import json
 import re
 import time
+import inspect
 import unicodedata
 import urllib.error
 import urllib.request
@@ -3202,6 +3203,22 @@ def aplicar_sinonimos(pedido: str) -> str:
     return texto
 
 
+# Grupos de palabras que en el catálogo significan lo mismo. La institución
+# pide «diet» y el catálogo lo escribe «light», «dietética» o «para diabéticos».
+GRUPOS_EQUIVALENTES = [
+    {"DIET", "DIETETICA", "DIETETICO", "LIGHT", "DIABETICO", "DIABETICA"},
+    {"POLVO", "PULVERIZADO", "INSTANTANEO"},
+    {"BEBIDA", "BEBESTIBLE"},
+]
+
+# {palabra: número de su grupo}, para preguntarlo de una sola vez.
+EQUIVALENTE: dict[str, int] = {
+    palabra: numero
+    for numero, grupo in enumerate(GRUPOS_EQUIVALENTES)
+    for palabra in grupo
+}
+
+
 def se_parecen(una: str, otra: str) -> bool:
     """Si dos palabras son la misma escrita distinto (o con un dedazo).
 
@@ -3210,6 +3227,9 @@ def se_parecen(una: str, otra: str) -> bool:
     """
     if una == otra:
         return True
+    # «DIET» y «LIGHT» son la misma cosa escrita distinto.
+    if una in EQUIVALENTE and EQUIVALENTE[una] == EQUIVALENTE.get(otra):
+        return True
     # Las dos tienen que ser largas: con solo mirar la primera, «SAL» calzaba
     # con «SALSA» y una sal aparecía entre las salsas.
     if len(una) > 3 and len(otra) > 3 and (otra.startswith(una) or una.startswith(otra)):
@@ -3217,6 +3237,25 @@ def se_parecen(una: str, otra: str) -> bool:
     if una[:1] != otra[:1] or abs(len(una) - len(otra)) > 2:
         return False
     return SequenceMatcher(None, una, otra).ratio() >= 0.88
+
+
+# Pares que se excluyen: si piden uno y el producto es el otro, no sirve por
+# mucho que el resto del nombre calce.
+CONTRARIOS = [("POLVO", "LIQUIDO"), ("POLVO", "LISTO")]
+
+
+def se_contradicen(buscado: list[str], del_catalogo: list[str]) -> bool:
+    """Si el producto es justo lo contrario de lo que piden.
+
+    «JUGO DIET PIÑA POLVO» no se resuelve con un jugo líquido, aunque compartan
+    el resto de las palabras.
+    """
+    for uno, otro in CONTRARIOS:
+        if uno in buscado and otro in del_catalogo:
+            return True
+        if otro in buscado and uno in del_catalogo:
+            return True
+    return False
 
 
 def indice_del_catalogo(catalogo_region: pd.DataFrame) -> dict[str, dict[str, list[int]]]:
@@ -3281,6 +3320,14 @@ def medida_del_texto(texto) -> tuple[float, str] | None:
                 return float(numero.replace(",", ".")) * factor[0], factor[1]
             except ValueError:
                 return None
+
+    # Sin número: «JALEA NARANJA KILO» pide un kilo aunque no diga «1». Sin
+    # esto no se detectaba medida y se proponían presentaciones de 22 g.
+    for palabra in re.findall(r"[A-Z]+", limpio):
+        if palabra in ("KILO", "KILOS", "KG"):
+            return 1000.0, "peso"
+        if palabra in ("LITRO", "LITROS"):
+            return 1000.0, "volumen"
     return None
 
 
@@ -3353,6 +3400,8 @@ def buscar_candidatos(pedido: str, catalogo_region: pd.DataFrame,
         # El contenido tiene que servir: pedir 125 g y ofrecer 35 g no es una
         # alternativa, es otro producto.
         if not medidas_compatibles(medida_pedida, medidas[posicion]):
+            continue
+        if se_contradicen(buscado, del_catalogo):
             continue
         puntaje = aciertos / len(buscado)
         # ¿El nombre del catálogo EMPIEZA con alguna palabra pedida?
@@ -3836,16 +3885,36 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
     return bytes(pdf.output())
 
 
-def ancho_en_pantalla(valores, titulo: str, minimo: int = 80,
-                      maximo: int = 560) -> int:
-    """Ancho en píxeles de una columna, según lo largo que sea su contenido.
+# Streamlit acepta el ancho en píxeles desde la 1.48 y el centrado desde la
+# 1.55. En versiones anteriores el parámetro no existe: pasar el número se
+# ignora en silencio (por eso las columnas seguían anchísimas) y pasar
+# `alignment` revienta la app. Se pregunta una vez y se decide con eso.
+ANCHO_NUMERICO = tuple(int(p) for p in st.__version__.split(".")[:2]) >= (1, 48)
+ACEPTA_CENTRADO = "alignment" in inspect.signature(
+    st.column_config.TextColumn).parameters
+
+
+def ancho_fijo(pixeles: int):
+    """El ancho tal cual, o la talla más parecida si la versión no acepta números."""
+    if ANCHO_NUMERICO:
+        return pixeles
+    return "small" if pixeles <= 130 else ("medium" if pixeles <= 260 else "large")
+
+
+def ancho_en_pantalla(valores, titulo: str, minimo: int = 80, maximo: int = 520):
+    """Ancho de una columna, según lo largo que sea su contenido.
 
     Mismo criterio que en el PDF: el percentil 90 y no el máximo, para que un
     solo texto larguísimo no estire la columna entera.
     """
     largos = sorted(len(str(v)) for v in valores) or [0]
     tipico = largos[int(len(largos) * 0.9) - 1] if largos else 0
-    return int(min(max(max(tipico, len(titulo)) * 8 + 30, minimo), maximo))
+    return ancho_fijo(int(min(max(max(tipico, len(titulo)) * 7.5 + 24, minimo), maximo)))
+
+
+def centrada(**opciones) -> dict:
+    """Agrega el centrado solo si la versión de Streamlit lo entiende."""
+    return {**opciones, "alignment": "center"} if ACEPTA_CENTRADO else opciones
 
 
 def buscar_en_catalogo(consulta: str, catalogo_region: pd.DataFrame,
@@ -3957,37 +4026,52 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
                     | candidatos["ID"].str.contains(filtro.strip(), na=False)
                     | candidatos["PEDIDO"].map(lambda p: buscado in normalizar(p))]
 
-            vista = ["✓", "PEDIDO", "CALCE", "ID", "ARTÍCULO", "PRECIO", "CANTIDAD"]
-            # Sin esto la columna queda de tipo «objeto» (precios y None
-            # mezclados) y la tabla escribe «None» en cada celda vacía.
+            vista = ["✓", "PEDIDO", "CALCE", "ID", "ARTÍCULO",
+                     "MI PUBLICADO", "PRECIO", "CANTIDAD"]
+            # `Float64` (con mayúscula) es el número que admite vacíos: con el
+            # tipo normal la columna quedaba de tipo «objeto» y la tabla
+            # escribía «None» en cada celda sin precio.
             en_pantalla = vista_datos[vista].copy()
-            en_pantalla["PRECIO"] = pd.to_numeric(en_pantalla["PRECIO"], errors="coerce")
+            for columna in ("MI PUBLICADO", "PRECIO"):
+                en_pantalla[columna] = pd.to_numeric(
+                    en_pantalla[columna], errors="coerce").astype("Float64")
             editada = st.data_editor(
                 en_pantalla,
                 width="stretch",
                 hide_index=True,
                 height=420,
                 key="reg_editor",
-                disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "PRECIO"],
+                disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "MI PUBLICADO", "PRECIO"],
                 column_config={
-                    "✓": st.column_config.CheckboxColumn("✓", width=50,
+                    "✓": st.column_config.CheckboxColumn("✓", width=ancho_fijo(45),
                                                          help="Marca lo que va en el PDF"),
-                    "PEDIDO": st.column_config.TextColumn(
-                        "LO QUE PIDIERON",
-                        width=ancho_en_pantalla(vista_datos["PEDIDO"], "LO QUE PIDIERON")),
-                    "CALCE": st.column_config.TextColumn(
-                        "CALCE", width=95,
+                    "PEDIDO": st.column_config.TextColumn(**centrada(
+                        label="LO QUE PIDIERON",
+                        width=ancho_en_pantalla(vista_datos["PEDIDO"], "PIDIERON"))),
+                    "CALCE": st.column_config.TextColumn(**centrada(
+                        label="CALCE", width=ancho_fijo(90),
                         help="exacto: el nombre coincide entero · parecido: coincide en "
-                             "parte · sugerencia: es del mismo tipo de producto, revísalo"),
-                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width=130),
+                             "parte · sugerencia: es del mismo tipo de producto, revísalo")),
+                    "ID": st.column_config.TextColumn(**centrada(
+                        label="ID", width=ancho_fijo(85),
+                        help="El ID de Convenio Marco, con el que el comprador genera "
+                             "la compra")),
                     "ARTÍCULO": st.column_config.TextColumn(
                         "PRODUCTO DEL CATÁLOGO",
                         width=ancho_en_pantalla(vista_datos["ARTÍCULO"],
                                                 "PRODUCTO DEL CATÁLOGO")),
-                    "PRECIO": st.column_config.NumberColumn("PRECIO OFERTA",
-                                                            format="localized", width=110),
-                    "CANTIDAD": st.column_config.NumberColumn("CANT.", min_value=1, step=1,
-                                                              width=80),
+                    "MI PUBLICADO": st.column_config.NumberColumn(
+                        **centrada(label="MI PRECIO", format="localized",
+                                   width=ancho_fijo(100),
+                                   help="Tu precio publicado en Convenio Marco")),
+                    "PRECIO": st.column_config.NumberColumn(
+                        **centrada(label="P. OFERTA", format="localized",
+                                   width=ancho_fijo(100),
+                                   help="Tu precio de oferta de esta semana, si ese ID "
+                                        "la tiene")),
+                    "CANTIDAD": st.column_config.NumberColumn(
+                        **centrada(label="CANT.", min_value=1, step=1,
+                                   width=ancho_fijo(70))),
                 },
             )
             marcadas = editada["✓"].fillna(False)
@@ -4010,22 +4094,30 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
         elif not hallados.empty:
             hallados.insert(0, "✓", [h in agregados for h in hallados["ID"]])
             hallados["CANTIDAD"] = [agregados.get(h, 1) for h in hallados["ID"]]
-            hallados["PRECIO"] = pd.to_numeric(hallados["PRECIO"], errors="coerce")
+            for columna in ("MI PUBLICADO", "PRECIO"):
+                hallados[columna] = pd.to_numeric(
+                    hallados[columna], errors="coerce").astype("Float64")
             editada = st.data_editor(
-                hallados[["✓", "ID", "ARTÍCULO", "PRECIO", "CANTIDAD"]],
+                hallados[["✓", "ID", "ARTÍCULO", "MI PUBLICADO", "PRECIO", "CANTIDAD"]],
                 width="stretch", hide_index=True, key="reg_editor_busca",
-                disabled=["ID", "ARTÍCULO", "PRECIO"],
+                disabled=["ID", "ARTÍCULO", "MI PUBLICADO", "PRECIO"],
                 column_config={
-                    "✓": st.column_config.CheckboxColumn("✓", width=50),
-                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width=130),
+                    "✓": st.column_config.CheckboxColumn("✓", width=ancho_fijo(45)),
+                    "ID": st.column_config.TextColumn(**centrada(
+                        label="ID", width=ancho_fijo(85))),
                     "ARTÍCULO": st.column_config.TextColumn(
                         "PRODUCTO DEL CATÁLOGO",
                         width=ancho_en_pantalla(hallados["ARTÍCULO"],
                                                 "PRODUCTO DEL CATÁLOGO")),
-                    "PRECIO": st.column_config.NumberColumn("PRECIO OFERTA",
-                                                            format="localized", width=110),
-                    "CANTIDAD": st.column_config.NumberColumn("CANT.", min_value=1, step=1,
-                                                              width=80),
+                    "MI PUBLICADO": st.column_config.NumberColumn(
+                        **centrada(label="MI PRECIO", format="localized",
+                                   width=ancho_fijo(100))),
+                    "PRECIO": st.column_config.NumberColumn(
+                        **centrada(label="P. OFERTA", format="localized",
+                                   width=ancho_fijo(100))),
+                    "CANTIDAD": st.column_config.NumberColumn(
+                        **centrada(label="CANT.", min_value=1, step=1,
+                                   width=ancho_fijo(70))),
                 },
             )
             for _, fila in editada.iterrows():
