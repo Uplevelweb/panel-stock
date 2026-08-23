@@ -4006,78 +4006,80 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
         con_cantidad = c3.checkbox("Cantidad y total", value=True, key="reg_cant")
 
     # --- Elegir los ID -------------------------------------------------------
+    # La tabla va SIN `st.container(border=True)` a propósito: el recuadro la
+    # encerraba y, al abrirla en pantalla completa, se montaba sobre el texto de
+    # más abajo. Tampoco lleva alto fijo; Streamlit calcula el suyo y la tabla
+    # trae su propia barra de desplazamiento.
     elegidos = pd.DataFrame()
     if not candidatos.empty:
-        with st.container(border=True):
-            st.markdown("##### ✅ Elige los ID que van en el documento")
-            st.caption("Viene marcado el que mejor calza con lo que pidieron y, entre "
-                       "iguales, el más barato. Puedes marcar varios del mismo pedido, "
-                       "cambiar la cantidad o desmarcar lo que no ofrecerás. Las "
-                       "**sugerencias** nunca vienen marcadas: son del mismo tipo de "
-                       "producto pero hay que revisarlas.")
-            filtro = st.text_input(
-                "Filtrar esta lista", key="reg_filtro", autocomplete="off",
-                placeholder="Escribe parte del nombre o el ID para achicar la tabla")
-            vista_datos = candidatos
-            if filtro.strip():
-                buscado = normalizar(filtro)
-                vista_datos = candidatos[
-                    candidatos["ARTÍCULO"].map(lambda a: buscado in normalizar(a))
-                    | candidatos["ID"].str.contains(filtro.strip(), na=False)
-                    | candidatos["PEDIDO"].map(lambda p: buscado in normalizar(p))]
+        st.markdown("##### ✅ Elige los ID que van en el documento")
+        st.caption("Viene marcado el que mejor calza con lo que pidieron y, entre "
+                   "iguales, el más barato. Puedes marcar varios del mismo pedido, "
+                   "cambiar la cantidad o desmarcar lo que no ofrecerás. Las "
+                   "**sugerencias** nunca vienen marcadas: son del mismo tipo de "
+                   "producto pero hay que revisarlas.")
+        filtro = st.text_input(
+            "Filtrar esta lista", key="reg_filtro", autocomplete="off",
+            placeholder="Escribe parte del nombre o el ID para achicar la tabla")
+        vista_datos = candidatos
+        if filtro.strip():
+            buscado = normalizar(filtro)
+            vista_datos = candidatos[
+                candidatos["ARTÍCULO"].map(lambda a: buscado in normalizar(a))
+                | candidatos["ID"].str.contains(filtro.strip(), na=False)
+                | candidatos["PEDIDO"].map(lambda p: buscado in normalizar(p))]
 
-            vista = ["✓", "PEDIDO", "CALCE", "ID", "ARTÍCULO",
-                     "MI PUBLICADO", "PRECIO", "CANTIDAD"]
-            # `Float64` (con mayúscula) es el número que admite vacíos: con el
-            # tipo normal la columna quedaba de tipo «objeto» y la tabla
-            # escribía «None» en cada celda sin precio.
-            en_pantalla = vista_datos[vista].copy()
-            for columna in ("MI PUBLICADO", "PRECIO"):
-                en_pantalla[columna] = pd.to_numeric(
-                    en_pantalla[columna], errors="coerce").astype("Float64")
-            editada = st.data_editor(
-                en_pantalla,
-                width="stretch",
-                hide_index=True,
-                height=420,
-                key="reg_editor",
-                disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "MI PUBLICADO", "PRECIO"],
-                column_config={
-                    "✓": st.column_config.CheckboxColumn("✓", width=ancho_fijo(45),
-                                                         help="Marca lo que va en el PDF"),
-                    "PEDIDO": st.column_config.TextColumn(**centrada(
-                        label="LO QUE PIDIERON",
-                        width=ancho_en_pantalla(vista_datos["PEDIDO"], "PIDIERON"))),
-                    "CALCE": st.column_config.TextColumn(**centrada(
-                        label="CALCE", width=ancho_fijo(90),
-                        help="exacto: el nombre coincide entero · parecido: coincide en "
-                             "parte · sugerencia: es del mismo tipo de producto, revísalo")),
-                    "ID": st.column_config.TextColumn(**centrada(
-                        label="ID", width=ancho_fijo(85),
-                        help="El ID de Convenio Marco, con el que el comprador genera "
-                             "la compra")),
-                    "ARTÍCULO": st.column_config.TextColumn(
-                        "PRODUCTO DEL CATÁLOGO",
-                        width=ancho_en_pantalla(vista_datos["ARTÍCULO"],
-                                                "PRODUCTO DEL CATÁLOGO")),
-                    "MI PUBLICADO": st.column_config.NumberColumn(
-                        **centrada(label="MI PRECIO", format="localized",
-                                   width=ancho_fijo(100),
-                                   help="Tu precio publicado en Convenio Marco")),
-                    "PRECIO": st.column_config.NumberColumn(
-                        **centrada(label="P. OFERTA", format="localized",
-                                   width=ancho_fijo(100),
-                                   help="Tu precio de oferta de esta semana, si ese ID "
-                                        "la tiene")),
-                    "CANTIDAD": st.column_config.NumberColumn(
-                        **centrada(label="CANT.", min_value=1, step=1,
-                                   width=ancho_fijo(70))),
-                },
-            )
-            marcadas = editada["✓"].fillna(False)
-            elegidos = vista_datos.loc[marcadas.values].copy()
-            elegidos["CANTIDAD"] = editada.loc[marcadas.values, "CANTIDAD"].values
-            st.caption(f"**{len(elegidos)} ID marcados** de {len(vista_datos)} en pantalla.")
+        vista = ["✓", "PEDIDO", "CALCE", "ID", "ARTÍCULO",
+                 "MI PUBLICADO", "PRECIO", "CANTIDAD"]
+        # `Float64` (con mayúscula) es el número que admite vacíos: con el
+        # tipo normal la columna quedaba de tipo «objeto» y la tabla
+        # escribía «None» en cada celda sin precio.
+        en_pantalla = vista_datos[vista].copy()
+        for columna in ("MI PUBLICADO", "PRECIO"):
+            en_pantalla[columna] = pd.to_numeric(
+                en_pantalla[columna], errors="coerce").astype("Float64")
+        editada = st.data_editor(
+            en_pantalla,
+            width="stretch",
+            hide_index=True,
+            key="reg_editor",
+            disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "MI PUBLICADO", "PRECIO"],
+            column_config={
+                "✓": st.column_config.CheckboxColumn("✓", width=ancho_fijo(45),
+                                                     help="Marca lo que va en el PDF"),
+                "PEDIDO": st.column_config.TextColumn(**centrada(
+                    label="LO QUE PIDIERON",
+                    width=ancho_en_pantalla(vista_datos["PEDIDO"], "PIDIERON"))),
+                "CALCE": st.column_config.TextColumn(**centrada(
+                    label="CALCE", width=ancho_fijo(90),
+                    help="exacto: el nombre coincide entero · parecido: coincide en "
+                         "parte · sugerencia: es del mismo tipo de producto, revísalo")),
+                "ID": st.column_config.TextColumn(**centrada(
+                    label="ID", width=ancho_fijo(85),
+                    help="El ID de Convenio Marco, con el que el comprador genera "
+                         "la compra")),
+                "ARTÍCULO": st.column_config.TextColumn(
+                    "PRODUCTO DEL CATÁLOGO",
+                    width=ancho_en_pantalla(vista_datos["ARTÍCULO"],
+                                            "PRODUCTO DEL CATÁLOGO")),
+                "MI PUBLICADO": st.column_config.NumberColumn(
+                    **centrada(label="MI PRECIO", format="localized",
+                               width=ancho_fijo(100),
+                               help="Tu precio publicado en Convenio Marco")),
+                "PRECIO": st.column_config.NumberColumn(
+                    **centrada(label="P. OFERTA", format="localized",
+                               width=ancho_fijo(100),
+                               help="Tu precio de oferta de esta semana, si ese ID "
+                                    "la tiene")),
+                "CANTIDAD": st.column_config.NumberColumn(
+                    **centrada(label="CANT.", min_value=1, step=1,
+                               width=ancho_fijo(70))),
+            },
+        )
+        marcadas = editada["✓"].fillna(False)
+        elegidos = vista_datos.loc[marcadas.values].copy()
+        elegidos["CANTIDAD"] = editada.loc[marcadas.values, "CANTIDAD"].values
+        st.caption(f"**{len(elegidos)} ID marcados** de {len(vista_datos)} en pantalla.")
 
     # --- Agregar a mano lo que el buscador no propuso ------------------------
     agregados: dict[str, int] = st.session_state.setdefault("reg_agregados", {})
