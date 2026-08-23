@@ -3240,6 +3240,53 @@ def filas_de_la_palabra(palabra: str, indice: dict[str, dict[str, list[int]]],
     return filas
 
 
+# Cuánto contenido trae, llevado todo a gramos o mililitros.
+UNIDADES_MEDIDA: dict[str, tuple[float, str]] = {
+    "K": (1000, "peso"), "KG": (1000, "peso"), "KGS": (1000, "peso"),
+    "KILO": (1000, "peso"), "KILOS": (1000, "peso"),
+    "G": (1, "peso"), "GR": (1, "peso"), "GRS": (1, "peso"),
+    "GRAMO": (1, "peso"), "GRAMOS": (1, "peso"),
+    "L": (1000, "volumen"), "LT": (1000, "volumen"), "LTS": (1000, "volumen"),
+    "LITRO": (1000, "volumen"), "LITROS": (1000, "volumen"),
+    "ML": (1, "volumen"), "CC": (1, "volumen"),
+}
+
+# Cuánto puede diferir el contenido de lo que pidieron y seguir sirviendo.
+# Pedir 125 g y ofrecer 140 g pasa; ofrecer 35 g no, aunque sea el mismo producto.
+VARIACION_MEDIDA = 0.2
+
+
+def medida_del_texto(texto) -> tuple[float, str] | None:
+    """(contenido en gramos o ml, "peso"/"volumen"), o None si no lo dice.
+
+    "GALLETA COSTA BOLSA 125 G UNIDAD RM" -> (125.0, "peso")
+    "ACEITE MIRAFLORES BOTELLA 900 CC"    -> (900.0, "volumen")
+    "MARGARINA 10 G CAJA 240 UNIDADES"    -> (10.0, "peso")   <- el contenido, no el envase
+    """
+    limpio = unicodedata.normalize("NFKD", str(texto or ""))
+    limpio = "".join(c for c in limpio if not unicodedata.combining(c)).upper()
+    for numero, unidad in re.findall(r"(\d+(?:[.,]\d+)?)\s*([A-Z]+)", limpio):
+        factor = UNIDADES_MEDIDA.get(unidad)
+        if factor:
+            try:
+                return float(numero.replace(",", ".")) * factor[0], factor[1]
+            except ValueError:
+                return None
+    return None
+
+
+def medidas_compatibles(pedida, ofrecida) -> bool:
+    """Si el contenido ofrecido sirve para lo que pidieron.
+
+    Solo se compara cuando las dos lo dicen y son de la misma clase: contra un
+    pedido sin gramaje no hay nada que exigir.
+    """
+    if not pedida or not ofrecida or pedida[1] != ofrecida[1] or not pedida[0]:
+        return True
+    proporcion = ofrecida[0] / pedida[0]
+    return (1 - VARIACION_MEDIDA) <= proporcion <= (1 + VARIACION_MEDIDA)
+
+
 # Formatos que NO son la presentación normal de venta: son porciones sueltas
 # para servir en mesa. Cuando piden «azúcar» quieren la bolsa de kilo, no una
 # caja de 800 sachets; si piden el sachet lo escriben, y ahí sí se prioriza.
@@ -3253,7 +3300,8 @@ def es_porcion_individual(nombre_palabras: list[str]) -> bool:
 
 def buscar_candidatos(pedido: str, catalogo_region: pd.DataFrame,
                       indice: dict[str, dict[str, list[int]]], nombres: list[list[str]],
-                      precios: dict[str, float], tope: int = 10) -> list[dict]:
+                      medidas: list, precios: dict[str, float],
+                      tope: int = 10) -> list[dict]:
     """Los ID del catálogo que pueden ser lo que la institución pidió.
 
     Dos maneras de llegar a un producto, porque la institución no escribe como
@@ -3278,6 +3326,7 @@ def buscar_candidatos(pedido: str, catalogo_region: pd.DataFrame,
     # buscar: traería miles de filas y ninguna por su culpa.
     tope_frecuencia = max(30, len(catalogo_region) // 20)
     pidio_porcion = any(p in PALABRAS_PORCION for p in buscado)
+    medida_pedida = medida_del_texto(pedido)
 
     filas = filas_de_la_palabra(cabeza, indice)
     for termino in buscado[1:]:
@@ -3292,18 +3341,34 @@ def buscar_candidatos(pedido: str, catalogo_region: pd.DataFrame,
         aciertos = sum(1 for p in buscado if any(se_parecen(p, n) for n in del_catalogo))
         if not aciertos:
             continue
+        # El contenido tiene que servir: pedir 125 g y ofrecer 35 g no es una
+        # alternativa, es otro producto.
+        if not medidas_compatibles(medida_pedida, medidas[posicion]):
+            continue
         puntaje = aciertos / len(buscado)
-        # El producto EMPIEZA con una de las palabras pedidas: «ESPIRALES ...»
-        # para «fideos guiso espiral». Eso lo hace candidato aunque el resto de
-        # las palabras no aparezca; «SOPA ... CON FIDEOS» no, porque empieza
-        # con SOPA, que nadie pidió.
-        encabeza = bool(del_catalogo) and any(se_parecen(p, del_catalogo[0]) for p in buscado)
+        # ¿El nombre del catálogo EMPIEZA con alguna palabra pedida?
+        #   lidera  -> empieza con la primera palabra del pedido («LECHE» de
+        #              «LECHE ASADA» encabeza «LECHE LIQUIDA...»). Débil: es el
+        #              tipo genérico, y solo, no dice nada.
+        #   destaca -> empieza con una palabra POSTERIOR del pedido
+        #              («ESPIRALES...» para «fideos guiso espiral»). Fuerte: el
+        #              catálogo usa ese término como nombre del producto.
+        lidera = bool(del_catalogo) and se_parecen(buscado[0], del_catalogo[0])
+        destaca = bool(del_catalogo) and any(se_parecen(p, del_catalogo[0])
+                                             for p in buscado[1:])
+        encabeza = lidera or destaca
         # Con una sola palabra pedida ("MARGARINA") basta el tipo. Con varias se
         # exige que calce más de la mitad, o queda cualquier cosa del rubro.
         suficiente = puntaje >= (0.6 if len(buscado) > 1 else 1.0)
-        # Con UNA sola palabra pedida («SAL», «AZÚCAR») el producto tiene que
-        # empezar por ella: si no, «MANTEQUILLA CON SAL» entraba como si fuera sal.
-        acepta = (suficiente and encabeza) if len(buscado) == 1 else (suficiente or encabeza)
+        if len(buscado) == 1:
+            # Con UNA sola palabra («SAL», «AZÚCAR») el producto tiene que
+            # empezar por ella: si no, «MANTEQUILLA CON SAL» entraba como sal.
+            acepta = suficiente and lidera
+        else:
+            # Si solo calza el tipo genérico se exige una segunda coincidencia:
+            # sin eso «LECHE ASADA» (un postre) traía leche líquida, evaporada
+            # y en polvo, que no son lo que piden.
+            acepta = suficiente or destaca or (lidera and aciertos >= 2)
         if not acepta:
             continue
         candidato = _candidato(catalogo_region, posicion, precios, puntaje,
@@ -3432,6 +3497,7 @@ def cruzar_requerimiento(requerimiento: pd.DataFrame, catalogo: pd.DataFrame, re
     por_id = dict(zip(en_region["ID"], range(len(en_region))))
     indice = indice_del_catalogo(en_region)
     nombres = [palabras_utiles(n) for n in en_region["PRODUCTO"]]
+    medidas = [medida_del_texto(n) for n in en_region["PRODUCTO"]]
 
     candidatos, sin_equivalencia = [], []
     for _, linea in requerimiento.iterrows():
@@ -3448,7 +3514,8 @@ def cruzar_requerimiento(requerimiento: pd.DataFrame, catalogo: pd.DataFrame, re
                 "MI PUBLICADO": registro["MI PUBLICADO"],
             }]
         else:
-            hallados = buscar_candidatos(linea["PEDIDO"], en_region, indice, nombres, precios)
+            hallados = buscar_candidatos(linea["PEDIDO"], en_region, indice, nombres,
+                                         medidas, precios)
 
         if not hallados:
             sin_equivalencia.append({
@@ -3738,6 +3805,18 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
     return bytes(pdf.output())
 
 
+def ancho_en_pantalla(valores, titulo: str, minimo: int = 80,
+                      maximo: int = 560) -> int:
+    """Ancho en píxeles de una columna, según lo largo que sea su contenido.
+
+    Mismo criterio que en el PDF: el percentil 90 y no el máximo, para que un
+    solo texto larguísimo no estire la columna entera.
+    """
+    largos = sorted(len(str(v)) for v in valores) or [0]
+    tipico = largos[int(len(largos) * 0.9) - 1] if largos else 0
+    return int(min(max(max(tipico, len(titulo)) * 8 + 30, minimo), maximo))
+
+
 def buscar_en_catalogo(consulta: str, catalogo_region: pd.DataFrame,
                        precios: dict[str, float], tope: int = 40) -> pd.DataFrame:
     """Busqueda libre dentro de la region: por trozo del nombre o por ID.
@@ -3856,19 +3935,24 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
                 key="reg_editor",
                 disabled=["PEDIDO", "CALCE", "ID", "ARTÍCULO", "PRECIO"],
                 column_config={
-                    "✓": st.column_config.CheckboxColumn("✓", help="Marca lo que va en el PDF"),
-                    "PEDIDO": st.column_config.TextColumn("LO QUE PIDIERON", width="small"),
+                    "✓": st.column_config.CheckboxColumn("✓", width=50,
+                                                         help="Marca lo que va en el PDF"),
+                    "PEDIDO": st.column_config.TextColumn(
+                        "LO QUE PIDIERON",
+                        width=ancho_en_pantalla(vista_datos["PEDIDO"], "LO QUE PIDIERON")),
                     "CALCE": st.column_config.TextColumn(
-                        "CALCE", width="small",
+                        "CALCE", width=95,
                         help="exacto: el nombre coincide entero · parecido: coincide en "
                              "parte · sugerencia: es del mismo tipo de producto, revísalo"),
-                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width="small"),
-                    "ARTÍCULO": st.column_config.TextColumn("ARTÍCULO DEL CATÁLOGO",
-                                                            width="large"),
+                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width=130),
+                    "ARTÍCULO": st.column_config.TextColumn(
+                        "ARTÍCULO DEL CATÁLOGO",
+                        width=ancho_en_pantalla(vista_datos["ARTÍCULO"],
+                                                "ARTÍCULO DEL CATÁLOGO")),
                     "PRECIO": st.column_config.NumberColumn("PRECIO OFERTA",
-                                                            format="localized", width="small"),
+                                                            format="localized", width=110),
                     "CANTIDAD": st.column_config.NumberColumn("CANT.", min_value=1, step=1,
-                                                              width="small"),
+                                                              width=80),
                 },
             )
             marcadas = editada["✓"].fillna(False)
@@ -3896,14 +3980,16 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
                 width="stretch", hide_index=True, key="reg_editor_busca",
                 disabled=["ID", "ARTÍCULO", "PRECIO"],
                 column_config={
-                    "✓": st.column_config.CheckboxColumn("✓"),
-                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width="small"),
-                    "ARTÍCULO": st.column_config.TextColumn("ARTÍCULO DEL CATÁLOGO",
-                                                            width="large"),
+                    "✓": st.column_config.CheckboxColumn("✓", width=50),
+                    "ID": st.column_config.TextColumn("ID CONVENIO MARCO", width=130),
+                    "ARTÍCULO": st.column_config.TextColumn(
+                        "ARTÍCULO DEL CATÁLOGO",
+                        width=ancho_en_pantalla(hallados["ARTÍCULO"],
+                                                "ARTÍCULO DEL CATÁLOGO")),
                     "PRECIO": st.column_config.NumberColumn("PRECIO OFERTA",
-                                                            format="localized", width="small"),
+                                                            format="localized", width=110),
                     "CANTIDAD": st.column_config.NumberColumn("CANT.", min_value=1, step=1,
-                                                              width="small"),
+                                                              width=80),
                 },
             )
             for _, fila in editada.iterrows():
