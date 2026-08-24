@@ -3146,7 +3146,9 @@ SINONIMOS_PRODUCTO: dict[str, str] = {
     "TE EN HOJAS": "TE EN HOJA",
     "TE EN BOLSITAS": "TE EN BOLSA",
     "POSTA MOLIDA": "CARNE MOLIDA",
-    "YOGU YOGU": "YOGURT",
+    # «Yogu yogu» es una marca; en el catálogo el producto se llama por su
+    # tipo, y así aparecen también los otros sabores y marcas de lo mismo.
+    "YOGU YOGU": "LECHE SABORIZADA BEBIDA LACTEA",
     "YOGURT INDIVIDUAL": "YOGURT",
     "PAPEL CONFORT": "PAPEL HIGIENICO",
     "CONFORT": "PAPEL HIGIENICO",
@@ -3207,6 +3209,8 @@ def aplicar_sinonimos(pedido: str) -> str:
 # pide «diet» y el catálogo lo escribe «light», «dietética» o «para diabéticos».
 GRUPOS_EQUIVALENTES = [
     {"DIET", "DIETETICA", "DIETETICO", "LIGHT", "DIABETICO", "DIABETICA"},
+    # La galleta «de agua sin sal» es la que el catálogo llama «de soda».
+    {"AGUA", "SODA"},
     {"POLVO", "PULVERIZADO", "INSTANTANEO"},
     {"BEBIDA", "BEBESTIBLE"},
 ]
