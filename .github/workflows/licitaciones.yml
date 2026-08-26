@@ -1,0 +1,69 @@
+# Llena la bodega de LICITACIONES todas las mañanas.
+#
+# Hermano del workflow "Bodega Mercado Público", que baja las ORDENES DE COMPRA
+# a las 02:00. Este baja las LICITACIONES y va en archivo aparte a proposito: un
+# solo workflow no puede tener dos horarios distintos, todos sus jobs arrancan
+# con el mismo cron.
+#
+# Corre a las 07:00 de Chile (11:00 UTC), no a las 02:00, porque ChileCompra
+# rehace los archivos de lic-da entre las 12:00 y las 14:00 UTC con un dia de
+# desfase. A las 11:00 UTC de hoy ya esta publicado lo de ayer.
+#
+# OJO CON LO QUE TRAE: lic-da solo publica licitaciones cuyo plazo YA CERRO.
+# Esta bodega es el historial —quien licita que, cada cuanto, quien se lo gana—,
+# no el radar de licitaciones abiertas. Para avisar a tiempo hace falta la API
+# de Mercado Publico, que es otra cosa y no vive en este workflow.
+#
+# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+
+name: Bodega de Licitaciones
+
+on:
+  schedule:
+    - cron: "0 11 * * *"     # 07:00 en Chile
+  workflow_dispatch:          # y tambien a mano, con el boton "Run workflow"
+    inputs:
+      completo:
+        description: "Rehacer toda la historia desde enero 2025 (tarda ~30 minutos)"
+        required: false
+        type: boolean
+        default: false
+
+# Permiso para que la tarea pueda guardar los datos en el repositorio.
+permissions:
+  contents: write
+
+jobs:
+  licitaciones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow
+
+      - name: Llenar la bodega de licitaciones
+        run: |
+          python licitador.py ${{ github.event.inputs.completo == 'true' && '--completo' || '' }}
+
+      - name: Guardar lo descargado en el repositorio
+        run: |
+          git config user.name "Licitador"
+          git config user.email "licitador@users.noreply.github.com"
+          git add bodega
+          if git diff --staged --quiet; then
+            echo "No hay licitaciones nuevas que guardar."
+          else
+            git commit -m "Licitaciones: datos al $(date -u +'%d-%m-%Y')"
+            # Si alguien subio algo mientras corria, se reintenta sobre lo nuevo.
+            git pull --rebase --autostash origin main || true
+            git push
+          fi
