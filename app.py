@@ -4342,13 +4342,17 @@ def main() -> None:
     # pestaña que no es suya a cada cliente que abre el panel.
     from modulo_cuentas import es_soporte, quien_soy
     yo = quien_soy()
-    etiquetas = ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público",
-                 "🧾 Módulo Cotizador", "👥 Mi equipo"]
+    # «Seguimiento» va SEGUNDA, pegada a Oportunidades: son las dos caras de
+    # lo mismo —a quien vender y en que quedo lo que ya se aviso— y quien
+    # trabaja el dia a dia se mueve entre esas dos, no entre las otras.
+    etiquetas = ["🎯 Oportunidades", "📌 Seguimiento", "🔔 Alertas",
+                 "🏛️ Mercado Público", "🧾 Módulo Cotizador", "👥 Mi equipo"]
     if es_soporte(yo):
         etiquetas.append("🛟 Soporte")
     creadas = st.tabs(etiquetas)
-    pestana_op, pestana_al, pestana_mp, pestana_region, pestana_equipo = creadas[:5]
-    pestana_soporte = creadas[5] if len(creadas) > 5 else None
+    (pestana_op, pestana_sg, pestana_al, pestana_mp, pestana_region,
+     pestana_equipo) = creadas[:6]
+    pestana_soporte = creadas[6] if len(creadas) > 6 else None
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:
@@ -4358,6 +4362,11 @@ def main() -> None:
         # un error suyo no puede tumbar el cotizador, que es el trabajo diario.
         from modulo_oportunidades import seccion_oportunidades
         seccion_oportunidades()
+    with pestana_sg:
+        # El embudo de lo ya avisado. Va aparte de «Alertas» a proposito:
+        # aquella configura QUE llega, esta dice EN QUE QUEDO.
+        from modulo_seguimiento import seccion_seguimiento
+        seccion_seguimiento()
     with pestana_al:
         # Igual que la anterior: en su propio archivo, y ademas importa
         # `alertador.py` para que la vista previa use las mismas reglas que
