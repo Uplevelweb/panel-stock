@@ -31,7 +31,7 @@ BODEGA = AQUI / "bodega" / "detalle"
 DESCARGAS = AQUI / "descargas_temporales"
 PRIMER_MES = (2025, 1)
 
-COLUMNAS = ["dia", "fecha", "orden", "estado", "unidad", "organismo", "convenio",
+COLUMNAS = ["dia", "fecha", "orden", "estado", "unidad", "organismo", "mecanismo", "convenio",
             "convenio_marco", "contacto", "proveedor", "rut_proveedor",
             "id_producto", "producto", "cantidad", "precio", "total"]
 
@@ -64,8 +64,33 @@ def bajar(año: int, mes: int) -> Path | None:
         return None
 
 
-def filas_de_convenio_marco(archivo: Path):
-    """Las lineas de Convenio Marco del archivo, ya en el formato de la bodega."""
+def filas_de_ordenes(archivo: Path):
+    """
+    TODAS las lineas de ordenes de compra del archivo, en formato de bodega.
+
+    HASTA EL 27-08-2026 ESTO GUARDABA SOLO CONVENIO MARCO, y esa era la
+    limitacion mas grande del producto. Medido sobre julio 2026:
+
+        Compra agil                 177.008   41,3%
+        Trato directo / bajo monto  153.554   35,8%
+        Convenio Marco               76.084   17,7%   <- lo unico que se guardaba
+        Trato directo                19.393    4,5%
+        Convenio                      2.716    0,6%
+
+    O sea que la bodega veia menos de la quinta parte de lo que compra el
+    Estado. Consecuencia concreta: a un proveedor de software el correo le
+    salia «PRIORIDAD D · 0» y sin gasto historico, porque su comprador no
+    aparecia por ningun lado. No fallaba el calculo: faltaba el dato.
+
+    No se guardaba todo por miedo a la memoria. Ese miedo se midio y era
+    infundado: con las columnas de texto comprimidas (ver `comprimir_textos`
+    en alertador.py) 5,6 veces mas filas siguen cabiendo de sobra.
+
+    El mecanismo de compra queda en su propia columna para poder decirle al
+    proveedor COMO compra ese comprador, que es lo que define como venderle:
+    quien mueve el 70% por compra agil se define en 48 horas; quien mueve el
+    60% por licitacion hay que prepararlo con anticipacion.
+    """
     import zipfile
     z = zipfile.ZipFile(archivo)
     with z.open(z.namelist()[0]) as bruto:
@@ -73,7 +98,7 @@ def filas_de_convenio_marco(archivo: Path):
         for fila in csv.DictReader(texto, delimiter=";"):
             codigo = str(fila.get("Codigo") or "")
             tramos = codigo.split("-")
-            if len(tramos) < 3 or not tramos[-1].upper().startswith("CM"):
+            if len(tramos) < 3:
                 continue
             fecha = str(fila.get("FechaCreacion") or "")[:10]
             if len(fecha) != 10 or not fecha[:4].isdigit():
@@ -93,6 +118,9 @@ def filas_de_convenio_marco(archivo: Path):
                 # del sistema (catalogo, filtros, API) usa el prefijo.
                 "unidad": tramos[0].strip(),
                 "organismo": str(fila.get("CodigoOrganismoPublico") or "").strip(),
+                # «2950-485-CM26» -> mecanismo «CM», convenio «CM26». El
+                # mecanismo es como se compro; el sufijo lleva ademas el año.
+                "mecanismo": tramos[-1].upper()[:2],
                 "convenio": tramos[-1].upper(),
                 "convenio_marco": str(fila.get("Codigo_ConvenioMarco") or "").strip(),
                 "contacto": "",
@@ -250,13 +278,13 @@ def main() -> None:
             continue
         por_mes: dict[str, list[dict]] = {}
         n = 0
-        for fila in filas_de_convenio_marco(archivo):
+        for fila in filas_de_ordenes(archivo):
             por_mes.setdefault(fila["fecha"][:7], []).append(fila)
             n += 1
         guardar(por_mes)
         total += n
         procesados.append(f"{año}-{mes:02d}")
-        print(f"  {año}-{mes:02d}: {n:>7,} líneas de Convenio Marco · "
+        print(f"  {año}-{mes:02d}: {n:>7,} líneas de órdenes de compra · "
               f"{archivo.stat().st_size/1e6:.0f} MB · {time.time()-inicio:.0f}s", flush=True)
 
     convenios = set()
