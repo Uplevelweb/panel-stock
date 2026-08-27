@@ -1,0 +1,134 @@
+========================================================================
+ SUPABASE — cuentas, usuarios y territorios (el plan Empresa)
+========================================================================
+
+QUE HACE
+--------
+Crea las dos tablas que faltan para que una empresa pueda tener su propia
+cuenta y sus propios comerciales:
+
+  cuentas   una por RUT. Es la empresa que paga.
+  usuarios  las personas de esa empresa. Cada una con su rol y su territorio.
+
+Con esto, el panel deja de ser «una app para dos correos» y pasa a ser una
+app donde cada empresa administra a su gente sola.
+
+NO borra nada ni toca las tablas que ya existen (suscriptores, filtros,
+envios). Se puede correr dos veces sin romper nada.
+
+DOS ROLES, NO MAS
+-----------------
+  admin      el dueño de la cuenta. Ve toda la empresa y crea a los demas.
+  comercial  ve solo su territorio.
+
+El territorio son las regiones que le tocan, y si hace falta afinar mas,
+tambien comunas. Eso ultimo es para partir la Region Metropolitana entre dos
+personas: es la mas grande de todas y con una sola no alcanza.
+
+Un comercial SIN territorio ve toda la cuenta. Es a proposito: una empresa
+chica con un solo vendedor no tiene por que configurar nada.
+
+DONDE SE PEGA
+-------------
+1. Abre este enlace, que te deja en un editor SQL en blanco:
+
+   https://supabase.com/dashboard/project/nvjmgpmvhrodirykoirq/sql/new
+
+2. Pega TODO lo que viene despues de la linea de guiones
+3. Aprieta  Run   (abajo a la derecha, o Ctrl+Enter)
+4. Tiene que decir  Success. No rows returned
+
+------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+--  La empresa. Una por RUT.
+-- ---------------------------------------------------------------------
+create table if not exists cuentas (
+  id          uuid primary key default gen_random_uuid(),
+  rut         text not null unique,
+  nombre      text not null,
+  plan        text not null default 'empresa',
+  activa      boolean not null default true,
+  creada      timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------
+--  Las personas de esa empresa.
+-- ---------------------------------------------------------------------
+-- El correo es la llave, en minusculas y sin espacios, porque es lo unico
+-- que el panel sabe de quien entro: lo entrega Streamlit al iniciar sesion.
+-- Si el correo guardado tiene una mayuscula, esa persona no entra nunca y
+-- no hay ningun mensaje de error que lo explique.
+--
+-- El `check` es justamente para eso: en vez de dejar pasar «Juan@x.cl» y que
+-- Juan no pueda entrar sin que nadie entienda por que, la base lo rechaza en
+-- el momento. Falla fuerte y temprano, que es mucho mejor que fallar callado.
+create table if not exists usuarios (
+  id         uuid primary key default gen_random_uuid(),
+  cuenta_id  uuid not null references cuentas(id) on delete cascade,
+  email      text not null unique check (email = lower(trim(email))),
+  nombre     text,
+  rol        text not null default 'comercial'
+             check (rol in ('admin', 'comercial')),
+  -- El territorio. Vacio = ve toda la cuenta.
+  regiones   text[] not null default '{}',
+  comunas    text[] not null default '{}',
+  activo     boolean not null default true,
+  creado     timestamptz not null default now(),
+  creado_por text
+);
+
+create index if not exists usuarios_por_cuenta on usuarios (cuenta_id, activo);
+
+-- ---------------------------------------------------------------------
+--  Nadie puede leer esto desde el navegador.
+-- ---------------------------------------------------------------------
+-- Aca hay nombres y correos de personas: dato personal, y la Ley 21.719
+-- entra en vigencia el 1 de diciembre de 2026. Se prende RLS y no se crea
+-- ninguna politica, asi que la clave publica —la que va en el codigo de la
+-- pagina y puede leer cualquiera— no ve ni una fila. El panel entra con la
+-- clave secreta, que corre del lado del servidor y se salta RLS.
+alter table cuentas  enable row level security;
+alter table usuarios enable row level security;
+
+revoke all on table cuentas  from anon;
+revoke all on table usuarios from anon;
+
+-- ---------------------------------------------------------------------
+--  La primera cuenta y su primer admin. Sin esto no entra nadie.
+-- ---------------------------------------------------------------------
+-- Es el problema del huevo y la gallina: el admin crea a los demas, pero al
+-- admin hay que crearlo desde aca. Van los tres correos con los que hoy se
+-- abre el panel, para que no te quedes fuera de tu propia app.
+insert into cuentas (rut, nombre)
+values ('77.082.051-0', 'Comercial Emergenza')
+on conflict (rut) do nothing;
+
+insert into usuarios (cuenta_id, email, nombre, rol)
+select c.id, correo, 'Serling Vera', 'admin'
+from cuentas c,
+     (values ('serlingvera@gmail.com'),
+             ('svera@emergenza.cl'),
+             ('webuplevel@gmail.com')) as v(correo)
+where c.rut = '77.082.051-0'
+on conflict (email) do nothing;
+
+------------------------------------------------------------------------
+
+COMO COMPROBAR QUE QUEDO
+------------------------
+New query, pegar esto y Run:
+
+select u.email, u.rol, u.regiones, c.nombre as empresa
+from usuarios u join cuentas c on c.id = u.cuenta_id
+order by u.rol, u.email;
+
+Tienen que aparecer tres filas, las tres con rol  admin  y empresa
+Comercial Emergenza.
+
+QUE PASA SI NO CORRES ESTO
+--------------------------
+Nada malo: el panel sigue funcionando exactamente igual que hoy. Si las
+tablas no existen, no hay a quien preguntarle por permisos, asi que se ve
+todo. La puerta sigue siendo la lista de Streamlit. Recien cuando las tablas
+existen empiezan a mandar los roles.
