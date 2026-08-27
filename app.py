@@ -52,8 +52,8 @@ from fpdf.fonts import FontFace
 # 1. CONFIGURACION
 # ===========================================================================
 
-TITULO_APP = "Panel Oportunidades"
-SUBTITULO_APP = "Convenio Marco · Comercial Emergenza"
+TITULO_APP = "Uplevel Inteligencia"
+SUBTITULO_APP = "Compras Públicas · Chile"
 
 # Enlaces que trae la app cargados de fabrica. Los dos campos son editables:
 # se pueden reemplazar por los de otra institucion o de otra carpeta.
@@ -89,6 +89,10 @@ AZUL_TABLA = (47, 134, 203)
 
 CARPETA = Path(__file__).parent
 RUTA_LOGO = CARPETA / "LogoVec.png"
+# El logo de Emergenza (RUTA_LOGO) va SOLO en el PDF y el correo de
+# cotizacion, porque ahi es Emergenza la que le vende a la institucion.
+# La app en si es producto de Uplevel y lleva la marca de Uplevel.
+RUTA_LOGO_UPLEVEL = CARPETA / "logo-uplevel.png"
 # Version cuadrada del logo: el original es horizontal (400x225) y como
 # favicon o icono de celular sale aplastado.
 RUTA_ICONO = CARPETA / "icono.png"
@@ -96,12 +100,15 @@ RUTA_ICONO = CARPETA / "icono.png"
 # Paleta tomada del Panel Armada (emergenza-mailer/Index.html) para que los
 # dos paneles se vean como un mismo sistema.
 COLOR = {
-    "fondo": "#24333F",
-    "tarjeta": "#33475B",
-    "borde": "#46596C",
-    "texto": "#EEF3F7",
-    "texto_suave": "#A9BDCE",
-    "rojo": "#C1303F",
+    "fondo": "#0c2c57",
+    "tarjeta": "#123a6e",
+    "borde": "#1e4d87",
+    "texto": "#EAF1F8",
+    "texto_suave": "#A9BED4",
+    # La llave se sigue llamando «rojo» porque esta usada en decenas de
+    # lugares; lo que cambio es el color, que ahora es el naranjo de
+    # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
+    "rojo": "#f18c3f",
     "blanco": "#FFFFFF",
 }
 TIPOGRAFIA = 'Tahoma, Geneva, Verdana, "DejaVu Sans", sans-serif'
@@ -2093,10 +2100,10 @@ def aplicar_estilos() -> None:
             padding: 12px 24px;
             margin-bottom: 16px;
         }}
-        .cabecera img {{ width: 132px; flex: none; }}
+        .cabecera img {{ width: 62px; flex: none; }}
         .cabecera-texto {{ line-height: 1.15; text-align: center; }}
         .titulo-panel {{
-            color: #24333F; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
+            color: #0c2c57; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
             color: #5A7089; font-size: 12.5px; margin-top: 2px;
@@ -2106,7 +2113,7 @@ def aplicar_estilos() -> None:
            puesto antes, el tamaño del titulo lo pisaba la regla general. */
         @media (max-width: 640px) {{
             .cabecera {{ flex-direction: column; gap: 8px; padding: 12px 10px; }}
-            .cabecera img {{ width: 108px; }}
+            .cabecera img {{ width: 54px; }}
             .titulo-panel {{ font-size: 21px; letter-spacing: -0.2px; }}
             .subtitulo-panel {{ font-size: 11px; }}
         }}
@@ -2117,13 +2124,17 @@ def aplicar_estilos() -> None:
 
 
 def cabecera() -> None:
-    """Franja blanca con el logo a la izquierda y el titulo al lado."""
-    if RUTA_LOGO.exists():
-        logo = base64.b64encode(RUTA_LOGO.read_bytes()).decode()
-        marca = f'<img src="data:image/png;base64,{logo}" alt="Comercial Emergenza">'
+    """Franja blanca con el logo de Uplevel a la izquierda y el titulo al lado.
+
+    Va sobre blanco a proposito: el logo de Uplevel tiene fondo blanco y sobre
+    el azul marino dejaria un recuadro. Es la misma decision que en el correo.
+    """
+    if RUTA_LOGO_UPLEVEL.exists():
+        logo = base64.b64encode(RUTA_LOGO_UPLEVEL.read_bytes()).decode()
+        marca = f'<img src="data:image/png;base64,{logo}" alt="Uplevel">'
     else:
         marca = (f'<div style="color:{COLOR["rojo"]};font-size:20px;font-weight:bold;'
-                 f'line-height:1.1">COMERCIAL<br>EMERGENZA</div>')
+                 f'line-height:1.1">UP<br>LEVEL</div>')
     st.markdown(
         f'<div class="cabecera">{marca}'
         f'<div class="cabecera-texto">'
@@ -4278,8 +4289,15 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
-    pestana_mp, pestana_region, pestana_op, pestana_al = st.tabs(
-        ["🏛️ Mercado Público", "🧾 Módulo Cotizador", "🎯 Oportunidades", "🔔 Alertas"])
+    # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
+    # escribir un RUT: quien entra ve algo suyo en segundos, sin buscar ni
+    # seleccionar nada. Las otras dos son herramientas de trabajo diario, no la
+    # puerta de entrada de alguien que llega a mirar por primera vez.
+    #
+    # OJO si se vuelve a cambiar el orden: las pruebas buscan las tablas POR SUS
+    # COLUMNAS, no por su posicion. `app.dataframe[-1]` ya se rompio una vez asi.
+    pestana_op, pestana_al, pestana_mp, pestana_region = st.tabs(
+        ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público", "🧾 Módulo Cotizador"])
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:

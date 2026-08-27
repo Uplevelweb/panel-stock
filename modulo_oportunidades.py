@@ -306,3 +306,28 @@ def seccion_oportunidades() -> None:
             "proveedores": st.column_config.NumberColumn("Prov."),
             "situacion": st.column_config.TextColumn("Situación", width="small"),
         })
+
+    # ----------------------------------------------------------------------
+    #  El puente a las alertas
+    # ----------------------------------------------------------------------
+    # Quien llego hasta aca ya vio su propio mapa: sabe cuanto se mueve en sus
+    # rubros y a quien no le ha vendido nunca. Es el momento en que la alerta
+    # diaria tiene sentido, no antes. Si hay que salir a buscar la pestana de
+    # Alertas y volver a escribir el RUT, se pierde a la mitad por el camino.
+    st.divider()
+    izq, der = st.columns([3, 2])
+    with izq:
+        st.markdown("#### Que esto te llegue solo, cada mañana")
+        st.caption(
+            "Lo de arriba es el histórico: quién compra lo que vendes. La alerta "
+            "diaria es lo otro: lo que se **publicó hoy** en esos mismos rubros, "
+            "con el gasto de cada comprador al lado."
+        )
+    with der:
+        st.write("")
+        if st.button("Recibir estas oportunidades por correo",
+                     type="primary", width="stretch", key="op_a_alertas"):
+            # El RUT ya escrito se deja listo para la pestana de Alertas, para
+            # que no haya que volver a escribirlo.
+            st.session_state["al_rut"] = st.session_state.get("op_rut", "")
+            st.info("Anda a la pestaña **🔔 Alertas** — tu RUT ya quedó puesto ahí.")

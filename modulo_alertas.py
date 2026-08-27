@@ -27,6 +27,7 @@ se muestra que habria llegado. Usa EXACTAMENTE las mismas funciones que
 tambien miente.
 """
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -200,15 +201,19 @@ def seccion_alertas():
             help="Es la cuenta: identifica la suscripción y respalda el "
                  "consentimiento. Siempre recibe el correo.")
         nombre = st.text_input("Nombre", key="al_nombre", placeholder="Nombre y apellido")
-        copias_texto = st.text_input(
-            "Enviar también a (opcional)", key="al_copias",
-            placeholder="comercial@empresa.cl, gerencia@empresa.cl",
-            help="Separados por coma. Van en el MISMO mensaje, así que "
-                 "gastan un envío de la cuota, no uno cada uno.")
-        correos_envio = [c.strip() for c in copias_texto.split(",")
-                         if c.strip() and "@" in c]
-        if correos_envio:
-            st.caption(f"Llegará a {len(correos_envio) + 1} personas en un solo envío.")
+
+        # Una cuenta, un correo. Decidido el 27-08-2026.
+        #
+        # Hubo un campo para agregar destinatarios en copia y se saco: el correo
+        # ES la identidad de la cuenta y el respaldo del consentimiento, y si el
+        # aviso puede llegar a direcciones que nadie inscribio, esa cadena se
+        # rompe —quien recibe no puede darse de baja de algo que no pidio—.
+        # Quien quiera recibirlo, se inscribe.
+        #
+        # La columna `correos_envio` sigue existiendo en la base y `alertador.py`
+        # la sabe leer; simplemente llega siempre vacia. Si algun dia se decide
+        # al reves, es volver a poner el campo y nada mas.
+        correos_envio: list[str] = []
 
         st.markdown("**Qué avisar**")
         rut = st.text_input(
@@ -330,6 +335,9 @@ def seccion_alertas():
             salio, aviso = guardar_en_supabase(config)
             if salio:
                 st.success(aviso)
+                # Se guarda para que el boton de «mándamelo ahora» siga en
+                # pantalla despues de que Streamlit vuelva a dibujar todo.
+                st.session_state["al_guardado"] = config
             else:
                 st.error(aviso)
                 st.download_button(
@@ -338,3 +346,93 @@ def seccion_alertas():
                     file_name="alertas_config.json", mime="application/json",
                     help="Sirve para probar el correo en el computador mientras "
                          "no estén las credenciales de Supabase.")
+
+    # Aparece recien despues de guardar: quien acaba de inscribirse esta
+    # caliente y decirle «te llega mañana» lo enfria. Esto le pone el producto
+    # en el correo mientras todavia esta mirando la pantalla.
+    if st.session_state.get("al_guardado"):
+        st.markdown("#### ¿Y hasta mañana?")
+        st.caption("No hace falta esperar. Esto te manda el primero ahora mismo, "
+                   "con lo que está abierto en este momento.")
+        if st.button("Mándamelo ahora", type="primary", key="al_ahora"):
+            with st.spinner("Preguntando a Mercado Público qué hay abierto…"):
+                salio, aviso = enviar_ahora(st.session_state["al_guardado"], oc)
+            if salio:
+                st.success(aviso + " Revisa tu bandeja.")
+            else:
+                st.warning(aviso)
+
+
+# --------------------------------------------------------------------------
+#  «Mándamelo ahora»
+# --------------------------------------------------------------------------
+def enviar_ahora(config: dict, oc) -> tuple[bool, str]:
+    """
+    Manda el primer correo en el momento, sin esperar al turno de mañana.
+
+    POR QUE ESTO IMPORTA MAS DE LO QUE PARECE
+    -----------------------------------------
+    Quien acaba de inscribirse esta caliente: acaba de ver su mapa y quiere
+    algo. Si hay que decirle «te llega mañana a las 8», se enfria. Este boton
+    le pone el producto en el correo mientras todavia esta mirando.
+
+    NO ES LA CORRIDA COMPLETA, A PROPOSITO
+    --------------------------------------
+    La del workflow pide el detalle de hasta 400 licitaciones, con 2 segundos
+    de espera obligatorios entre cada una: son diez minutos. Nadie espera diez
+    minutos frente a una pantalla. Aca se piden solo las 20 que mas calzan,
+    que es menos de un minuto, y las compras agiles del dia, que son rapidas.
+    El correo de mañana ya trae el barrido entero.
+    """
+    ticket = ""
+    try:
+        ticket = str(st.secrets["mercadopublico"]["ticket"])
+    except Exception:
+        return False, "Falta el ticket de Mercado Público en los secretos."
+
+    if "RESEND_API_KEY" not in os.environ:
+        try:
+            os.environ["RESEND_API_KEY"] = str(st.secrets["resend"]["api_key"])
+        except Exception:
+            return False, (
+                "Falta la clave de Resend en los secretos de Streamlit. "
+                "Agrega un bloque `[resend]` con `api_key = \"re_...\"` y "
+                "vuelve a intentar. El correo de mañana no la necesita acá: "
+                "esa vive en los secretos de GitHub."
+            )
+
+    bolsa, convenios, _ = alertador.bolsa_de_terminos(config, oc)
+    if not bolsa:
+        return False, "No hay con qué filtrar todavía."
+
+    universo = (alertador.licitaciones_abiertas(ticket, bolsa, techo=20)
+                + alertador.compras_agiles_abiertas(ticket))
+    if not universo:
+        return False, "Hoy no se publicó nada. Mañana a primera hora se revisa de nuevo."
+
+    bolsa = alertador.quitar_palabras_de_todos(bolsa, universo)
+    elegidas = []
+    for op in universo:
+        encaje = alertador.le_sirve(op, bolsa, config)
+        if encaje < alertador.MINIMO_COINCIDENCIAS:
+            continue
+        retrato = alertador.retrato_del_comprador(op.get("unidad"), oc, convenios)
+        valor, clase = alertador.nota(retrato)
+        elegidas.append({**op, "encaje": encaje, "retrato": retrato, "nota": valor,
+                         "clase": clase, "enlace": alertador.enlace(op)})
+
+    elegidas.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
+    elegidas = elegidas[:alertador.MAXIMO_POR_CORREO]
+
+    if not elegidas:
+        return False, ("Hoy no hay nada que calce con lo tuyo. No se envía un correo "
+                       "vacío: el silencio también es información.")
+
+    html = alertador.armar_correo(
+        {**config, "token_baja": "prueba", "rut_empresa": config.get("rut_proveedor")},
+        elegidas)
+    asunto = f"{len(elegidas)} oportunidades de hoy · Uplevel"
+
+    if alertador.enviar(alertador.destinatarios(config), asunto, html):
+        return True, f"Enviado a {config['email']} · {len(elegidas)} oportunidades."
+    return False, "Resend no aceptó el envío. Revisa la clave."
