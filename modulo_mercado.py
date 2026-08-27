@@ -43,6 +43,7 @@ import pandas as pd
 import streamlit as st
 
 import alertador
+import modulo_visitas
 
 CARPETA = Path(__file__).parent
 RUTA_DETALLE = CARPETA / "bodega" / "detalle"
@@ -71,7 +72,8 @@ def panorama_del_mercado(rut: str, meses: int, sello: str) -> dict:
     y no se guarda nada de ella.
     """
     vacio = {"bolsa": 0, "minimo": 0, "meses": meses, "total": 0.0, "lineas": 0,
-             "unidades": {}, "vias": {}, "proveedores": {}, "productos": {}}
+             "unidades": {}, "vias": {}, "proveedores": {}, "productos": {},
+             "mio_por_unidad": {}}
     if not RUTA_DETALLE.exists():
         return vacio
 
@@ -79,12 +81,16 @@ def panorama_del_mercado(rut: str, meses: int, sello: str) -> dict:
     if not bolsa:
         return vacio
     minimo = alertador.minimo_coincidencias(bolsa)
+    suyo = alertador.solo_digitos_rut(rut)
 
     desde = _corte(meses)
     unidades: dict[str, float] = {}
     vias: dict[str, float] = {}
     proveedores: dict[str, float] = {}
     productos: dict[str, float] = {}
+    # Lo que ESTE proveedor ya le vendio a cada unidad. Sirve para la agenda de
+    # visitas: donde ya vende no hay lo mismo que ganar que donde no vende.
+    mio: dict[str, float] = {}
     lineas = 0
 
     for archivo in sorted(RUTA_DETALLE.glob("*.parquet")):
@@ -96,7 +102,8 @@ def panorama_del_mercado(rut: str, meses: int, sello: str) -> dict:
             # `mecanismo`. Ya paso dos veces.
             import pyarrow.parquet as pq
             hay = set(pq.read_schema(archivo).names)
-            pedidas = [c for c in ("unidad", "mecanismo", "proveedor", "producto", "total")
+            pedidas = [c for c in ("unidad", "mecanismo", "proveedor", "producto",
+                                   "total", "rut_proveedor")
                        if c in hay]
             if "producto" not in pedidas or "total" not in pedidas:
                 continue
@@ -127,13 +134,22 @@ def panorama_del_mercado(rut: str, meses: int, sello: str) -> dict:
             texto = str(clave).strip()
             if texto:
                 productos[texto] = productos.get(texto, 0.0) + float(monto)
+        if "rut_proveedor" in mes.columns and suyo:
+            suyas = mes[mes["rut_proveedor"].astype(str).map(alertador.solo_digitos_rut) == suyo]
+            for clave, monto in suyas.groupby("unidad", observed=True)["total"].sum().items():
+                mio[str(clave)] = mio.get(str(clave), 0.0) + float(monto)
+            del suyas
         del mes, cuantas
 
+    ordenar = lambda d: dict(sorted(d.items(), key=lambda x: -x[1]))
     mayores = lambda d: dict(sorted(d.items(), key=lambda x: -x[1])[:BARRAS])
     return {
         "bolsa": len(bolsa), "minimo": minimo, "meses": meses,
         "total": float(sum(vias.values())), "lineas": lineas,
-        "unidades": mayores(unidades), "vias": vias,
+        # Las unidades van ENTERAS, no cortadas a doce: el grafico se queda con
+        # las de arriba, pero la agenda de visitas las necesita todas para
+        # saber donde esta la linea entre ir y llamar.
+        "unidades": ordenar(unidades), "mio_por_unidad": mio, "vias": vias,
         "proveedores": mayores(proveedores), "productos": mayores(productos),
     }
 
@@ -245,7 +261,8 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
     a.metric("El mercado de su rubro", _plata(datos["total"]))
     b.metric("Compras que lo tocan", f"{datos['lineas']:,}".replace(",", "."))
     c.metric("Unidades que compran", f"{len(datos['unidades']):,}".replace(",", "."),
-             help=f"Se muestran las {BARRAS} mayores")
+             help=f"Son todas las que compraron algo del rubro. El gráfico "
+                  f"muestra las {BARRAS} mayores.")
 
     st.caption(
         f"Se buscó con {datos['bolsa']} palabras sacadas de lo que este RUT ya "
@@ -265,10 +282,13 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
         nombres = dict(zip(codigos, unidades["nombre_unidad"].astype(str)))
         organismos = dict(zip(codigos, unidades["nombre_organismo"].astype(str)))
 
-    crudos = [nombres.get(codigo) or f"Unidad {codigo}" for codigo in datos["unidades"]]
+    # Al grafico van solo las de arriba; el diccionario completo queda para la
+    # agenda de visitas.
+    mayores = dict(list(datos["unidades"].items())[:BARRAS])
+    crudos = [nombres.get(codigo) or f"Unidad {codigo}" for codigo in mayores]
     repetidos = {n for n in crudos if crudos.count(n) > 1}
     por_unidad = {}
-    for codigo, monto in datos["unidades"].items():
+    for codigo, monto in mayores.items():
         etiqueta = nombres.get(codigo) or f"Unidad {codigo}"
         if etiqueta in repetidos:
             etiqueta = f"{etiqueta} · {organismos.get(codigo, codigo)}"
@@ -299,6 +319,10 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
             "Proveedor",
             completos={_acortar(p, 46): " ".join(str(p).split())
                        for p in datos["proveedores"]})
+
+    # El itinerario de visitas se cuelga de estos mismos datos: ya estan en
+    # memoria y no hay que volver a leer la bodega.
+    modulo_visitas.seccion_visitas(datos, unidades)
 
 
 def _plata(monto: float) -> str:
