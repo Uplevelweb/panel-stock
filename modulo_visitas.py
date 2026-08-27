@@ -52,6 +52,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import modulo_cuentas
+
 # --------------------------------------------------------------------------
 #  El modelo de la jornada. Todo lo demas sale de estos cuatro numeros.
 # --------------------------------------------------------------------------
@@ -65,10 +67,18 @@ PISO_POR_GANAR = 5_000_000
 
 
 def plan_de_visitas(datos: dict, unidades: pd.DataFrame,
-                    piso: float = PISO_POR_GANAR) -> pd.DataFrame:
+                    piso: float = PISO_POR_GANAR,
+                    usuario: dict | None = None) -> pd.DataFrame:
     """El itinerario, visita por visita y en orden.
 
     `datos` es lo que devuelve `modulo_mercado.panorama_del_mercado`.
+    `usuario` es lo que devuelve `modulo_cuentas.quien_soy()`: si esa persona
+    tiene territorio, el itinerario es el suyo y no el de la empresa entera.
+
+    EL TERRITORIO SE APLICA ANTES DE CONTAR LAS HORAS, y ese orden importa:
+    si se filtrara despues, el comercial de Antofagasta veria que su primera
+    visita cae en la semana 3 —porque delante suyo quedaron las de Santiago,
+    que no son suyas— y su agenda no significaria nada.
 
     SE CUENTA VISITA POR VISITA, NO COMUNA POR COMUNA, y esto no es un detalle:
     la primera version cortaba por comuna entera y con una semana de agenda
@@ -105,6 +115,11 @@ def plan_de_visitas(datos: dict, unidades: pd.DataFrame,
         if columna not in tabla:
             tabla[columna] = defecto
         tabla[columna] = (tabla[columna].replace("", defecto).fillna(defecto))
+
+    if usuario:
+        tabla = modulo_cuentas.filtrar_por_territorio(tabla, usuario)
+        if tabla.empty:
+            return pd.DataFrame()
 
     # El orden de las comunas: por lo que hay para ganar en cada una. Las que
     # no tienen comuna van SIEMPRE al final, por mucha plata que muevan: no se
@@ -185,10 +200,22 @@ def seccion_visitas(datos: dict, unidades: pd.DataFrame) -> None:
             options=[1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000],
             value=PISO_POR_GANAR, key="vi_piso", format_func=_plata)
 
-    plan = plan_de_visitas(datos, unidades, piso)
+    usuario = modulo_cuentas.quien_soy()
+    plan = plan_de_visitas(datos, unidades, piso, usuario)
     if plan.empty:
-        st.warning("No hay unidades con ese mínimo por ganar. Baja el piso.")
+        if modulo_cuentas.tiene_territorio(usuario):
+            st.warning(
+                f"No hay unidades sobre ese mínimo **en tu territorio** "
+                f"({modulo_cuentas.resumen_de_territorio(usuario)}). Baja el "
+                "piso, o pídele a tu administrador que revise las regiones "
+                "que tienes asignadas.")
+        else:
+            st.warning("No hay unidades con ese mínimo por ganar. Baja el piso.")
         return
+
+    if modulo_cuentas.tiene_territorio(usuario):
+        st.caption(f"Este itinerario es **el tuyo**: "
+                   f"{modulo_cuentas.resumen_de_territorio(usuario)}.")
 
     dentro = plan[plan["semana"] <= semanas]
     fuera = plan[plan["semana"] > semanas]
