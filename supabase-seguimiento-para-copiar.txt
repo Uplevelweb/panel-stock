@@ -1,0 +1,133 @@
+-- =====================================================================
+--  SUPABASE — el seguimiento: en qué quedó cada oportunidad
+-- =====================================================================
+--
+--  COMO SE USA
+--  -----------
+--  1. Abre este enlace, que te deja en un editor SQL en blanco:
+--     https://supabase.com/dashboard/project/nvjmgpmvhrodirykoirq/sql/new
+--  2. Selecciona TODO este archivo (Ctrl+A), copialo y pegalo ahi.
+--  3. Aprieta  Run  (abajo a la derecha, o Ctrl+Enter).
+--
+--  Se pega entero: todas las lineas son SQL o comentarios de SQL.
+--  Al final te muestra un resumen de lo que quedo.
+--
+--
+--  QUE PROBLEMA RESUELVE
+--  ---------------------
+--  Hoy el correo manda y se olvida. `envios` guarda que se envio, no que
+--  paso despues. Nadie sabe si esa licitacion se postulo, se gano o se
+--  dejo pasar, y por eso al año no se puede decir «esto te consiguio $X».
+--
+--  Se agregan dos cosas:
+--
+--    1. `envios` se queda con la FOTO de la oportunidad al momento de
+--       mandarla —nombre, comprador, monto, cierre, por que calzo—. Sin
+--       esto, para dibujar la lista habria que volver a preguntarle a la
+--       API de Mercado Publico, que cuesta ticket y es lenta. La foto es
+--       gratis: el correo ya tenia todos esos datos en la mano.
+--
+--    2. `seguimiento` guarda en que etapa va cada una, quien la movio y
+--       cuando.
+--
+--
+--  LO QUE NO SE HACE, Y ES A PROPOSITO
+--  -----------------------------------
+--  NO se crea una fila de seguimiento por cada envio. La etapa «por
+--  revisar» es simplemente «no tiene fila todavia». Asi el embudo funciona
+--  desde el primer dia, incluso con lo que ya se envio antes de que esta
+--  tabla existiera, y no se escribe una fila por cada correo que sale.
+--
+--
+--  POR QUE LA LLAVE ES EL RUT Y NO EL USUARIO
+--  ------------------------------------------
+--  Porque el seguimiento es de la EMPRESA, no de la persona. Si el
+--  comercial del norte marca una como «ofertando», su jefa tiene que verlo
+--  sin preguntar. Un RUT es una cuenta, asi que el RUT es la llave
+--  correcta. Igual se guarda `quien` la movio, para saber de quien fue.
+-- =====================================================================
+
+
+-- ---------------------------------------------------------------------
+--  1. La foto de la oportunidad, guardada al enviarla
+-- ---------------------------------------------------------------------
+--  `add column if not exists` se puede correr dos veces sin romper nada.
+alter table envios add column if not exists rut        text;
+alter table envios add column if not exists nombre     text;
+alter table envios add column if not exists comprador  text;
+alter table envios add column if not exists region     text;
+alter table envios add column if not exists monto      numeric;
+
+--  `cierre` va como texto y no como fecha a proposito: la API lo entrega
+--  en formatos distintos segun de donde venga —a veces con hora, a veces
+--  solo el dia— y un `date` estricto haria fallar la insercion entera del
+--  correo por un formato raro. Aca es preferible guardarlo tal cual y
+--  entenderlo despues que perder el envio.
+alter table envios add column if not exists cierre     text;
+
+alter table envios add column if not exists encaje     smallint;
+alter table envios add column if not exists motivo     text;
+alter table envios add column if not exists enlace     text;
+
+create index if not exists envios_por_rut on envios (rut, codigo_licitacion);
+
+
+-- ---------------------------------------------------------------------
+--  2. En que etapa va cada oportunidad
+-- ---------------------------------------------------------------------
+create table if not exists seguimiento (
+  id      uuid primary key default gen_random_uuid(),
+  rut     text not null,
+  codigo  text not null,
+  estado  text not null default 'por_revisar'
+          check (estado in ('por_revisar', 'siguiendo', 'ofertando',
+                            'ganada', 'perdida', 'descartada')),
+  monto_ofertado numeric,     -- cuanto se oferto, si se oferto
+  quien   text,               -- el correo de quien la movio
+  cuando  timestamptz not null default now(),
+  nota    text,
+  unique (rut, codigo)
+);
+
+create index if not exists seguimiento_por_rut on seguimiento (rut, estado);
+
+
+-- ---------------------------------------------------------------------
+--  3. Cuando fue la ultima vez que cada persona miro
+-- ---------------------------------------------------------------------
+--  Para poder decir «tienes 3 nuevas desde tu ultima visita». Es por
+--  persona y no por empresa: que la jefa haya entrado no significa que el
+--  vendedor ya lo vio.
+create table if not exists visitas (
+  rut    text not null,
+  email  text not null,
+  cuando timestamptz not null default now(),
+  primary key (rut, email)
+);
+
+
+-- ---------------------------------------------------------------------
+--  4. Nadie lee esto desde el navegador
+-- ---------------------------------------------------------------------
+alter table seguimiento enable row level security;
+alter table visitas     enable row level security;
+
+revoke all on table seguimiento from anon;
+revoke all on table visitas     from anon;
+
+
+-- ---------------------------------------------------------------------
+--  La comprobacion. Esto es lo que vas a ver abajo al apretar Run.
+-- ---------------------------------------------------------------------
+--  Tienen que aparecer las columnas nuevas de `envios`. Si `seguimiento`
+--  sale vacia es correcto: todavia no has movido ninguna de etapa.
+select 'envios: columnas nuevas' as que,
+       count(*)::text as cuantas
+from information_schema.columns
+where table_name = 'envios'
+  and column_name in ('rut', 'nombre', 'comprador', 'region', 'monto',
+                      'cierre', 'encaje', 'motivo', 'enlace')
+union all
+select 'seguimiento: filas', count(*)::text from seguimiento
+union all
+select 'visitas: filas', count(*)::text from visitas;
