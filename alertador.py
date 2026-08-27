@@ -553,8 +553,19 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
         if archivo.stem < corte:
             continue
         try:
-            mes = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor",
-                                                    "producto", "total"])
+            # Igual que en `cargar_ordenes`: se piden solo las columnas que ese
+            # archivo tiene. Un parquet viejo sin `mecanismo` hacia fallar la
+            # lectura entera y el correo salia sin el desglose, en silencio.
+            import pyarrow.parquet as pq
+            hay = set(pq.read_schema(archivo).names)
+            pedidas = [c for c in ("unidad", "mecanismo", "proveedor", "producto", "total")
+                       if c in hay]
+            if "producto" not in pedidas or "total" not in pedidas:
+                continue
+            mes = pd.read_parquet(archivo, columns=pedidas)
+            if "mecanismo" not in mes.columns:
+                # Los archivos viejos guardaban solo Convenio Marco.
+                mes["mecanismo"] = "CM"
         except Exception:
             continue
         mes = mes[mes["unidad"].astype(str).isin(unidades)]
