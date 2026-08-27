@@ -85,6 +85,7 @@ no.
 | `modulo_visitas.py` | El IPT: el itinerario de visitas y **la línea donde se deja de visitar y se empieza a llamar** |
 | `modulo_cuentas.py` | Cuentas, roles y territorios (pestaña «Mi equipo»). Quién entró y qué le toca ver |
 | `supabase-cuentas-para-copiar.txt` | El SQL de las tablas `cuentas` y `usuarios`. **Hay que pegarlo una vez** para que los roles empiecen a mandar |
+| `supabase-soporte-para-copiar.txt` | El SQL del rol `superadmin` y la `bitacora_soporte`. Se pega **después** del anterior |
 | `inspector_apis.py` | Mira qué traen de verdad las dos APIs. No envía ni escribe nada |
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
@@ -398,9 +399,20 @@ Son **dos cosas distintas y conviene no confundirlas**:
 - **Quién puede ABRIR el panel** lo decide la lista de Streamlit (*Manage app ▸
   Settings ▸ Sharing*). Sigue siendo la puerta.
 - **Qué ve cada uno adentro** lo decide `modulo_cuentas.py` contra las tablas
-  `cuentas` y `usuarios` de Supabase: un RUT es una cuenta, el `admin` ve toda
-  su empresa y el `comercial` solo su territorio (regiones, o comunas si hay
-  que partir la Metropolitana entre dos personas).
+  `cuentas` y `usuarios` de Supabase. Tres roles: el `superadmin` es Uplevel y
+  ve todas las cuentas; el `admin` ve toda su empresa; el `comercial` solo su
+  territorio (regiones, o comunas si hay que partir la Metropolitana entre dos
+  personas).
+
+**Nadie tiene contraseña**, y eso cambia qué significa «desbloquear». Se entra
+por correo, así que «se me olvidó la clave» no existe. Los bloqueos reales son
+otros: una empresa que desactivó a su único `admin` y desde adentro no tiene
+salida, o un correo mal escrito que deja a alguien afuera sin ningún mensaje
+que lo explique. Eso lo arregla la pestaña **🛟 Soporte**, que solo le aparece
+al `superadmin` y deja huella en `bitacora_soporte` — el soporte puede entrar a
+los datos de cualquier cliente y ese poder sin registro no se le puede explicar
+a nadie. La regla `dejaria_sin_admin()` impide que la herramienta que existe
+para sacar de un bloqueo pueda meter en uno.
 
 Mientras la puerta sea la lista de Streamlit, **agregar un comercial son dos
 pasos**: en la pestaña «Mi equipo» y en esa lista. Para vender el plan Empresa
