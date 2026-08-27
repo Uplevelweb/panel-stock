@@ -4278,8 +4278,8 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
-    pestana_mp, pestana_region, pestana_op = st.tabs(
-        ["🏛️ Mercado Público", "🧾 Módulo Cotizador", "🎯 Oportunidades"])
+    pestana_mp, pestana_region, pestana_op, pestana_al = st.tabs(
+        ["🏛️ Mercado Público", "🧾 Módulo Cotizador", "🎯 Oportunidades", "🔔 Alertas"])
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:
@@ -4289,6 +4289,12 @@ def main() -> None:
         # un error suyo no puede tumbar el cotizador, que es el trabajo diario.
         from modulo_oportunidades import seccion_oportunidades
         seccion_oportunidades()
+    with pestana_al:
+        # Igual que la anterior: en su propio archivo, y ademas importa
+        # `alertador.py` para que la vista previa use las mismas reglas que
+        # el correo de verdad y no una copia que se puede desalinear.
+        from modulo_alertas import seccion_alertas
+        seccion_alertas()
 
 
 if __name__ == "__main__":
