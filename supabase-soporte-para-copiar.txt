@@ -135,7 +135,7 @@ where c.plan <> 'soporte'
 --  La comprobacion. Esto es lo que vas a ver abajo al apretar Run.
 -- ---------------------------------------------------------------------
 --  Tiene que salir `webuplevel@gmail.com` con rol «superadmin» y empresa
---  «Uplevel (soporte)», y tus otros dos correos como «admin» de Comercial
+--  «Uplevel Web SpA», y tus otros dos correos como «admin» de Comercial
 --  Emergenza.
 select c.nombre as empresa,
        u.email,
