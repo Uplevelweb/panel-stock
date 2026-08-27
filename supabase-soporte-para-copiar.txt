@@ -1,0 +1,135 @@
+-- =====================================================================
+--  SUPABASE — el rol de soporte de Uplevel (superadmin)
+-- =====================================================================
+--
+--  COMO SE USA
+--  -----------
+--  1. Abre este enlace, que te deja en un editor SQL en blanco:
+--     https://supabase.com/dashboard/project/nvjmgpmvhrodirykoirq/sql/new
+--  2. Selecciona TODO este archivo (Ctrl+A), copialo y pegalo ahi.
+--  3. Aprieta  Run  (abajo a la derecha, o Ctrl+Enter).
+--
+--  Se pega entero sin mirar: todas las lineas son SQL o comentarios de SQL.
+--  Al final te muestra una tabla con las cuentas y sus usuarios.
+--
+--  OJO: primero hay que haber corrido `supabase-cuentas-para-copiar.txt`.
+--  Este archivo le agrega cosas a las tablas que aquel creo.
+--
+--
+--  PARA QUE ES
+--  -----------
+--  Para que Uplevel pueda entrar a arreglar la cuenta de un cliente cuando
+--  el cliente se bloquea solo y no puede salir de ahi.
+--
+--  ACLARACION QUE IMPORTA: aca nadie tiene clave. Se entra por correo, no
+--  por contraseña, asi que «se me olvido la clave» no existe como problema.
+--  Lo que si pasa, y hasta hoy no tenia arreglo:
+--
+--     - El cliente desactiva por error a su unico admin. Esa empresa queda
+--       sin nadie que pueda administrarla, y desde adentro no hay salida.
+--     - Le escriben mal el correo a un vendedor. Esa persona no entra nunca
+--       y no aparece ningun mensaje que explique por que.
+--     - Hay que dar de baja o reactivar una cuenta entera.
+--
+--
+--  TRES ROLES AHORA
+--  ----------------
+--     superadmin   Uplevel. Ve TODAS las cuentas y puede desbloquear.
+--     admin        el dueño de una cuenta. Ve solo su empresa.
+--     comercial    ve solo su territorio.
+--
+--
+--  POR QUE HAY UNA BITACORA
+--  ------------------------
+--  Porque el superadmin puede entrar a los datos de cualquier cliente, y un
+--  poder asi sin registro no se le puede explicar a nadie. La Ley 21.719
+--  entra en vigencia el 1 de diciembre de 2026 y lo primero que se pregunta
+--  ante un reclamo es quien toco que y cuando. La bitacora es una tabla y
+--  una linea de codigo; no tenerla es lo caro.
+-- =====================================================================
+
+
+-- ---------------------------------------------------------------------
+--  1. Permitir el rol nuevo
+-- ---------------------------------------------------------------------
+--  El `check` que se creo con la tabla solo aceptaba 'admin' y 'comercial'.
+--  Se reemplaza por uno que ademas acepte 'superadmin'. El nombre
+--  `usuarios_rol_check` es el que Postgres le pone solo a ese check.
+alter table usuarios drop constraint if exists usuarios_rol_check;
+
+alter table usuarios add constraint usuarios_rol_check
+  check (rol in ('admin', 'comercial', 'superadmin'));
+
+
+-- ---------------------------------------------------------------------
+--  2. La bitacora de soporte
+-- ---------------------------------------------------------------------
+create table if not exists bitacora_soporte (
+  id          bigserial primary key,
+  cuando      timestamptz not null default now(),
+  quien       text not null,        -- el correo del superadmin que lo hizo
+  accion      text not null,        -- 'reactivar', 'corregir correo', ...
+  sobre_email text,                 -- a quien se lo hizo
+  cuenta      text,                 -- de que empresa era
+  detalle     text
+);
+
+create index if not exists bitacora_por_fecha on bitacora_soporte (cuando desc);
+
+alter table bitacora_soporte enable row level security;
+revoke all on table bitacora_soporte from anon;
+
+
+-- ---------------------------------------------------------------------
+--  3. La cuenta de Uplevel y su primer superadmin
+-- ---------------------------------------------------------------------
+--  Uplevel no es un cliente: es quien provee el sistema. Por eso va en su
+--  propia cuenta y no metida dentro de la de Emergenza. Cuando haya cinco
+--  clientes, un soporte viviendo dentro de la cuenta del cliente numero uno
+--  no tendria ningun sentido.
+--
+--  El RUT dice 'UPLEVEL' y no un numero porque no me lo diste y prefiero no
+--  inventarlo. Cuando quieras poner el de verdad:
+--     update cuentas set rut = '76.543.210-9' where rut = 'UPLEVEL';
+insert into cuentas (rut, nombre)
+values ('UPLEVEL', 'Uplevel (soporte)')
+on conflict (rut) do nothing;
+
+--  `webuplevel@gmail.com` pasa a ser el soporte, y se mueve a la cuenta de
+--  Uplevel. Tus otros dos correos siguen siendo admin de Emergenza, que es
+--  como corresponde: ahi trabajas como KAM, no como proveedora del sistema.
+update usuarios
+set cuenta_id = (select id from cuentas where rut = 'UPLEVEL'),
+    rol       = 'superadmin'
+where email = 'webuplevel@gmail.com';
+
+
+-- ---------------------------------------------------------------------
+--  4. Una red de seguridad: que nunca haya una cuenta sin admin
+-- ---------------------------------------------------------------------
+--  Esta vista no cambia nada, solo avisa. Sirve para mirarla de vez en
+--  cuando, o desde la pantalla de soporte, y ver si alguna empresa se quedo
+--  sin nadie que pueda administrarla.
+create or replace view cuentas_sin_admin as
+select c.id, c.rut, c.nombre, c.activa
+from cuentas c
+where c.rut <> 'UPLEVEL'
+  and not exists (
+    select 1 from usuarios u
+    where u.cuenta_id = c.id and u.rol = 'admin' and u.activo
+  );
+
+
+-- ---------------------------------------------------------------------
+--  La comprobacion. Esto es lo que vas a ver abajo al apretar Run.
+-- ---------------------------------------------------------------------
+--  Tiene que salir `webuplevel@gmail.com` con rol «superadmin» y empresa
+--  «Uplevel (soporte)», y tus otros dos correos como «admin» de Comercial
+--  Emergenza.
+select c.nombre as empresa,
+       u.email,
+       u.rol,
+       u.activo
+from usuarios u
+join cuentas c on c.id = u.cuenta_id
+order by (u.rol = 'superadmin') desc, c.nombre, u.rol, u.email;
