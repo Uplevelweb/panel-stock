@@ -575,12 +575,23 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
 
         # Que palabras de la bolsa toca cada linea. Se calcula una vez y sirve
         # tanto para filtrar como para saber en que rubro cae el gasto.
+        #
+        # 27-08-2026: se exige el MISMO minimo que para avisar, no una palabra
+        # suelta. Con una sola, la bolsa de 100 terminos que sale del RUT de
+        # Emergenza —donde hay «agua», «blanca», «chile», «barra»— hacia entrar
+        # factor antihemofilico, 90 camionetas y la normalizacion de un
+        # hospital. Medido sobre mayo-agosto 2026: $572.293 M con una palabra
+        # contra $51.081 M con tres. Once veces inflado, y era el numero de
+        # «CUANTO COMPRA en tus rubros» del correo: exactamente el humo que la
+        # tarjeta se diseño para no vender.
+        minimo = minimo_coincidencias(bolsa)
         tocadas = mes["producto"].astype(str).map(lambda x: palabras(x) & bolsa)
-        mes = mes[tocadas.map(bool)]
+        suficientes = tocadas.map(len) >= minimo
+        mes = mes[suficientes]
         if mes.empty:
-            del mes, tocadas
+            del mes, tocadas, suficientes
             continue
-        tocadas = tocadas[tocadas.map(bool)]
+        tocadas = tocadas[suficientes]
         mes["total"] = pd.to_numeric(mes["total"], errors="coerce").fillna(0.0)
 
         for (u, m), monto in mes.groupby(["unidad", "mecanismo"], observed=True)["total"].sum().items():
@@ -593,7 +604,7 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
             rubro.setdefault(unidad, {})
             for palabra in terminos:
                 rubro[unidad][palabra] = rubro[unidad].get(palabra, 0.0) + reparto
-        del mes, tocadas
+        del mes, tocadas, suficientes
 
     salida = {}
     for u in unidades:
