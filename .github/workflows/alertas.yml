@@ -1,0 +1,96 @@
+# Manda el correo diario de oportunidades.
+#
+# TRES TURNOS, y cada suscriptor elige el suyo al configurarse (8, 13 o 18).
+# Cada corrida manda solo a los de ese turno: eso es lo que hace `--hora`.
+#
+# La primera corrida del dia va despues de que el bodeguero de las 02:00 y el
+# licitador de las 07:00 dejaron la bodega al dia. El orden importa: el correo
+# enriquece cada oportunidad con lo que la bodega sabe del comprador, asi que
+# si corre antes, sale con datos viejos.
+#
+# OJO CON LA HORA: el cron de GitHub es SIEMPRE en UTC y no sabe de horario de
+# verano. Las horas de abajo estan calculadas con Chile en UTC-4, que es lo que
+# rige de abril a septiembre. En verano (UTC-3) el correo sale una hora mas
+# tarde de lo que dice el turno. Los otros dos workflows tienen lo mismo.
+#
+# ESTE WORKFLOW NO ESCRIBE NADA EN EL REPOSITORIO. El repositorio es publico y
+# aca se manejan correos de suscriptores: todo eso vive en Supabase. Por lo
+# mismo no lleva `permissions: contents: write`.
+#
+# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+
+name: Correo diario de oportunidades
+
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"    # turno de las 08:00 en Chile
+    - cron: "0 17 * * 1-5"    # turno de las 13:00
+    - cron: "0 22 * * 1-5"    # turno de las 18:00
+  workflow_dispatch:
+    inputs:
+      ensayo:
+        description: "Armar el correo pero NO enviarlo (para probar)"
+        required: false
+        type: boolean
+        default: true
+      hora:
+        description: "Turno al que mandar. Vacio = a todos"
+        required: false
+        type: choice
+        options: ["", "8", "13", "18"]
+        default: ""
+
+jobs:
+  alertas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow
+
+      - name: Armar y enviar el correo
+        env:
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          # De que turno es esta corrida. `github.event.schedule` trae el cron
+          # que la disparo, asi que no hay que adivinar la hora ni pelear con
+          # el horario de verano dentro del script.
+          case "${{ github.event.schedule }}" in
+            "0 12 * * 1-5") TURNO="--hora 8"  ;;
+            "0 17 * * 1-5") TURNO="--hora 13" ;;
+            "0 22 * * 1-5") TURNO="--hora 18" ;;
+            *)              TURNO=""          ;;   # disparado a mano
+          esac
+          # Si se dispara a mano y se eligio turno, ese manda.
+          if [ -n "${{ github.event.inputs.hora }}" ]; then
+            TURNO="--hora ${{ github.event.inputs.hora }}"
+          fi
+          echo "Turno: ${TURNO:-todos}"
+
+          if [ "${{ github.event.inputs.ensayo }}" = "false" ]; then
+            python alertador.py --enviar $TURNO
+          else
+            python alertador.py --guardar correo.html $TURNO
+          fi
+
+      # Solo en el ensayo: deja el correo para poder mirarlo. Se borra a los
+      # 3 dias. NUNCA se sube al repositorio.
+      - name: Guardar el correo de ensayo
+        if: ${{ github.event.inputs.ensayo != 'false' && hashFiles('correo.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: correo-de-ensayo
+          path: correo.html
+          retention-days: 3
