@@ -86,8 +86,6 @@ ESPERA_V1 = 2.0
 # el tope se respeta desde aca y no se descubre a mitad de la tanda.
 TOPE_DIARIO = 100
 MAXIMO_POR_CORREO = 15
-MINIMO_COINCIDENCIAS = 3  # una o dos palabras sueltas en comun son casualidad
-
 # La paleta es la de uplevelweb.art, no la del documento de cierre: ahi quedo
 # anotada una que el sitio no usa.
 MARINO = "#0c2c57"
@@ -145,6 +143,30 @@ def plata(monto) -> str:
     if n >= 1_000_000:
         return f"${n/1_000_000:,.0f}".replace(",", ".") + " M"
     return "$" + f"{n:,.0f}".replace(",", ".")
+
+
+def minimo_coincidencias(bolsa: set[str]) -> int:
+    """
+    Cuantas palabras tienen que coincidir para que valga la pena avisar.
+
+    NO ES UN NUMERO FIJO, y el 27-08-2026 se aprendio por que. Estaba en 3
+    para todos, calibrado con el RUT: de ahi salen ~87 terminos sacados
+    automaticamente de lo que ese proveedor vendio, muchos de relleno, y
+    exigir 3 filtra bien el ruido.
+
+    Pero con palabras escritas a mano el mismo 3 mata todo: dos suscriptoras
+    con 5 y 6 palabras se quedaron en 3 y 5 terminos utiles, y para pasar el
+    corte habrian necesitado que casi TODAS sus palabras aparecieran en la
+    misma licitacion. Cero correos, dos dias seguidos, sin ningun error.
+
+    La diferencia de fondo: una palabra que alguien se tomo el trabajo de
+    escribir vale mucho mas que una sacada a la fuerza de un catalogo.
+    """
+    if len(bolsa) <= 10:
+        return 1
+    if len(bolsa) <= 30:
+        return 2
+    return 3
 
 
 # ======================================================================
@@ -330,7 +352,11 @@ def quitar_palabras_de_todos(bolsa: set[str], universo: list[dict], techo: float
     licitaciones, asi que hacen coincidir cosas que no tienen nada que ver.
     Una palabra que sale en mas del 12% de lo publicado no distingue nada.
     """
-    if not universo:
+    # Con una bolsa chica hay que dejarla entera: si alguien escribio cinco
+    # palabras, esas cinco son las que le importan. Sacarle las «comunes»
+    # —que es lo correcto con una bolsa de 87 sacada del RUT— aca la deja en
+    # nada. A una suscriptora le quitaba la mitad.
+    if not universo or len(bolsa) <= 15:
         return bolsa
     veces: dict[str, int] = {}
     for op in universo:
@@ -1035,7 +1061,8 @@ def main():
 
         # Las palabras que estan en todas partes no distinguen: fuera.
         bolsa = quitar_palabras_de_todos(bolsa, universo)
-        print(f"   quedan {len(bolsa)} terminos que de verdad distinguen")
+        minimo = minimo_coincidencias(bolsa)
+        print(f"   quedan {len(bolsa)} terminos · hacen falta {minimo} coincidencia(s)")
 
         vistos = ya_avisado(suscriptor)
         if vistos:
@@ -1046,8 +1073,7 @@ def main():
             if op["codigo"] in vistos:
                 continue
             encaje = le_sirve(op, bolsa, suscriptor)
-            # Una sola palabra en comun es casualidad; dos ya es un tema.
-            if encaje < MINIMO_COINCIDENCIAS:
+            if encaje < minimo:
                 continue
             retrato = retrato_del_comprador(op.get("unidad"), oc, convenios)
             valor, clase = nota(retrato)

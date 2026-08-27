@@ -318,11 +318,12 @@ def seccion_alertas():
         else:
             universo = licitaciones_recientes(sello)
             bolsa = alertador.quitar_palabras_de_todos(bolsa, universo)
+            minimo = alertador.minimo_coincidencias(bolsa)
 
             elegidas = []
             for op in universo:
                 encaje = alertador.le_sirve(op, bolsa, config)
-                if encaje < alertador.MINIMO_COINCIDENCIAS:
+                if encaje < minimo:
                     continue
                 retrato = alertador.retrato_del_comprador(op.get("unidad"), oc, convenios)
                 valor, clase = alertador.nota(retrato)
@@ -473,10 +474,11 @@ def enviar_ahora(config: dict, oc, aviso=None) -> tuple[bool, str]:
         return False, "Hoy no se publicó nada. Mañana a primera hora se revisa de nuevo."
 
     bolsa = alertador.quitar_palabras_de_todos(bolsa, universo)
+    minimo = alertador.minimo_coincidencias(bolsa)
     elegidas = []
     for op in universo:
         encaje = alertador.le_sirve(op, bolsa, config)
-        if encaje < alertador.MINIMO_COINCIDENCIAS:
+        if encaje < minimo:
             continue
         retrato = alertador.retrato_del_comprador(op.get("unidad"), oc, convenios)
         valor, clase = alertador.nota(retrato)
