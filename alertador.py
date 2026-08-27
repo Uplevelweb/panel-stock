@@ -518,34 +518,40 @@ VIAS = {
 }
 
 
-def compras_por_via(unidades: set[str], bolsa: set[str], meses: int = 12) -> dict:
+def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
+                            meses: int = 12) -> dict:
     """
-    Cuanto compro cada unidad EN LOS RUBROS DEL SUSCRIPTOR, repartido por via.
+    Todo lo que la bodega sabe de esos compradores, EN LOS RUBROS del
+    suscriptor: cuanto compran, por que via, y quienes se lo estan llevando.
 
-    Una pasada por los archivos, no una por oportunidad: se filtra a las ~15
-    unidades del correo y solo de esas se mira el producto.
+    Una sola pasada por los archivos para las ~15 oportunidades del correo.
+    Leer `producto` es lo caro —570 MB sobre la bodega entera— asi que se
+    hace una vez y se saca todo de ahi.
 
-    POR QUE «EN SUS RUBROS» Y NO EL TOTAL: una municipalidad puede mover
-    $900 M al año, pero ahi adentro va combustible, asfalto y ambulancias.
-    Mostrarle ese numero a un proveedor de alimentos es venderle humo: cuando
-    descubra que en alimentos son $50 M se siente engañado, con razon.
+    POR QUE «EN SUS RUBROS» Y NO EL TOTAL DEL COMPRADOR: una municipalidad
+    mueve $900 M al año, pero ahi adentro va combustible, asfalto y
+    ambulancias. Mostrarle ese numero a un proveedor de alimentos es venderle
+    humo: cuando descubra que en alimentos son $50 M se siente engañado.
 
-    POR QUE EL DESGLOSE POR VIA: le dice COMO venderle a ese comprador. Quien
-    mueve el 70% por compra agil se define en 48 horas y hay que estar rapido;
-    quien mueve el 60% por licitacion hay que prepararlo con anticipacion.
+    Devuelve, por unidad:
+      via         {mecanismo: monto}   como compra
+      proveedores [(nombre, monto)]    quienes se lo llevan hoy, de mayor a menor
+      rubro       {palabra: monto}     en que se le va la plata dentro del rubro
+      total       float
     """
-    vacio: dict = {}
     if not unidades or not bolsa or not BODEGA_OC.exists():
-        return vacio
+        return {}
 
     corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
-    acumulado: dict[str, dict[str, float]] = {u: {} for u in unidades}
+    via: dict[str, dict[str, float]] = {}
+    prov: dict[str, dict[str, float]] = {}
+    rubro: dict[str, dict[str, float]] = {}
 
     for archivo in sorted(BODEGA_OC.glob("*.parquet")):
         if archivo.stem < corte:
             continue
         try:
-            mes = pd.read_parquet(archivo, columns=["unidad", "mecanismo",
+            mes = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor",
                                                     "producto", "total"])
         except Exception:
             continue
@@ -553,16 +559,40 @@ def compras_por_via(unidades: set[str], bolsa: set[str], meses: int = 12) -> dic
         if mes.empty:
             del mes
             continue
-        # Solo las lineas cuyo producto se parece a lo que el suscriptor vende.
-        suyas = mes[mes["producto"].astype(str).map(
-            lambda x: bool(palabras(x) & bolsa))]
-        for (u, via), monto in suyas.groupby(
-                ["unidad", "mecanismo"], observed=True)["total"].sum().items():
-            acumulado.setdefault(str(u), {})
-            acumulado[str(u)][str(via)] = acumulado[str(u)].get(str(via), 0.0) + float(monto)
-        del mes, suyas
 
-    return acumulado
+        # Que palabras de la bolsa toca cada linea. Se calcula una vez y sirve
+        # tanto para filtrar como para saber en que rubro cae el gasto.
+        tocadas = mes["producto"].astype(str).map(lambda x: palabras(x) & bolsa)
+        mes = mes[tocadas.map(bool)]
+        if mes.empty:
+            del mes, tocadas
+            continue
+        tocadas = tocadas[tocadas.map(bool)]
+        mes["total"] = pd.to_numeric(mes["total"], errors="coerce").fillna(0.0)
+
+        for (u, m), monto in mes.groupby(["unidad", "mecanismo"], observed=True)["total"].sum().items():
+            via.setdefault(str(u), {})[str(m)] = via.get(str(u), {}).get(str(m), 0.0) + float(monto)
+        for (u, pr), monto in mes.groupby(["unidad", "proveedor"], observed=True)["total"].sum().items():
+            prov.setdefault(str(u), {})
+            prov[str(u)][str(pr)] = prov[str(u)].get(str(pr), 0.0) + float(monto)
+        for unidad, terminos, monto in zip(mes["unidad"].astype(str), tocadas, mes["total"]):
+            reparto = float(monto) / max(len(terminos), 1)
+            rubro.setdefault(unidad, {})
+            for palabra in terminos:
+                rubro[unidad][palabra] = rubro[unidad].get(palabra, 0.0) + reparto
+        del mes, tocadas
+
+    salida = {}
+    for u in unidades:
+        u = str(u)
+        proveedores = sorted(prov.get(u, {}).items(), key=lambda x: -x[1])
+        salida[u] = {
+            "via": via.get(u, {}),
+            "proveedores": proveedores[:10],
+            "rubro": dict(sorted(rubro.get(u, {}).items(), key=lambda x: -x[1])[:6]),
+            "total": sum(via.get(u, {}).values()),
+        }
+    return salida
 
 
 def retrato_del_comprador(unidad: str, oc: pd.DataFrame, convenios: list[str]) -> dict:
@@ -978,49 +1008,98 @@ def tarjeta(op: dict) -> str:
     donde = " · ".join(x for x in (op.get("nombre_unidad") or op.get("organismo"),
                                    op.get("comuna") or op.get("region")) if x)
 
-    # El desglose por via es lo que ningun competidor pone, asi que va primero
-    # y con el reparto a la vista: no es lo mismo un comprador que mueve todo
-    # por compra agil —donde se define en 48 horas— que uno de licitaciones.
-    por_via = op.get("por_via") or {}
-    total_vias = sum(por_via.values())
+    # ------------------------------------------------------------------
+    #  LO QUE LA BODEGA SABE DE ESTE COMPRADOR
+    # ------------------------------------------------------------------
+    # Tres bloques separados por lineas, no un parrafo corrido: el ojo salta
+    # de uno a otro y cada uno responde una pregunta distinta.
+    #
+    #   cuanto    ¿vale la pena?          el monto en SUS rubros
+    #   como      ¿como le vendo?         el reparto por via de compra
+    #   quien     ¿contra quien compito?  los proveedores de hoy
+    radio = op.get("radiografia") or {}
+    via, total_vias = radio.get("via") or {}, radio.get("total") or 0.0
+    proveedores = radio.get("proveedores") or []
+    detalle_rubro = radio.get("rubro") or {}
+
+    def barra(monto, tope):
+        """Una barra de fondo, con tablas: los <div> de ancho % fallan en Outlook."""
+        ancho = max(2, int(monto / tope * 100)) if tope else 2
+        return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+                f'<tr><td width="{ancho}%" style="background:{NARANJO};height:4px;'
+                f'font-size:0;line-height:0;border-radius:2px;">&nbsp;</td>'
+                f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>')
+
+    def seccion(titulo, cuerpo):
+        return (f'<tr><td style="padding:11px 0 3px;border-top:1px solid {BORDE};">'
+                f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;font-weight:700;'
+                f'letter-spacing:.09em;text-transform:uppercase;margin-bottom:6px;">'
+                f'{titulo}</div>{cuerpo}</td></tr>')
+
+    bloques = []
 
     if total_vias > 0:
+        # CUANTO — y en que, dentro de sus rubros
+        cuanto = (f'<div style="color:{MARINO};font-size:21px;font-weight:700;'
+                  f'line-height:1.1;">{plata(total_vias)}</div>'
+                  f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:2px;">'
+                  f'en lo que tú vendes · últimos 12 meses</div>')
+        if detalle_rubro:
+            trozos = [f'{p} {plata(m)}' for p, m in list(detalle_rubro.items())[:4]]
+            cuanto += (f'<div style="color:{TEXTO};font-size:12px;margin-top:7px;'
+                       f'line-height:1.7;">' + ' · '.join(trozos) + '</div>')
+        bloques.append(seccion("Cuánto compra", cuanto))
+
+        # COMO — el reparto por via, con barra
+        tope = max(via.values())
         filas = []
-        for via, monto in sorted(por_via.items(), key=lambda x: -x[1]):
+        for mecanismo, monto in sorted(via.items(), key=lambda x: -x[1]):
             if monto <= 0:
                 continue
             filas.append(
                 f'<tr>'
-                f'<td style="padding:2px 0;color:{TEXTO_SUAVE};font-size:12.5px;">'
-                f'{VIAS.get(via, via)}</td>'
-                f'<td align="right" style="padding:2px 0;color:{TEXTO};font-size:12.5px;'
-                f'font-weight:600;">{plata(monto)}</td>'
-                f'<td align="right" style="padding:2px 0 2px 10px;color:{NARANJO};'
-                f'font-size:12.5px;font-weight:700;">{monto/total_vias*100:.0f}%</td>'
+                f'<td width="42%" style="padding:3px 0;color:{TEXTO};font-size:12.5px;">'
+                f'{VIAS.get(mecanismo, mecanismo)}</td>'
+                f'<td width="34%" style="padding:3px 8px;">{barra(monto, tope)}</td>'
+                f'<td align="right" style="padding:3px 0;color:{TEXTO};font-size:12.5px;'
+                f'font-weight:600;white-space:nowrap;">{plata(monto)}'
+                f'<span style="color:{NARANJO};"> {monto/total_vias*100:.0f}%</span></td>'
                 f'</tr>')
-        detalle = (
-            f'<div style="font-size:13px;color:{TEXTO};margin-bottom:6px;">'
-            f'Compró <strong>{plata(total_vias)}</strong> en lo que tú vendes '
-            f'<span style="color:{TEXTO_SUAVE};">· últimos 12 meses</span></div>'
-            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-            + "".join(filas) + '</table>'
-        )
-        if retrato["lider"]:
-            detalle += (
-                f'<div style="margin-top:8px;padding-top:8px;'
-                f'border-top:1px solid {BORDE};color:{TEXTO};font-size:13px;">'
-                f'Hoy se lo lleva <strong>{retrato["lider"][:38]}</strong> '
-                f'con el {retrato["share"]:.0f}% · {retrato["n_proveedores"]} '
-                f'proveedores distintos</div>')
-    elif retrato["gasto"] > 0:
-        detalle = (
-            f'Compra en tus rubros: <strong>{plata(retrato["gasto"])}</strong><br>'
-            f'Hoy se lo lleva: {retrato["lider"][:40]} ({retrato["share"]:.0f}%)<br>'
-            f'Proveedores distintos: {retrato["n_proveedores"]}'
-        )
-    else:
-        detalle = ("Este comprador no aparece comprando lo que tú vendes. "
-                   "Es terreno nuevo.")
+        bloques.append(seccion(
+            "Cómo compra",
+            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+            + "".join(filas) + '</table>'))
+
+    if proveedores:
+        # QUIEN — contra quien compite, hasta 10
+        suma = sum(m for _, m in proveedores) or 1
+        filas = []
+        for i, (nombre, monto) in enumerate(proveedores, 1):
+            destacado = "700" if i == 1 else "400"
+            filas.append(
+                f'<tr>'
+                f'<td width="16" valign="top" style="padding:3px 0;color:{TEXTO_SUAVE};'
+                f'font-size:11.5px;">{i}.</td>'
+                f'<td style="padding:3px 0;color:{TEXTO};font-size:12.5px;'
+                f'font-weight:{destacado};">{nombre[:40]}</td>'
+                f'<td align="right" style="padding:3px 0;color:{TEXTO_SUAVE};'
+                f'font-size:12.5px;white-space:nowrap;">{plata(monto)} '
+                f'<span style="color:{NARANJO};font-weight:600;">'
+                f'{monto/suma*100:.0f}%</span></td>'
+                f'</tr>')
+        bloques.append(seccion(
+            f"Quién se lo lleva hoy · {len(proveedores)} proveedores",
+            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+            + "".join(filas) + '</table>'))
+
+    if not bloques:
+        bloques.append(seccion(
+            "Este comprador",
+            f'<div style="color:{TEXTO_SUAVE};font-size:12.5px;">No aparece '
+            f'comprando lo que tú vendes en los últimos 12 meses. Es terreno nuevo.</div>'))
+
+    detalle = ('<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+               + "".join(bloques) + '</table>')
 
     monto = f"<br>Monto disponible: <strong>{plata(op['monto'])}</strong>" if op.get("monto") else ""
 
@@ -1073,12 +1152,7 @@ def tarjeta(op: dict) -> str:
             {donde} · cierra {op['cierre'] or 'sin fecha'}
           </div>
 {aviso_visita}
-          <table width="100%" cellpadding="0" cellspacing="0" border="0"
-                 style="background:{FONDO};border-radius:4px;">
-            <tr><td style="padding:10px 12px;color:{TEXTO};font-size:13px;line-height:1.6;">
-              {detalle}{monto}
-            </td></tr>
-          </table>
+          {detalle}{monto}
           <a href="{op['enlace']}"
              style="display:inline-block;margin-top:14px;padding:9px 18px;background:{MARINO};
                     color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;border-radius:5px;">
@@ -1357,9 +1431,9 @@ def main():
         # posible.
         if elegidas:
             unidades = {str(o.get("unidad")) for o in elegidas if o.get("unidad")}
-            desglose = compras_por_via(unidades, bolsa)
+            radiografia = radiografia_de_unidades(unidades, bolsa)
             for o in elegidas:
-                o["por_via"] = desglose.get(str(o.get("unidad")), {})
+                o["radiografia"] = radiografia.get(str(o.get("unidad")), {})
 
         if not elegidas:
             print("   nada que coincida hoy. No se envia.")
