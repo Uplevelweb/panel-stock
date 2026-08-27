@@ -6,14 +6,27 @@ Es la «fase TERRITORIO» que la spec original dejó fuera del MVP, y es lo que
 habilita el plan Empresa: un RUT es una cuenta, el admin de esa cuenta crea a
 sus comerciales y a cada uno le asigna su territorio.
 
-DOS ROLES Y NADA MAS
---------------------
-    admin      ve toda su empresa y administra a los demas
-    comercial  ve solo su territorio
+TRES ROLES Y NADA MAS
+---------------------
+    superadmin  Uplevel. Ve TODAS las cuentas y desbloquea clientes
+    admin       ve toda su empresa y administra a los demas
+    comercial   ve solo su territorio
 
 Se resistio la tentacion de inventar mas —«supervisor», «solo lectura»—
-porque ninguno lo pidio nadie y cada rol nuevo es una regla mas que revisar
-en cada pantalla.
+porque no los pidio nadie y cada rol nuevo es una regla mas que revisar en
+cada pantalla.
+
+`superadmin` no esta en `ROLES` a proposito: es lo que un admin puede repartir
+dentro de su empresa, y un cliente no puede darse a si mismo la llave de las
+cuentas de los demas.
+
+NADIE TIENE CLAVE, Y ESO CAMBIA QUE SIGNIFICA «DESBLOQUEAR»
+-----------------------------------------------------------
+Se entra por correo, no por contraseña, asi que «se me olvido la clave» no
+existe. Los bloqueos de verdad son otros: una empresa que desactivo a su
+unico admin y desde adentro no tiene salida, o un correo mal escrito que deja
+a alguien afuera sin ningun mensaje que lo explique. Eso es lo que arregla
+`seccion_soporte`.
 
 LA REGLA QUE MAS IMPORTA: NUNCA DEJAR A NADIE AFUERA
 ----------------------------------------------------
@@ -52,7 +65,10 @@ import urllib.request
 import pandas as pd
 import streamlit as st
 
+# Los que un admin puede repartir dentro de su empresa. `superadmin` NO esta
+# aca a proposito: es de Uplevel y no se lo puede dar un cliente a si mismo.
 ROLES = ("admin", "comercial")
+ROLES_TODOS = ("superadmin", "admin", "comercial")
 
 # Lo que se devuelve cuando no hay a quien preguntarle: ve todo, como antes.
 SIN_RESTRICCION = {
@@ -176,7 +192,7 @@ def quien_soy() -> dict:
         "identificado": True,
         "email": email,
         "nombre": ficha.get("nombre") or "",
-        "rol": rol if rol in ROLES else "comercial",
+        "rol": rol if rol in ROLES_TODOS else "comercial",
         "cuenta_id": ficha.get("cuenta_id") or "",
         "empresa": empresa.get("nombre") or "",
         "rut": empresa.get("rut") or "",
@@ -189,13 +205,18 @@ def quien_soy() -> dict:
 # --------------------------------------------------------------------------
 #  El territorio
 # --------------------------------------------------------------------------
+def es_soporte(usuario: dict) -> bool:
+    """Si esta persona es de Uplevel y puede entrar a cualquier cuenta."""
+    return usuario.get("rol") == "superadmin"
+
+
 def tiene_territorio(usuario: dict) -> bool:
     """Si no se le asigno nada, ve toda la cuenta. Es a proposito.
 
     Una empresa con un solo vendedor no tiene por que configurar territorios
     para poder usar el panel.
     """
-    if usuario.get("rol") == "admin":
+    if usuario.get("rol") in ("admin", "superadmin"):
         return False
     return bool(usuario.get("regiones") or usuario.get("comunas"))
 
@@ -233,6 +254,8 @@ def filtrar_por_territorio(tabla: pd.DataFrame, usuario: dict,
 
 def resumen_de_territorio(usuario: dict) -> str:
     """Una linea para mostrar en pantalla qué está viendo esta persona."""
+    if es_soporte(usuario):
+        return "todas las cuentas (soporte Uplevel)"
     if usuario.get("rol") == "admin":
         return "toda la empresa"
     if usuario.get("comunas"):
@@ -270,9 +293,8 @@ def _guardar_usuario(cuenta_id: str, email: str, nombre: str, rol: str,
 
 
 def _cambiar_estado(email: str, activo: bool) -> bool:
-    filas = _pedir(f"usuarios?email=eq.{urllib.parse.quote(email)}", "PATCH",
-                   {"activo": activo}, extra={"Prefer": "return=representation"})
-    return filas is not None
+    """Prender o apagar el acceso de alguien. Ver `_cambiar_campo`, más abajo."""
+    return _cambiar_campo(email, "activo", activo)
 
 
 def seccion_equipo(usuario: dict, regiones_posibles: list[str],
@@ -394,3 +416,231 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
         "Quién puede abrir el panel lo sigue decidiendo la lista de Streamlit "
         "(*Manage app ▸ Settings ▸ Sharing*), así que a cada persona nueva hay "
         "que agregarla en los dos lugares.")
+
+
+# --------------------------------------------------------------------------
+#  Soporte de Uplevel — el rol que puede desbloquear a cualquiera
+# --------------------------------------------------------------------------
+#
+# ACLARACION QUE HAY QUE TENER PRESENTE: aca nadie tiene clave. Se entra por
+# correo, asi que «se me olvido la contraseña» no existe como problema y esta
+# pantalla no resetea ninguna. Lo que arregla es el bloqueo de verdad, que es
+# otro: una empresa que desactivo a su unico admin y desde adentro ya no tiene
+# como salir, o un correo mal escrito que deja a alguien afuera para siempre
+# sin ningun mensaje de error.
+#
+# LO QUE ESTA PANTALLA NO PUEDE HACER: dejar entrar a alguien que no esta en
+# la lista de Streamlit. Esa sigue siendo la puerta y se abre en otro lado.
+
+def _anotar(quien: str, accion: str, sobre: str = "", cuenta: str = "",
+            detalle: str = "") -> None:
+    """Deja la huella en `bitacora_soporte`.
+
+    Nunca interrumpe: si la bitacora fallara, es peor dejar al cliente
+    bloqueado que perder una linea de registro.
+    """
+    _pedir("bitacora_soporte", "POST", [{
+        "quien": quien, "accion": accion,
+        "sobre_email": sobre or None, "cuenta": cuenta or None,
+        "detalle": detalle or None,
+    }])
+
+
+def _todas_las_cuentas():
+    filas = _pedir("cuentas?select=id,rut,nombre,plan,activa&order=nombre")
+    return None if filas is None else pd.DataFrame(filas)
+
+
+def _todos_los_usuarios():
+    filas = _pedir("usuarios?select=email,nombre,rol,activo,cuenta_id,regiones,"
+                   "comunas&order=email")
+    return None if filas is None else pd.DataFrame(filas)
+
+
+def _cambiar_campo(email: str, campo: str, valor) -> bool:
+    """Cambia un campo de un usuario. True si quedo."""
+    filas = _pedir(f"usuarios?email=eq.{urllib.parse.quote(email)}", "PATCH",
+                   {campo: valor}, extra={"Prefer": "return=representation"})
+    return filas is not None
+
+
+def dejaria_sin_admin(usuarios: pd.DataFrame, email: str) -> bool:
+    """Si apagar a esta persona deja a su empresa sin ningún administrador.
+
+    LA REGLA VIVE ACA Y NO DENTRO DEL BOTON a proposito. Metida en la pantalla
+    no se puede probar sin abrir un navegador y apretarlo, que es justo lo que
+    nadie hace antes de entregar. Aca se prueba en una linea.
+
+    Y es la regla que mas importa de esta pantalla: seria absurdo que la
+    herramienta que existe para sacar a una empresa del bloqueo fuera capaz de
+    meterla en uno.
+    """
+    if usuarios.empty or "email" not in usuarios.columns:
+        return False
+    fila = usuarios[usuarios["email"] == email]
+    if fila.empty:
+        return False
+    fila = fila.iloc[0]
+    if fila.get("rol") != "admin" or not fila.get("activo"):
+        return False
+    hermanos = usuarios[(usuarios["cuenta_id"] == fila["cuenta_id"])
+                        & (usuarios["rol"] == "admin")
+                        & (usuarios["activo"])]
+    return len(hermanos) <= 1
+
+
+def seccion_soporte(usuario: dict) -> None:
+    """La pantalla de Uplevel para desbloquear clientes."""
+    st.subheader("Soporte Uplevel")
+
+    if not es_soporte(usuario):
+        st.warning("Esta pantalla es solo para el soporte de Uplevel.")
+        return
+
+    st.caption(
+        "Desde acá se desbloquean las cuentas de los clientes. **Nadie tiene "
+        "contraseña en este sistema** —se entra por correo—, así que acá no se "
+        "resetean claves: se reactiva a quien quedó desactivado, se corrige un "
+        "correo mal escrito y se le devuelve el rol de administrador a una "
+        "empresa que se quedó sin ninguno.")
+
+    cuentas = _todas_las_cuentas()
+    usuarios = _todos_los_usuarios()
+    if cuentas is None or usuarios is None:
+        st.error("No se pudo leer las cuentas. Si acabas de crear las tablas, "
+                 "revisa que hayas corrido también "
+                 "`supabase-soporte-para-copiar.txt`.")
+        return
+    if cuentas.empty or usuarios.empty:
+        st.caption("Todavía no hay cuentas ni usuarios que administrar.")
+        return
+
+    # ----------------------------------------------------------------------
+    #  Lo primero: las empresas que se quedaron sin administrador
+    # ----------------------------------------------------------------------
+    # Va arriba de todo porque es el UNICO problema que el cliente no puede
+    # resolver solo. Todo lo demas puede esperar; esto no.
+    con_admin = set(usuarios[(usuarios["rol"] == "admin")
+                             & (usuarios["activo"])]["cuenta_id"])
+    huerfanas = cuentas[(~cuentas["id"].isin(con_admin))
+                        & (cuentas["rut"] != "UPLEVEL")]
+    if len(huerfanas):
+        st.error(f"**{len(huerfanas)} cuenta(s) sin ningún administrador "
+                 "activo.** Esa empresa no puede administrarse a sí misma: "
+                 "hay que devolverle el rol a alguien desde acá.")
+        st.dataframe(huerfanas[["nombre", "rut", "activa"]],
+                     width="stretch", hide_index=True)
+    else:
+        st.success("Todas las cuentas tienen al menos un administrador activo.")
+
+    st.divider()
+    st.markdown("**Todas las cuentas**")
+
+    nombres = dict(zip(cuentas["id"], cuentas["nombre"]))
+    vista = usuarios.copy()
+    vista["empresa"] = vista["cuenta_id"].map(nombres).fillna("(sin cuenta)")
+    vista["estado"] = ["activo" if a else "DESACTIVADO" for a in vista["activo"]]
+    st.dataframe(
+        vista[["empresa", "email", "nombre", "rol", "estado"]],
+        width="stretch", hide_index=True, height=300,
+        column_config={
+            "empresa": st.column_config.TextColumn("Empresa", width="medium"),
+            "email": st.column_config.TextColumn("Correo", width="medium"),
+            "nombre": st.column_config.TextColumn("Nombre"),
+            "rol": st.column_config.TextColumn("Rol", width="small"),
+            "estado": st.column_config.TextColumn("Estado", width="small"),
+        })
+
+    st.divider()
+    st.markdown("**Desbloquear a una persona**")
+
+    a_quien = st.selectbox(
+        "¿A quién?", vista["email"].tolist(), key="sop_quien",
+        format_func=lambda e: (
+            f"{e} — {vista[vista['email'] == e]['empresa'].iloc[0]}"))
+    fila = vista[vista["email"] == a_quien].iloc[0]
+    st.caption(f"Hoy es **{fila['rol']}** de {fila['empresa']} y está "
+               f"**{fila['estado'].lower()}**.")
+
+    columna_a, columna_b, columna_c = st.columns(3)
+
+    # --- Reactivar o desactivar -------------------------------------------
+    with columna_a:
+        st.markdown("*Acceso*")
+        activo = bool(fila["activo"])
+        etiqueta = "Desactivar" if activo else "Reactivar"
+        if st.button(etiqueta, key="sop_estado", width="stretch"):
+            if activo and dejaria_sin_admin(usuarios, a_quien):
+                st.error("Es el único administrador activo de esa empresa. "
+                         "Primero deja a otra persona como administradora.")
+            elif _cambiar_campo(a_quien, "activo", not activo):
+                _anotar(usuario["email"], etiqueta.lower(), a_quien,
+                        str(fila["empresa"]))
+                _buscar_usuario.clear()
+                st.success(f"{a_quien}: {etiqueta.lower()} listo.")
+                st.rerun()
+            else:
+                st.error("No se pudo cambiar el estado.")
+
+    # --- Devolver el rol de administrador ---------------------------------
+    with columna_b:
+        st.markdown("*Rol*")
+        indice = ROLES.index(fila["rol"]) if fila["rol"] in ROLES else 1
+        nuevo_rol = st.selectbox("Dejarlo como", ROLES, index=indice,
+                                 key="sop_rol")
+        if st.button("Cambiar rol", key="sop_rol_boton", width="stretch"):
+            if fila["rol"] == "superadmin":
+                st.error("El soporte de Uplevel no se cambia desde acá.")
+            elif _cambiar_campo(a_quien, "rol", nuevo_rol):
+                _anotar(usuario["email"], "cambiar rol", a_quien,
+                        str(fila["empresa"]),
+                        f"{fila['rol']} pasa a {nuevo_rol}")
+                _buscar_usuario.clear()
+                st.success(f"{a_quien} quedó como {nuevo_rol}.")
+                st.rerun()
+            else:
+                st.error("No se pudo cambiar el rol.")
+
+    # --- Corregir el correo -----------------------------------------------
+    with columna_c:
+        st.markdown("*Correo mal escrito*")
+        correo_nuevo = st.text_input("Correo correcto", key="sop_correo",
+                                     placeholder=a_quien)
+        if st.button("Corregir", key="sop_correo_boton", width="stretch"):
+            limpio = str(correo_nuevo).strip().lower()
+            if "@" not in limpio or "." not in limpio.split("@")[-1]:
+                st.error("Ese correo no se entiende.")
+            elif limpio == a_quien:
+                st.info("Es el mismo correo que ya tenía.")
+            elif limpio in set(vista["email"]):
+                st.error("Ya hay alguien con ese correo.")
+            elif _cambiar_campo(a_quien, "email", limpio):
+                _anotar(usuario["email"], "corregir correo", a_quien,
+                        str(fila["empresa"]), f"{a_quien} pasa a {limpio}")
+                _buscar_usuario.clear()
+                st.success(f"Ahora entra como {limpio}. **Acuérdate de "
+                           "cambiarlo también en la lista de Streamlit.**")
+                st.rerun()
+            else:
+                st.error("No se pudo corregir el correo.")
+
+    # ----------------------------------------------------------------------
+    #  La bitacora
+    # ----------------------------------------------------------------------
+    st.divider()
+    with st.expander("Qué se ha tocado desde acá"):
+        st.caption(
+            "Todo lo que hace el soporte queda anotado. No es burocracia: el "
+            "soporte puede entrar a los datos de cualquier cliente, y ante un "
+            "reclamo lo primero que se pregunta es quién tocó qué y cuándo.")
+        registro = _pedir("bitacora_soporte?select=cuando,quien,accion,"
+                          "sobre_email,cuenta,detalle&order=cuando.desc&limit=100")
+        if registro is None:
+            st.warning("No se pudo leer la bitácora. ¿Corriste el SQL de soporte?")
+        elif not registro:
+            st.caption("Todavía no se ha hecho nada desde esta pantalla.")
+        else:
+            tabla = pd.DataFrame(registro)
+            tabla["cuando"] = (tabla["cuando"].astype(str)
+                               .str.replace("T", " ").str[:16])
+            st.dataframe(tabla, width="stretch", hide_index=True, height=280)
