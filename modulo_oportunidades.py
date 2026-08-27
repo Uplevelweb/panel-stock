@@ -88,11 +88,32 @@ def cargar_compras(sello: str) -> pd.DataFrame:
     Se leen cuatro columnas de 1,2 millones de filas en vez del parquet entero:
     la diferencia entre un par de segundos y media pantalla de espera.
     """
+    import pyarrow.parquet as pq
+
     partes = []
     for archivo in sorted((RUTA_BODEGA / "detalle").glob("*.parquet")):
-        partes.append(pd.read_parquet(
-            archivo, columns=["unidad", "mecanismo", "convenio_marco",
-                              "rut_proveedor", "proveedor", "total"]))
+        # SOLO LAS COLUMNAS QUE ESE ARCHIVO TIENE. Pedir una que no esta no
+        # deja un hueco: revienta la lectura del archivo entero y tumba la app
+        # con «Error running app». Pasa con `mecanismo`, que los parquet
+        # viejos —los de solo Convenio Marco— no traen.
+        try:
+            hay = set(pq.read_schema(archivo).names)
+        except Exception:
+            continue
+        pedidas = [c for c in ("unidad", "mecanismo", "convenio_marco",
+                               "rut_proveedor", "proveedor", "total")
+                   if c in hay]
+        if "unidad" not in pedidas or "total" not in pedidas:
+            continue
+        try:
+            trozo = pd.read_parquet(archivo, columns=pedidas)
+        except Exception:
+            continue
+        for columna, relleno in (("mecanismo", "CM"), ("convenio_marco", ""),
+                                 ("rut_proveedor", ""), ("proveedor", "")):
+            if columna not in trozo.columns:
+                trozo[columna] = relleno
+        partes.append(trozo)
     if not partes:
         return pd.DataFrame()
     tabla = pd.concat(partes, ignore_index=True)
