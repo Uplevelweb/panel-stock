@@ -64,56 +64,20 @@ def _sello() -> str:
         return "vacia"
 
 
-@st.cache_data(show_spinner="Abriendo la bodega…")
 def cargar_ordenes(sello: str) -> pd.DataFrame:
-    """
-    Las ordenes de compra con la columna `producto`, que es de donde salen las
-    palabras del RUT. `modulo_oportunidades` carga las mismas filas pero sin
-    esa columna, asi que no se puede reaprovechar su cache.
-    """
-    import pyarrow.parquet as pq
+    """La bodega, pedida a la UNICA cache que hay: la de `modulo_oportunidades`.
 
-    partes = []
-    for archivo in sorted((RUTA_BODEGA / "detalle").glob("*.parquet")):
-        # Sin «producto»: pesa 570 MB sobre la bodega completa y se usa solo
-        # para un rut a la vez. `alertador.productos_del_rut` lo lee aparte.
-        #
-        # SE PIDEN SOLO LAS COLUMNAS QUE ESE ARCHIVO TIENE. Pedir una que no
-        # esta no devuelve un hueco: hace fallar la lectura del archivo entero
-        # y, desde aca, tumba la app completa con «Error running app». Paso con
-        # `mecanismo`, que los parquet viejos —los que guardaban solo Convenio
-        # Marco— no traen. `alertador.cargar_ordenes` ya se habia arreglado
-        # asi; esta copia se quedo atras.
-        try:
-            hay = set(pq.read_schema(archivo).names)
-        except Exception:
-            continue
-        pedidas = [c for c in ("unidad", "mecanismo", "convenio_marco",
-                               "rut_proveedor", "proveedor", "total")
-                   if c in hay]
-        if "total" not in pedidas or "unidad" not in pedidas:
-            continue
-        try:
-            trozo = pd.read_parquet(archivo, columns=pedidas)
-        except Exception:
-            continue
-        if "mecanismo" not in trozo.columns:
-            trozo["mecanismo"] = "CM"     # los archivos viejos son solo Convenio Marco
-        if "convenio_marco" not in trozo.columns:
-            trozo["convenio_marco"] = ""
-        if "proveedor" not in trozo.columns:
-            trozo["proveedor"] = ""
-        if "rut_proveedor" not in trozo.columns:
-            trozo["rut_proveedor"] = ""
-        partes.append(trozo)
-    if not partes:
-        return pd.DataFrame()
-    tabla = pd.concat(partes, ignore_index=True)
-    tabla["unidad"] = tabla["unidad"].astype(str)
-    tabla["total"] = pd.to_numeric(tabla["total"], errors="coerce").fillna(0.0)
-    tabla["rut_limpio"] = tabla["rut_proveedor"].astype(str).map(alertador.solo_digitos_rut)
-    # Ver `comprimir_textos` en alertador.py: de 198 MB a 71 MB.
-    return alertador.comprimir_textos(tabla)
+    Aca habia una segunda `@st.cache_data` que leia exactamente las mismas
+    filas. Como `st.tabs` dibuja todas las pestañas en cada corrida, las dos se
+    llenaban siempre —esta ni siquiera espera a que alguien abra «Alertas»— y
+    con la bodega de las seis vias eso pasaba el techo de memoria de Streamlit:
+    la app publicada murio sin dejar traceback el 27-08-2026.
+
+    Se importa aca adentro y no arriba para no arrastrar `modulo_mercado` y
+    `modulo_visitas` cada vez que alguien importe este archivo.
+    """
+    from modulo_oportunidades import cargar_compras
+    return cargar_compras(sello)
 
 
 @st.cache_data(show_spinner=False)
