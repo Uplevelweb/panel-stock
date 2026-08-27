@@ -4336,9 +4336,19 @@ def main() -> None:
     # COLUMNAS, no por su posicion. `app.dataframe[-1]` ya se rompio una vez asi.
     # «Mi equipo» va AL FINAL a proposito: es configuracion, no trabajo diario,
     # y se abre una vez cada mucho. Las cuatro de antes no cambian de posicion.
-    pestana_op, pestana_al, pestana_mp, pestana_region, pestana_equipo = st.tabs(
-        ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público",
-         "🧾 Módulo Cotizador", "👥 Mi equipo"])
+    #
+    # «Soporte» solo aparece si quien entro es de Uplevel. No es seguridad —la
+    # pantalla igual comprueba el rol adentro— sino no ponerle delante una
+    # pestaña que no es suya a cada cliente que abre el panel.
+    from modulo_cuentas import es_soporte, quien_soy
+    yo = quien_soy()
+    etiquetas = ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público",
+                 "🧾 Módulo Cotizador", "👥 Mi equipo"]
+    if es_soporte(yo):
+        etiquetas.append("🛟 Soporte")
+    creadas = st.tabs(etiquetas)
+    pestana_op, pestana_al, pestana_mp, pestana_region, pestana_equipo = creadas[:5]
+    pestana_soporte = creadas[5] if len(creadas) > 5 else None
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:
@@ -4358,7 +4368,7 @@ def main() -> None:
         # Cuentas, roles y territorios. Si las tablas de Supabase todavia no
         # existen, esta pantalla lo dice y el resto del panel sigue igual que
         # siempre: nadie se queda afuera por no haber configurado nada.
-        from modulo_cuentas import quien_soy, seccion_equipo
+        from modulo_cuentas import seccion_equipo
         from modulo_oportunidades import _sello, cargar_unidades
         catalogo = cargar_unidades(_sello())
         if catalogo.empty:
@@ -4366,7 +4376,11 @@ def main() -> None:
         else:
             regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
             comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
-        seccion_equipo(quien_soy(), regiones_posibles, comunas_posibles)
+        seccion_equipo(yo, regiones_posibles, comunas_posibles)
+    if pestana_soporte is not None:
+        with pestana_soporte:
+            from modulo_cuentas import seccion_soporte
+            seccion_soporte(yo)
 
 
 if __name__ == "__main__":
