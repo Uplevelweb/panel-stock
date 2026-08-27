@@ -961,9 +961,20 @@ def enviar(a_quienes: list[str], asunto: str, html: str) -> bool:
         "html": html,
     }).encode("utf-8")
 
+    # EL User-Agent NO ES DECORATIVO: sin el, Cloudflare —que protege a
+    # Resend— responde «403 · error code: 1010», que significa «tu navegador
+    # esta vetado». urllib se identifica por defecto como «Python-urllib/3.x»
+    # y esa firma esta en su lista negra. El correo se armaba perfecto y
+    # moria en el ultimo paso, con un codigo que no es de Resend y que no
+    # dice nada de correos.
     peticion = urllib.request.Request(
         "https://api.resend.com/emails", data=cuerpo, method="POST",
-        headers={"Authorization": f"Bearer {clave}", "Content-Type": "application/json"})
+        headers={
+            "Authorization": f"Bearer {clave}",
+            "Content-Type": "application/json",
+            "User-Agent": "Uplevel-Inteligencia/1.0",
+            "Accept": "application/json",
+        })
     try:
         with urllib.request.urlopen(peticion, timeout=60) as respuesta:
             print(f"  enviado: {json.loads(respuesta.read()).get('id')}")
