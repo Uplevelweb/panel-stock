@@ -29,6 +29,7 @@ import pandas as pd
 import streamlit as st
 
 import alertador
+import modulo_mercado
 
 CARPETA = Path(__file__).parent
 RUTA_BODEGA = CARPETA / "bodega"
@@ -311,6 +312,18 @@ def seccion_oportunidades() -> None:
             "proveedores": st.column_config.NumberColumn("Prov."),
             "situacion": st.column_config.TextColumn("Situación", width="small"),
         })
+
+    # ----------------------------------------------------------------------
+    #  El mercado en gráficos
+    # ----------------------------------------------------------------------
+    # La tabla de arriba se calcula sobre convenios marco. Estos gráficos miran
+    # las seis vías, que es donde está el 95,8% del dinero, y por eso van en un
+    # bloque aparte y no como otra columna de la misma tabla: son otra cuenta.
+    #
+    # El RUT va COMPLETO, con dígito verificador: en la bodega está escrito
+    # «77.082.051-0» y con el cuerpo solo no encuentra ninguna venta.
+    modulo_mercado.seccion_mercado(f"{cuerpo}-{dv or dv_correcto(cuerpo)}",
+                                   unidades, sello)
 
     # ----------------------------------------------------------------------
     #  El puente a las alertas
