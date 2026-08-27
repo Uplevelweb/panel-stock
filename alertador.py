@@ -508,6 +508,63 @@ def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
     return comprimir_textos(oc)
 
 
+VIAS = {
+    "SE": "Licitaciones",
+    "TD": "Trato directo",
+    "AG": "Compras ágiles",
+    "CM": "Convenio Marco",
+    "CC": "Convenios",
+    "CT": "Contratos",
+}
+
+
+def compras_por_via(unidades: set[str], bolsa: set[str], meses: int = 12) -> dict:
+    """
+    Cuanto compro cada unidad EN LOS RUBROS DEL SUSCRIPTOR, repartido por via.
+
+    Una pasada por los archivos, no una por oportunidad: se filtra a las ~15
+    unidades del correo y solo de esas se mira el producto.
+
+    POR QUE «EN SUS RUBROS» Y NO EL TOTAL: una municipalidad puede mover
+    $900 M al año, pero ahi adentro va combustible, asfalto y ambulancias.
+    Mostrarle ese numero a un proveedor de alimentos es venderle humo: cuando
+    descubra que en alimentos son $50 M se siente engañado, con razon.
+
+    POR QUE EL DESGLOSE POR VIA: le dice COMO venderle a ese comprador. Quien
+    mueve el 70% por compra agil se define en 48 horas y hay que estar rapido;
+    quien mueve el 60% por licitacion hay que prepararlo con anticipacion.
+    """
+    vacio: dict = {}
+    if not unidades or not bolsa or not BODEGA_OC.exists():
+        return vacio
+
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    acumulado: dict[str, dict[str, float]] = {u: {} for u in unidades}
+
+    for archivo in sorted(BODEGA_OC.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            mes = pd.read_parquet(archivo, columns=["unidad", "mecanismo",
+                                                    "producto", "total"])
+        except Exception:
+            continue
+        mes = mes[mes["unidad"].astype(str).isin(unidades)]
+        if mes.empty:
+            del mes
+            continue
+        # Solo las lineas cuyo producto se parece a lo que el suscriptor vende.
+        suyas = mes[mes["producto"].astype(str).map(
+            lambda x: bool(palabras(x) & bolsa))]
+        for (u, via), monto in suyas.groupby(
+                ["unidad", "mecanismo"], observed=True)["total"].sum().items():
+            acumulado.setdefault(str(u), {})
+            acumulado[str(u)][str(via)] = acumulado[str(u)].get(str(via), 0.0) + float(monto)
+        del mes, suyas
+
+    return acumulado
+
+
 def retrato_del_comprador(unidad: str, oc: pd.DataFrame, convenios: list[str]) -> dict:
     """
     Lo que la bodega sabe de esa unidad compradora. Esto es lo que ningun
@@ -891,14 +948,48 @@ def tarjeta(op: dict) -> str:
     donde = " · ".join(x for x in (op.get("nombre_unidad") or op.get("organismo"),
                                    op.get("comuna") or op.get("region")) if x)
 
-    if retrato["gasto"] > 0:
+    # El desglose por via es lo que ningun competidor pone, asi que va primero
+    # y con el reparto a la vista: no es lo mismo un comprador que mueve todo
+    # por compra agil —donde se define en 48 horas— que uno de licitaciones.
+    por_via = op.get("por_via") or {}
+    total_vias = sum(por_via.values())
+
+    if total_vias > 0:
+        filas = []
+        for via, monto in sorted(por_via.items(), key=lambda x: -x[1]):
+            if monto <= 0:
+                continue
+            filas.append(
+                f'<tr>'
+                f'<td style="padding:2px 0;color:{TEXTO_SUAVE};font-size:12.5px;">'
+                f'{VIAS.get(via, via)}</td>'
+                f'<td align="right" style="padding:2px 0;color:{TEXTO};font-size:12.5px;'
+                f'font-weight:600;">{plata(monto)}</td>'
+                f'<td align="right" style="padding:2px 0 2px 10px;color:{NARANJO};'
+                f'font-size:12.5px;font-weight:700;">{monto/total_vias*100:.0f}%</td>'
+                f'</tr>')
         detalle = (
-            f'Gasto histórico 24m: <strong>{plata(retrato["gasto"])}</strong><br>'
-            f'Proveedor dominante: {retrato["lider"][:44]} ({retrato["share"]:.0f}%)<br>'
+            f'<div style="font-size:13px;color:{TEXTO};margin-bottom:6px;">'
+            f'Compró <strong>{plata(total_vias)}</strong> en lo que tú vendes '
+            f'<span style="color:{TEXTO_SUAVE};">· últimos 12 meses</span></div>'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+            + "".join(filas) + '</table>'
+        )
+        if retrato["lider"]:
+            detalle += (
+                f'<div style="margin-top:8px;padding-top:8px;'
+                f'border-top:1px solid {BORDE};color:{TEXTO};font-size:13px;">'
+                f'Hoy se lo lleva <strong>{retrato["lider"][:38]}</strong> '
+                f'con el {retrato["share"]:.0f}% · {retrato["n_proveedores"]} '
+                f'proveedores distintos</div>')
+    elif retrato["gasto"] > 0:
+        detalle = (
+            f'Compra en tus rubros: <strong>{plata(retrato["gasto"])}</strong><br>'
+            f'Hoy se lo lleva: {retrato["lider"][:40]} ({retrato["share"]:.0f}%)<br>'
             f'Proveedores distintos: {retrato["n_proveedores"]}'
         )
     else:
-        detalle = ("Este comprador no aparece en la bodega con compras de tus rubros. "
+        detalle = ("Este comprador no aparece comprando lo que tú vendes. "
                    "Es terreno nuevo.")
 
     monto = f"<br>Monto disponible: <strong>{plata(op['monto'])}</strong>" if op.get("monto") else ""
@@ -1020,6 +1111,9 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict]) -> str:
   <tr>
     <td style="padding:22px 30px 26px;border-top:1px solid {BORDE};">
       <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
+        Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
+        actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
+        ágiles y trato directo.<br><br>
         Uplevel · {rut} · Santiago, Chile<br>
         Recibes este correo porque te suscribiste{' el ' + desde if desde else ''}.<br>
         <a href="https://uplevelweb.art/baja?t={token}" style="color:{MARINO};">Cancelar suscripción</a> ·
@@ -1211,6 +1305,15 @@ def main():
         # aunque la licitacion le calce perfecto.
         elegidas.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
         elegidas = elegidas[:MAXIMO_POR_CORREO]
+
+        # UNA sola pasada por los archivos para las ~15 elegidas, no una por
+        # cada una: leer `producto` es lo caro y hay que hacerlo lo menos
+        # posible.
+        if elegidas:
+            unidades = {str(o.get("unidad")) for o in elegidas if o.get("unidad")}
+            desglose = compras_por_via(unidades, bolsa)
+            for o in elegidas:
+                o["por_via"] = desglose.get(str(o.get("unidad")), {})
 
         if not elegidas:
             print("   nada que coincida hoy. No se envia.")
