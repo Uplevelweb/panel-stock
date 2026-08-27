@@ -355,19 +355,24 @@ def seccion_alertas():
 
     st.divider()
 
-    # Dos botones, los dos siempre a la vista. El de la derecha estaba escondido
-    # —solo aparecia despues de guardar— y no se encontraba.
+    # La explicacion va ANTES de los botones, no despues: se lee para decidir
+    # cual apretar, no para entender lo que uno ya apreto.
+    st.markdown("#### ¿Y ahora qué?")
+    uno, dos = st.columns([1, 1])
+    uno.info("**Dejarla programada**\n\nLa alerta queda activa y el correo te "
+             f"llega **cada día a las {hora_envio}:00**, de lunes a viernes. "
+             "Si un día no hay nada que calce, no se envía.")
+    dos.info("**Programarla y recibir la primera ahora**\n\nLo mismo de la "
+             "izquierda, y además te manda **un correo en este momento** con "
+             "lo que está abierto hoy. Tarda hasta un minuto.")
+
     boton_guardar, boton_ahora = st.columns([1, 1])
     with boton_guardar:
-        guardar = st.button("Guardar configuración", type="primary",
+        guardar = st.button("Programar la alerta diaria", type="primary",
                             width="stretch", key="al_guardar")
     with boton_ahora:
-        guardar_y_enviar = st.button("Guardar y mandármelo ahora",
-                                     width="stretch", key="al_guardar_envia",
-                                     help="Además de dejarlo configurado, manda el "
-                                          "primer correo en el momento con lo que "
-                                          "está abierto ahora. No hay que esperar "
-                                          "a mañana.")
+        guardar_y_enviar = st.button("Programar y enviármela ahora",
+                                     width="stretch", key="al_guardar_envia")
 
     if guardar or guardar_y_enviar:
         if not config["email"] or "@" not in config["email"]:
@@ -381,8 +386,9 @@ def seccion_alertas():
                 st.success(aviso)
                 st.session_state["al_guardado"] = config
                 if guardar_y_enviar:
-                    with st.spinner("Preguntando a Mercado Público qué hay abierto…"):
-                        fue, detalle = enviar_ahora(config, oc)
+                    aviso_paso = st.empty()
+                    fue, detalle = enviar_ahora(config, oc, aviso_paso)
+                    aviso_paso.empty()
                     if fue:
                         st.success(detalle + " Revisa tu bandeja.")
                     else:
@@ -405,7 +411,7 @@ def seccion_alertas():
 # --------------------------------------------------------------------------
 #  «Mándamelo ahora»
 # --------------------------------------------------------------------------
-def enviar_ahora(config: dict, oc) -> tuple[bool, str]:
+def enviar_ahora(config: dict, oc, aviso=None) -> tuple[bool, str]:
     """
     Manda el primer correo en el momento, sin esperar al turno de mañana.
 
@@ -444,8 +450,25 @@ def enviar_ahora(config: dict, oc) -> tuple[bool, str]:
     if not bolsa:
         return False, "No hay con qué filtrar todavía."
 
-    universo = (alertador.licitaciones_abiertas(ticket, bolsa, techo=20)
-                + alertador.compras_agiles_abiertas(ticket))
+    # ESTOS DOS TECHOS SON LO QUE HACE QUE ESTO SIRVA COMO BOTON.
+    #
+    # Sin ellos la primera version se quedo 13 minutos dando vueltas y nunca
+    # llego: `compras_agiles_abiertas` trae por defecto hasta 40 paginas de 50
+    # —dos mil— y esa API contesta lenta y a veces con 504. Nadie mira un
+    # spinner 13 minutos: se va, y se llevo la impresion de que no funciona.
+    #
+    # Aca se piden 12 detalles de licitacion (12 x 2 s = 24 s) y 4 paginas de
+    # compras agiles. Es una probada, no el barrido: el correo de mañana si
+    # hace el recorrido completo.
+    def paso(texto):
+        if aviso is not None:
+            aviso.info(texto)
+
+    paso("Preguntando qué licitaciones hay abiertas…")
+    universo = alertador.licitaciones_abiertas(ticket, bolsa, techo=12)
+    paso(f"{len(universo)} licitaciones. Ahora las compras ágiles del día…")
+    universo += alertador.compras_agiles_abiertas(ticket, techo_paginas=4)
+    paso(f"{len(universo)} oportunidades abiertas. Cruzando con la bodega…")
     if not universo:
         return False, "Hoy no se publicó nada. Mañana a primera hora se revisa de nuevo."
 
@@ -464,8 +487,12 @@ def enviar_ahora(config: dict, oc) -> tuple[bool, str]:
     elegidas = elegidas[:alertador.MAXIMO_POR_CORREO]
 
     if not elegidas:
-        return False, ("Hoy no hay nada que calce con lo tuyo. No se envía un correo "
-                       "vacío: el silencio también es información.")
+        pista = ""
+        if not config.get("rut_proveedor"):
+            pista = (" Con solo palabras clave el filtro queda angosto: escribe "
+                     "tu RUT y las palabras salen solas de lo que ya has vendido.")
+        return False, ("Hoy no hay nada que calce con lo tuyo. No se manda un correo "
+                       "vacío: el silencio también es información." + pista)
 
     html = alertador.armar_correo(
         {**config, "token_baja": "prueba", "rut_empresa": config.get("rut_proveedor")},
