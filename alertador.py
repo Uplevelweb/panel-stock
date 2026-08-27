@@ -275,15 +275,60 @@ def ya_avisado(suscriptor: dict) -> set[str]:
     return set()
 
 
-def anotar_avisado(suscriptor: dict, codigos: list[str], tipos: list[str]) -> None:
-    """Deja constancia de lo que SI salio. Solo se llama tras enviar."""
+def por_que_calzo(oportunidad: dict, bolsa: set[str]) -> str:
+    """Las palabras exactas que hicieron entrar esta oportunidad.
+
+    Un «match perfecto» no le sirve a nadie: no se puede comprobar ni
+    discutir. «alimentos, kit, emergencia» si —el que lo lee sabe al tiro si
+    el sistema entendio su negocio o se equivoco, y si se equivoco puede
+    corregir sus palabras. Esa es la diferencia entre que confien en el
+    filtro y que lo apaguen.
+    """
+    if not bolsa:
+        return ""
+    texto = palabras(f"{oportunidad.get('nombre', '')} "
+                     f"{oportunidad.get('descripcion', '')}")
+    coinciden = sorted(texto & bolsa)
+    if not coinciden:
+        return ""
+    # Cinco alcanzan para entenderlo; la lista completa es ruido.
+    if len(coinciden) <= 5:
+        return ", ".join(coinciden)
+    return ", ".join(coinciden[:5]) + f" y {len(coinciden) - 5} más"
+
+
+def anotar_avisado(suscriptor: dict, elegidas: list[dict],
+                   bolsa: set[str] | None = None) -> None:
+    """Deja constancia de lo que SI salio. Solo se llama tras enviar.
+
+    Guarda ademas la FOTO de cada oportunidad —nombre, comprador, monto,
+    cierre, por que calzo—. Sin eso, el panel tendria que volver a
+    preguntarle a la API para dibujar la lista de seguimiento: ticket
+    gastado y espera, por unos datos que en este momento ya estan en la
+    mano y gratis.
+    """
     url = os.environ.get("SUPABASE_URL", "").strip()
     clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    codigos = [o["codigo"] for o in elegidas]
+    rut = solo_digitos_rut(suscriptor.get("rut_proveedor") or "")
 
     if url and clave and suscriptor.get("id"):
         cuerpo = json.dumps([
-            {"suscriptor_id": suscriptor["id"], "codigo_licitacion": c, "tipo": t}
-            for c, t in zip(codigos, tipos)
+            {
+                "suscriptor_id": suscriptor["id"],
+                "codigo_licitacion": o["codigo"],
+                "tipo": o.get("tipo") or "licitacion",
+                "rut": rut or None,
+                "nombre": (o.get("nombre") or "")[:300] or None,
+                "comprador": (o.get("nombre_unidad") or o.get("organismo") or "")[:200] or None,
+                "region": (o.get("region") or "")[:120] or None,
+                "monto": float(o.get("monto") or 0) or None,
+                "cierre": str(o.get("cierre") or "")[:32] or None,
+                "encaje": int(o.get("encaje") or 0) or None,
+                "motivo": por_que_calzo(o, bolsa or set()) or None,
+                "enlace": o.get("enlace") or None,
+            }
+            for o in elegidas
         ]).encode("utf-8")
         peticion = urllib.request.Request(
             f"{url}/rest/v1/envios", data=cuerpo, method="POST",
@@ -1515,9 +1560,7 @@ def main():
                 enviados_hoy += 1
                 # Se anota DESPUES de que salio, nunca antes: si el envio
                 # falla, esas oportunidades tienen que poder salir manana.
-                anotar_avisado(suscriptor,
-                               [o["codigo"] for o in elegidas],
-                               [o["tipo"] for o in elegidas])
+                anotar_avisado(suscriptor, elegidas, bolsa)
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
