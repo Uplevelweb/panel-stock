@@ -684,6 +684,33 @@ def _campo(fila: dict, *nombres, defecto=""):
     return defecto
 
 
+# Se busca en el texto porque el campo de la ficha viene vacio. Medido el
+# 27-08-2026 sobre 70 licitaciones abiertas: `FechaVisitaTerreno` lleno en
+# CERO. El dato real vive en las bases adjuntas, y a esas no se llega por la
+# API —no hay endpoint de adjuntos, da 404—.
+#
+# Buscarlo en el nombre y la descripcion atrapa solo el 0,2% (6 de 2.800),
+# pero esas 6 son de verdad: reparacion de techumbre, habilitacion de
+# oficinas. Cuesta cero y avisa de algo que descalifica.
+#
+# NO es deteccion completa, y por eso el aviso dice «lo menciona» y no
+# «tiene»: si no aparece, puede igual haber visita escondida en las bases.
+SEÑAS_DE_VISITA = re.compile(
+    r"visita\s+a\s+terreno|visita\s+en\s+terreno|visita\s+obligatoria|"
+    r"obligatoria\s+la\s+visita|charla\s+informativa|reuni[oó]n\s+informativa",
+    re.IGNORECASE)
+
+
+def menciona_visita(*textos) -> str:
+    """Devuelve el trozo donde lo dice, o vacio. Ver SEÑAS_DE_VISITA."""
+    for texto in textos:
+        encontrado = SEÑAS_DE_VISITA.search(str(texto or ""))
+        if encontrado:
+            entorno = str(texto)[max(0, encontrado.start() - 40):encontrado.end() + 60]
+            return " ".join(entorno.split())
+    return ""
+
+
 def unidad_del_codigo(codigo: str) -> str:
     """
     «1058101-1-LR26» -> «1058101». El prefijo del codigo ES la unidad
@@ -746,6 +773,8 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
         # esta en Santiago, la decision es hoy.
         fechas = d.get("Fechas") if isinstance(d.get("Fechas"), dict) else {}
         visita = str(fechas.get("FechaVisitaTerreno") or "")
+        nombre_lic = str(_campo(fila, "Nombre", "nombre"))
+        mencion = menciona_visita(nombre_lic, d.get("Descripcion"))
         salida.append({
             "tipo": "licitacion",
             "codigo": codigo,
@@ -753,6 +782,7 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
             "descripcion": str(d.get("Descripcion") or ""),
             "visita": visita[:16].replace("T", " ") if visita else "",
             "direccion_visita": str(d.get("DireccionVisita") or "").strip(),
+            "mencion_visita": mencion,
             "cierre": str(_campo(fila, "FechaCierre", "fechaCierre") or
                           _campo(d, "Fechas.FechaCierre"))[:10],
             "monto": 0.0,
@@ -998,6 +1028,22 @@ def tarjeta(op: dict) -> str:
     # mas entre los datos: es lo unico de la tarjeta que, si se pasa por alto,
     # deja fuera al proveedor pase lo que pase con su oferta.
     aviso_visita = ""
+    # Dos avisos distintos a proposito. Con fecha es un hecho: se sabe cuando y
+    # donde. Por mencion es una advertencia: el texto la nombra pero el detalle
+    # esta en las bases, y prometer una certeza que no se tiene es peor que
+    # avisar de la duda.
+    if not op.get("visita") and op.get("mencion_visita"):
+        aviso_visita = f"""
+          <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                 style="background:#fffaf2;border:1px dashed {NARANJO};
+                        border-radius:5px;margin-bottom:12px;">
+            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:12.5px;line-height:1.5;">
+              <strong>MENCIONA VISITA A TERRENO</strong><br>
+              <span style="color:#a86a35;font-style:italic;">
+                «{op['mencion_visita'][:150]}»</span><br>
+              Revisa las bases antes de ofertar: si es obligatoria y no vas, quedas fuera.
+            </td></tr>
+          </table>"""
     if op.get("visita"):
         donde_visita = op.get("direccion_visita") or ""
         aviso_visita = f"""
