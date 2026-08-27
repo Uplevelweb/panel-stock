@@ -189,6 +189,22 @@ def seccion_alertas():
     st.caption("Lo que se configure acá es lo que llega cada mañana a las 08:00, "
                "de lunes a viernes. Si un día no hay nada que calce, no se envía.")
 
+    # Los desplegables con muchas etiquetas —16 regiones, por ejemplo— crecen
+    # hacia abajo y se montaban encima del campo siguiente. Con un poco de aire
+    # entre widgets y dejando que la caja crezca, cada uno se queda en su sitio.
+    st.markdown(
+        """
+        <style>
+        [data-testid="stMultiSelect"] { margin-bottom: 14px; }
+        [data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+            max-height: none; min-height: 42px; flex-wrap: wrap;
+        }
+        [data-testid="stTextInput"], [data-testid="stNumberInput"] { margin-bottom: 10px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     sello = _sello()
     oc = cargar_ordenes(sello)
 
@@ -237,11 +253,25 @@ def seccion_alertas():
             "Rubros", options=rubros_disponibles(sello), key="al_rubros",
             help="Los que traen las propias licitaciones.")
 
-        palabras_texto = st.text_input(
-            "Palabras clave", key="al_palabras",
-            placeholder="alimentos, aseo, papelería",
-            help="Separadas por coma.")
-        palabras_clave = [p.strip() for p in palabras_texto.split(",") if p.strip()]
+        # Cada palabra se convierte en una etiqueta al apretar Enter, igual que
+        # los rubros. Antes era un campo de texto con comas y no se veia lo que
+        # habias escrito hasta releerlo entero.
+        #
+        # `accept_new_options` existe desde Streamlit 1.48. Si la version
+        # publicada fuera mas vieja reventaria, asi que se cae al campo de
+        # texto de siempre en vez de dejar la pantalla en blanco.
+        try:
+            palabras_clave = st.multiselect(
+                "Palabras clave", options=[], key="al_palabras",
+                accept_new_options=True,
+                placeholder="Escribe una y aprieta Enter",
+                help="Cada palabra queda como etiqueta. Para quitarla, la ✕.")
+        except TypeError:
+            palabras_texto = st.text_input(
+                "Palabras clave", key="al_palabras_texto",
+                placeholder="alimentos, aseo, papelería",
+                help="Separadas por coma.")
+            palabras_clave = [p.strip() for p in palabras_texto.split(",") if p.strip()]
 
         st.markdown("**Dónde y desde cuánto**")
         regiones = st.multiselect("Regiones", options=REGIONES, key="al_regiones",
@@ -325,7 +355,21 @@ def seccion_alertas():
 
     st.divider()
 
-    if st.button("Guardar configuración", type="primary", key="al_guardar"):
+    # Dos botones, los dos siempre a la vista. El de la derecha estaba escondido
+    # —solo aparecia despues de guardar— y no se encontraba.
+    boton_guardar, boton_ahora = st.columns([1, 1])
+    with boton_guardar:
+        guardar = st.button("Guardar configuración", type="primary",
+                            width="stretch", key="al_guardar")
+    with boton_ahora:
+        guardar_y_enviar = st.button("Guardar y mandármelo ahora",
+                                     width="stretch", key="al_guardar_envia",
+                                     help="Además de dejarlo configurado, manda el "
+                                          "primer correo en el momento con lo que "
+                                          "está abierto ahora. No hay que esperar "
+                                          "a mañana.")
+
+    if guardar or guardar_y_enviar:
         if not config["email"] or "@" not in config["email"]:
             st.error("Falta el correo.")
         elif not alertador.bolsa_de_terminos(config, oc)[0]:
@@ -335,9 +379,14 @@ def seccion_alertas():
             salio, aviso = guardar_en_supabase(config)
             if salio:
                 st.success(aviso)
-                # Se guarda para que el boton de «mándamelo ahora» siga en
-                # pantalla despues de que Streamlit vuelva a dibujar todo.
                 st.session_state["al_guardado"] = config
+                if guardar_y_enviar:
+                    with st.spinner("Preguntando a Mercado Público qué hay abierto…"):
+                        fue, detalle = enviar_ahora(config, oc)
+                    if fue:
+                        st.success(detalle + " Revisa tu bandeja.")
+                    else:
+                        st.warning(detalle)
             else:
                 st.error(aviso)
                 st.download_button(
@@ -347,20 +396,10 @@ def seccion_alertas():
                     help="Sirve para probar el correo en el computador mientras "
                          "no estén las credenciales de Supabase.")
 
-    # Aparece recien despues de guardar: quien acaba de inscribirse esta
-    # caliente y decirle «te llega mañana» lo enfria. Esto le pone el producto
-    # en el correo mientras todavia esta mirando la pantalla.
-    if st.session_state.get("al_guardado"):
-        st.markdown("#### ¿Y hasta mañana?")
-        st.caption("No hace falta esperar. Esto te manda el primero ahora mismo, "
-                   "con lo que está abierto en este momento.")
-        if st.button("Mándamelo ahora", type="primary", key="al_ahora"):
-            with st.spinner("Preguntando a Mercado Público qué hay abierto…"):
-                salio, aviso = enviar_ahora(st.session_state["al_guardado"], oc)
-            if salio:
-                st.success(aviso + " Revisa tu bandeja.")
-            else:
-                st.warning(aviso)
+    st.caption(
+        "El botón de la derecha hace las dos cosas: deja la alerta configurada "
+        "y manda el primer correo en el momento, sin esperar al turno de mañana."
+    )
 
 
 # --------------------------------------------------------------------------

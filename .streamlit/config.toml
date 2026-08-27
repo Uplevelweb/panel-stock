@@ -15,6 +15,6 @@ secondaryBackgroundColor = "#123a6e"
 textColor = "#EAF1F8"
 font = "sans-serif"
 
-# Todo un 20% mas chico que el tamaño normal de Streamlit (16). Se hace aqui y
-# no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
-baseFontSize = 13
+# Un 15% mas grande que el 13 que tenia (27-08-2026: costaba leerlo). Se hace
+# aqui y no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
+baseFontSize = 15

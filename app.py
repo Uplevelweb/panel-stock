@@ -2145,6 +2145,42 @@ def cabecera() -> None:
     )
 
 
+def guia_de_entrada() -> None:
+    """
+    Que hay en cada pestaña, para quien llega por primera vez.
+
+    Sin esto, alguien que entra ve cuatro nombres y ninguno le dice que hacer.
+    Va abierta la primera vez y se puede cerrar: quien ya sabe no tiene por que
+    verla todos los dias, y Streamlit recuerda si la cerro mientras dure la
+    sesion.
+    """
+    abierta = not st.session_state.get("guia_cerrada", False)
+    with st.expander("👉  ¿Primera vez? Esto hay en cada pestaña", expanded=abierta):
+        st.markdown(
+            f"""
+<div style="line-height:1.75;font-size:0.97em">
+<b style="color:{COLOR['rojo']}">🎯 Oportunidades</b> — Escribe un RUT y sale el mapa
+de ese proveedor: cuánto compra el Estado de lo que él vende, cuánto se lleva él,
+y <b>las instituciones que compran lo suyo y nunca le han comprado</b>.
+Es lo único que se hace escribiendo 9 dígitos, sin buscar ni elegir nada.<br>
+
+<b style="color:{COLOR['rojo']}">🔔 Alertas</b> — El correo de cada mañana con lo que
+se publicó <b>hoy</b> en esos mismos rubros. Se configura una vez y llega solo.<br>
+
+<b style="color:{COLOR['rojo']}">🏛️ Mercado Público</b> — Qué compró una institución,
+a qué precio y a quién. Para preparar una visita o una cotización.<br>
+
+<b style="color:{COLOR['rojo']}">🧾 Módulo Cotizador</b> — Se sube el requerimiento que
+mandó la institución y sale la cotización con los ID de Convenio Marco.
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Entendido, no mostrar de nuevo", key="guia_ok"):
+            st.session_state["guia_cerrada"] = True
+            st.rerun()
+
+
 def avisar_antes_de_salir(hay_resultados: bool) -> None:
     """Pide confirmación al recargar o cerrar cuando hay una consulta en pantalla.
 
@@ -4289,6 +4325,8 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
+    guia_de_entrada()
+
     # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
     # escribir un RUT: quien entra ve algo suyo en segundos, sin buscar ni
     # seleccionar nada. Las otras dos son herramientas de trabajo diario, no la
