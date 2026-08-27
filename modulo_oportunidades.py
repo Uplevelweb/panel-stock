@@ -83,50 +83,19 @@ def _sello() -> str:
 
 @st.cache_data(show_spinner="Abriendo la bodega…")
 def cargar_compras(sello: str) -> pd.DataFrame:
-    """Todas las lineas de Convenio Marco, con solo las columnas que se usan.
+    """LA UNICA CACHE DE LA BODEGA EN TODO EL PANEL. No hacer otra.
 
-    Se leen cuatro columnas de 1,2 millones de filas en vez del parquet entero:
-    la diferencia entre un par de segundos y media pantalla de espera.
+    Habia dos —esta y la de `modulo_alertas`— cargando las mismas filas por
+    separado, y como `st.tabs` dibuja TODAS las pestañas en cada corrida, las
+    dos se llenaban aunque nadie abriera esa pestaña. Con la bodega de las seis
+    vias eso se paso del techo de memoria de Streamlit y la app publicada quedo
+    en «Oh no. Error running app» sin un solo traceback en el registro.
+
+    El trabajo de verdad —leer mes a mes y resumir— vive en
+    `alertador.resumen_de_ordenes`, que es la misma que usa el correo diario.
+    Una sola manera de leer la bodega, un solo lugar donde arreglarla.
     """
-    import pyarrow.parquet as pq
-
-    partes = []
-    for archivo in sorted((RUTA_BODEGA / "detalle").glob("*.parquet")):
-        # SOLO LAS COLUMNAS QUE ESE ARCHIVO TIENE. Pedir una que no esta no
-        # deja un hueco: revienta la lectura del archivo entero y tumba la app
-        # con «Error running app». Pasa con `mecanismo`, que los parquet
-        # viejos —los de solo Convenio Marco— no traen.
-        try:
-            hay = set(pq.read_schema(archivo).names)
-        except Exception:
-            continue
-        pedidas = [c for c in ("unidad", "mecanismo", "convenio_marco",
-                               "rut_proveedor", "proveedor", "total")
-                   if c in hay]
-        if "unidad" not in pedidas or "total" not in pedidas:
-            continue
-        try:
-            trozo = pd.read_parquet(archivo, columns=pedidas)
-        except Exception:
-            continue
-        for columna, relleno in (("mecanismo", "CM"), ("convenio_marco", ""),
-                                 ("rut_proveedor", ""), ("proveedor", "")):
-            if columna not in trozo.columns:
-                trozo[columna] = relleno
-        partes.append(trozo)
-    if not partes:
-        return pd.DataFrame()
-    tabla = pd.concat(partes, ignore_index=True)
-    tabla["total"] = pd.to_numeric(tabla["total"], errors="coerce").fillna(0)
-    # El rut normalizado se calcula una sola vez y queda en cache: hacerlo en
-    # cada consulta son 1,2 millones de reemplazos de texto cada vez.
-    tabla["rut"] = (tabla["rut_proveedor"].astype("string")
-                    .str.replace(".", "", regex=False)
-                    .str.replace("-", "", regex=False).str.strip().str.upper())
-    # Ver `comprimir_textos` en alertador.py: seis veces menos memoria sin
-    # perder un dato, porque son pocos valores distintos repetidos un millon
-    # de veces. Se hace al final, cuando `rut` ya esta calculado.
-    return alertador.comprimir_textos(tabla)
+    return alertador.resumen_de_ordenes()
 
 
 @st.cache_data(show_spinner=False)
@@ -143,6 +112,25 @@ def cargar_unidades(sello: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 #  Calculo
 # --------------------------------------------------------------------------
+# Lo que la bodega escribe en `convenio_marco` cuando la orden NO es de
+# Convenio Marco. Desde que la bodega guarda las seis vias, la mayoria de las
+# lineas viene asi.
+SIN_CONVENIO = {"", "NA", "N/A", "NONE", "NAN"}
+
+
+def convenios_de(columna: pd.Series) -> list[str]:
+    """Los convenios marco de verdad que hay en esa columna.
+
+    Hay que sacar el «NA» a mano y no es un detalle: esta pantalla compara
+    contra «el mercado de sus rubros», y un rubro es un convenio marco. Si
+    «NA» entra en la lista, `isin` se lleva TODAS las lineas que no son de
+    Convenio Marco —licitaciones, tratos directos y compras agiles de Chile
+    entero— y el mercado del proveedor sale multiplicado por cien.
+    """
+    valores = {str(c).strip() for c in pd.Series(columna).dropna().unique()}
+    return sorted(c for c in valores if c.upper() not in SIN_CONVENIO)
+
+
 def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
                  cuerpo: str, convenios: list[str] | None) -> tuple[pd.DataFrame, dict]:
     """La tabla de unidades y el resumen, para un rut dado."""
@@ -151,7 +139,7 @@ def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
     # Sus rubros son los convenios por los que ya vendio, salvo que se elijan
     # a mano (rut sin ventas, o alguien que quiere mirar otro mercado).
     if not convenios:
-        convenios = sorted(compras.loc[mias, "convenio_marco"].dropna().unique())
+        convenios = convenios_de(compras.loc[mias, "convenio_marco"])
     if not convenios:
         return pd.DataFrame(), {"sin_ventas": True, "convenios": []}
 
@@ -206,14 +194,21 @@ def _nombre_del_rut(compras: pd.DataFrame, cuerpo: str) -> str:
     """Con que nombre figura ese rut.
 
     Va la columna `proveedor`, no `rut_proveedor`: la segunda trae el numero.
-    Y se toma la moda porque un mismo rut aparece escrito de varias formas
-    («SOLUCIONES INTEGRALES EMERGENZA SPA» en ordenes de compra, «Emergenza
-    SpA» en licitaciones); se muestra el que mas se repite.
+    Y se toma el que mas se repite porque un mismo rut aparece escrito de
+    varias formas («SOLUCIONES INTEGRALES EMERGENZA SPA» en ordenes de compra,
+    «Emergenza SpA» en licitaciones).
+
+    Se cuenta por `lineas`, no por filas: la tabla viene resumida y cada fila
+    puede ser una orden o quinientas. Contando filas ganaria el nombre que
+    aparece en mas convenios, no el que aparece en mas ordenes.
     """
-    filas = compras.loc[compras["rut"].str.startswith(cuerpo, na=False), "proveedor"]
-    filas = filas.dropna()
-    filas = filas[filas.astype(str).str.strip() != ""]
-    return str(filas.mode().iloc[0]) if len(filas) else ""
+    filas = compras.loc[compras["rut"].str.startswith(cuerpo, na=False),
+                        ["proveedor", "lineas"]].dropna(subset=["proveedor"])
+    filas = filas[filas["proveedor"].astype(str).str.strip() != ""]
+    if filas.empty:
+        return ""
+    veces = filas.groupby("proveedor", observed=True)["lineas"].sum()
+    return str(veces.sort_values(ascending=False).index[0])
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +270,7 @@ def seccion_oportunidades() -> None:
                    "Elige abajo los convenios de tu rubro para ver el mercado igual.")
         st.multiselect(
             "Convenios marco de tu rubro", key="op_convenios",
-            options=sorted(compras["convenio_marco"].dropna().unique()))
+            options=convenios_de(compras["convenio_marco"]))
         return
 
     if resumen["nombre"]:
