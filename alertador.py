@@ -498,7 +498,7 @@ def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame) -> tuple[set[str], lis
 # que se esta mirando (ver `productos_del_rut`).
 COLUMNAS_REPETIDAS = ["unidad", "organismo", "mecanismo", "convenio", "convenio_marco",
                       "estado", "dia", "fecha", "rut_proveedor", "proveedor",
-                      "id_producto", "rut_limpio"]
+                      "id_producto", "rut"]
 
 
 def comprimir_textos(tabla):
@@ -509,22 +509,53 @@ def comprimir_textos(tabla):
     return tabla
 
 
-def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
+# Una fila por comprador-via-convenio-proveedor. Es el grano mas fino que
+# alguien le pide de verdad a esta tabla: sumar plata y contar proveedores.
+LLAVES = ["unidad", "mecanismo", "convenio_marco", "rut_proveedor", "proveedor"]
+
+
+def _juntar_resumen(partes: list) -> pd.DataFrame:
+    """Varios meses ya resumidos, sumados en uno solo."""
+    if len(partes) == 1:
+        return partes[0]
+    return (pd.concat(partes, ignore_index=True)
+            .groupby(LLAVES, observed=True, dropna=False, sort=False)
+            .agg(total=("total", "sum"), lineas=("lineas", "sum"))
+            .reset_index())
+
+
+def resumen_de_ordenes(meses: int = 24) -> pd.DataFrame:
     """
-    Solo las columnas que hacen falta. Cargar las 16 de los 25 archivos se
-    demora y no aporta: para enriquecer basta con quien compro, a quien y
-    cuanto.
+    La bodega resumida: una fila por comprador-proveedor-convenio, no por linea.
+
+    ESTA ES LA UNICA FUNCION QUE CARGA EL DETALLE EN MEMORIA, y esta escrita
+    asi porque la anterior tumbo la app publicada el 27-08-2026. Con la bodega
+    de solo Convenio Marco eran 1,2 millones de lineas; con las seis vias son
+    8,3 millones. Guardarlas todas y juntarlas al final son ~800 MB de trozos
+    mas otro tanto mientras se copian: el techo de Streamlit son ~1.000 MB, y
+    cuando se pasa **el proceso muere sin dejar traceback** —el registro queda
+    en «Updated app!» y la pantalla dice «Oh no. Error running app»—. Dos dias
+    buscando un error que no existia.
+
+    Nadie necesitaba las lineas sueltas. Todo lo que se les pide es sumar plata
+    y contar proveedores por comprador, asi que se suman AL LEER, mes a mes:
+    415.864 lineas de un mes quedan en 93.621 filas (el 22%) sin perder un
+    peso. Medido: 47 MB el mes crudo contra 4,5 MB resumido.
+
+    Cada mes se suelta apenas se resume, y el acumulado se vuelve a sumar cada
+    cuatro: asi el peor momento son cuatro meses resumidos, no veinte crudos.
+
+    `lineas` guarda cuantas ordenes habia detras de cada fila, para que quien
+    contaba lineas —`retrato_del_comprador`— siga contando lo mismo.
+
+    «producto» NO se carga: son 8 millones de textos casi todos distintos y se
+    usan solo para UN rut a la vez. Ver `productos_del_rut`.
     """
     if not BODEGA_OC.exists():
         return pd.DataFrame()
 
     corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
-    # «producto» NO se carga: son 8 millones de textos casi todos distintos,
-    # y se usan solo para UN rut a la vez. Ver `productos_del_rut`.
-    columnas = ["fecha", "unidad", "organismo", "mecanismo", "convenio_marco",
-                "proveedor", "rut_proveedor", "total"]
-
-    partes = []
+    acumulado: list = []
     for archivo in sorted(BODEGA_OC.glob("*.parquet")):
         if archivo.stem < corte:
             continue
@@ -534,25 +565,40 @@ def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
             # forma cada vez que se le agrega algo: el 27-08-2026 se le sumo
             # `mecanismo` y los archivos viejos no lo traen. Un archivo con
             # una columna de menos no puede dejar la app sin datos.
-            hay = set(pd.read_parquet(archivo, columns=[]).columns) or None
-            if hay is None:
-                import pyarrow.parquet as pq
-                hay = set(pq.read_schema(archivo).names)
-            partes.append(pd.read_parquet(archivo, columns=[c for c in columnas if c in hay]))
+            import pyarrow.parquet as pq
+            hay = set(pq.read_schema(archivo).names)
+            pedidas = [c for c in LLAVES + ["total"] if c in hay]
+            if "unidad" not in pedidas or "total" not in pedidas:
+                continue
+            mes = pd.read_parquet(archivo, columns=pedidas)
         except Exception as error:
             print(f"  no se pudo leer {archivo.name}: {type(error).__name__}")
+            continue
 
-    if not partes:
+        # Los parquet viejos guardaban solo Convenio Marco y sin convenio.
+        for columna, relleno in (("mecanismo", "CM"), ("convenio_marco", "NA"),
+                                 ("rut_proveedor", ""), ("proveedor", "")):
+            if columna not in mes.columns:
+                mes[columna] = relleno
+        mes["total"] = pd.to_numeric(mes["total"], errors="coerce").fillna(0.0)
+        for columna in LLAVES:
+            mes[columna] = mes[columna].astype(str)
+
+        acumulado.append(
+            mes.groupby(LLAVES, observed=True, dropna=False, sort=False)
+               .agg(total=("total", "sum"), lineas=("total", "size")).reset_index())
+        del mes
+        if len(acumulado) >= 4:
+            acumulado = [_juntar_resumen(acumulado)]
+
+    if not acumulado:
         return pd.DataFrame()
 
-    oc = pd.concat(partes, ignore_index=True)
-    oc["unidad"] = oc["unidad"].astype(str)
-    # El rut limpio se calcula ANTES de comprimir, sobre texto normal, y
-    # despues se comprime igual que los demas: son 1.291 valores distintos
-    # repetidos 1,2 millones de veces, como el resto.
-    oc["rut_limpio"] = oc["rut_proveedor"].astype(str).map(solo_digitos_rut)
-    oc["total"] = pd.to_numeric(oc["total"], errors="coerce").fillna(0.0)
-    return comprimir_textos(oc)
+    tabla = _juntar_resumen(acumulado)
+    # El rut se calcula ANTES de comprimir, sobre texto normal, y despues se
+    # comprime igual que los demas: son pocos valores distintos repetidos.
+    tabla["rut"] = tabla["rut_proveedor"].map(solo_digitos_rut)
+    return comprimir_textos(tabla)
 
 
 VIAS = {
@@ -598,7 +644,7 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
         if archivo.stem < corte:
             continue
         try:
-            # Igual que en `cargar_ordenes`: se piden solo las columnas que ese
+            # Igual que en `resumen_de_ordenes`: se piden solo las columnas que ese
             # archivo tiene. Un parquet viejo sin `mecanismo` hacia fallar la
             # lectura entera y el correo salia sin el desglose, en silencio.
             import pyarrow.parquet as pq
@@ -694,7 +740,10 @@ def retrato_del_comprador(unidad: str, oc: pd.DataFrame, convenios: list[str]) -
         "lider": lider,
         "share": share,
         "n_proveedores": int(por_proveedor.shape[0]),
-        "ordenes": int(suyas.shape[0]),
+        # La tabla viene resumida —una fila por proveedor, no por orden— asi
+        # que las ordenes se cuentan por `lineas`. Ver `resumen_de_ordenes`.
+        "ordenes": int(suyas["lineas"].sum()) if "lineas" in suyas.columns
+                   else int(suyas.shape[0]),
     }
 
 
@@ -1445,8 +1494,9 @@ def main():
     print(f"{len(suscriptores)} suscriptor(es) activo(s)\n")
 
     print("Cargando la bodega de ordenes de compra...")
-    oc = cargar_ordenes()
-    print(f"  {len(oc):,} lineas\n".replace(",", "."))
+    oc = resumen_de_ordenes()
+    lineas = int(oc["lineas"].sum()) if not oc.empty else 0
+    print(f"  {lineas:,} lineas en {len(oc):,} filas\n".replace(",", "."))
 
     # --- la bolsa de cada uno, ANTES de pedir nada ---
     # La union de todas sirve para descartar de una sola pasada lo que no le
