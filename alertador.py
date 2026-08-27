@@ -971,6 +971,12 @@ def main():
 
     suscriptores = configuracion()
     if not suscriptores:
+        # Antes se salia callado y la corrida terminaba «bien» en 18 segundos,
+        # sin una linea que dijera por que. Desde afuera parecia que habia
+        # funcionado. Si no hay a quien mandarle, hay que decirlo.
+        print("NO HAY SUSCRIPTORES ACTIVOS. No hay a quien mandarle nada.")
+        print("Revisar: la pestaña «Alertas» del panel, boton «Guardar")
+        print("configuracion», tiene que dejar un mensaje VERDE.")
         return
 
     # Cada suscriptor elige su turno (8, 13 o 18 de Chile) y el workflow corre
