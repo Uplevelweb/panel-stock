@@ -4278,12 +4278,17 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
-    pestana_mp, pestana_region = st.tabs(
-        ["🏛️ Mercado Público", "🧾 Módulo Cotizador"])
+    pestana_mp, pestana_region, pestana_op = st.tabs(
+        ["🏛️ Mercado Público", "🧾 Módulo Cotizador", "🎯 Oportunidades"])
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:
         seccion_cotizacion_regional(url_ofertas, precios_oferta)
+    with pestana_op:
+        # Vive en su propio archivo: no comparte nada con las otras dos y asi
+        # un error suyo no puede tumbar el cotizador, que es el trabajo diario.
+        from modulo_oportunidades import seccion_oportunidades
+        seccion_oportunidades()
 
 
 if __name__ == "__main__":
