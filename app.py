@@ -4334,8 +4334,11 @@ def main() -> None:
     #
     # OJO si se vuelve a cambiar el orden: las pruebas buscan las tablas POR SUS
     # COLUMNAS, no por su posicion. `app.dataframe[-1]` ya se rompio una vez asi.
-    pestana_op, pestana_al, pestana_mp, pestana_region = st.tabs(
-        ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público", "🧾 Módulo Cotizador"])
+    # «Mi equipo» va AL FINAL a proposito: es configuracion, no trabajo diario,
+    # y se abre una vez cada mucho. Las cuatro de antes no cambian de posicion.
+    pestana_op, pestana_al, pestana_mp, pestana_region, pestana_equipo = st.tabs(
+        ["🎯 Oportunidades", "🔔 Alertas", "🏛️ Mercado Público",
+         "🧾 Módulo Cotizador", "👥 Mi equipo"])
     with pestana_mp:
         seccion_mercado_publico(precios_oferta, catalogo_propio)
     with pestana_region:
@@ -4351,6 +4354,19 @@ def main() -> None:
         # el correo de verdad y no una copia que se puede desalinear.
         from modulo_alertas import seccion_alertas
         seccion_alertas()
+    with pestana_equipo:
+        # Cuentas, roles y territorios. Si las tablas de Supabase todavia no
+        # existen, esta pantalla lo dice y el resto del panel sigue igual que
+        # siempre: nadie se queda afuera por no haber configurado nada.
+        from modulo_cuentas import quien_soy, seccion_equipo
+        from modulo_oportunidades import _sello, cargar_unidades
+        catalogo = cargar_unidades(_sello())
+        if catalogo.empty:
+            regiones_posibles, comunas_posibles = [], []
+        else:
+            regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
+            comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
+        seccion_equipo(quien_soy(), regiones_posibles, comunas_posibles)
 
 
 if __name__ == "__main__":
