@@ -90,8 +90,8 @@ def cargar_compras(sello: str) -> pd.DataFrame:
     partes = []
     for archivo in sorted((RUTA_BODEGA / "detalle").glob("*.parquet")):
         partes.append(pd.read_parquet(
-            archivo, columns=["unidad", "convenio_marco", "rut_proveedor",
-                              "proveedor", "total"]))
+            archivo, columns=["unidad", "mecanismo", "convenio_marco",
+                              "rut_proveedor", "proveedor", "total"]))
     if not partes:
         return pd.DataFrame()
     tabla = pd.concat(partes, ignore_index=True)

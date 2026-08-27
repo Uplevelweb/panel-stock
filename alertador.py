@@ -307,6 +307,43 @@ def anotar_avisado(suscriptor: dict, codigos: list[str], tipos: list[str]) -> No
 #  LA BOLSA DE TERMINOS DE CADA SUSCRIPTOR
 # ======================================================================
 
+def productos_del_rut(objetivo: str, meses: int = 24) -> pd.DataFrame:
+    """
+    Lo que ese RUT ha vendido, leido del disco archivo por archivo.
+
+    POR QUE NO SALE DE LA TABLA YA CARGADA: `producto` pesa 570 MB sobre la
+    bodega completa —1.095.495 textos distintos, casi ninguno repetido— y de
+    todos ellos se usan los de UN proveedor, unos pocos miles. Tener los ocho
+    millones en memoria para leer nueve mil es lo que dejaba la app al borde
+    del limite de Streamlit.
+
+    Asi se lee un mes a la vez, se filtra y se suelta: el peor momento son los
+    ~28 MB de un solo archivo, no los 570 de todos.
+    """
+    if not objetivo or not BODEGA_OC.exists():
+        return pd.DataFrame(columns=["producto", "total", "convenio_marco"])
+
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    trozos = []
+    for archivo in sorted(BODEGA_OC.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            mes = pd.read_parquet(archivo, columns=["rut_proveedor", "producto",
+                                                    "total", "convenio_marco"])
+        except Exception:
+            continue
+        mias = mes[mes["rut_proveedor"].astype(str).map(solo_digitos_rut) == objetivo]
+        if not mias.empty:
+            trozos.append(mias[["producto", "total", "convenio_marco"]])
+        del mes
+    if not trozos:
+        return pd.DataFrame(columns=["producto", "total", "convenio_marco"])
+    juntas = pd.concat(trozos, ignore_index=True)
+    juntas["total"] = pd.to_numeric(juntas["total"], errors="coerce").fillna(0.0)
+    return juntas
+
+
 def terminos_del_rut(rut: str, oc: pd.DataFrame) -> tuple[set[str], list[str]]:
     """
     Las palabras que describen lo que ese RUT vende, sacadas de sus propias
@@ -320,7 +357,7 @@ def terminos_del_rut(rut: str, oc: pd.DataFrame) -> tuple[set[str], list[str]]:
     if not objetivo or oc.empty:
         return set(), []
 
-    mias = oc[oc["rut_limpio"] == objetivo]
+    mias = productos_del_rut(objetivo)
     if mias.empty:
         return set(), []
 
@@ -408,8 +445,13 @@ def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame) -> tuple[set[str], lis
 #
 # Esto es lo que hace posible ampliar la bodega mas alla de Convenio Marco:
 # con 5,6 veces mas filas seguiria por debajo de lo que ocupa hoy.
-COLUMNAS_REPETIDAS = ["unidad", "convenio_marco", "rut_proveedor", "proveedor",
-                      "producto", "rut_limpio"]
+# «producto» NO va en esta lista, y es a proposito: tiene 1.095.495 valores
+# distintos entre 1,5 millones de filas, o sea que casi ninguno se repite.
+# Comprimirlo no ahorra nada y encima cuesta. Se lee aparte, solo para el RUT
+# que se esta mirando (ver `productos_del_rut`).
+COLUMNAS_REPETIDAS = ["unidad", "organismo", "mecanismo", "convenio", "convenio_marco",
+                      "estado", "dia", "fecha", "rut_proveedor", "proveedor",
+                      "id_producto", "rut_limpio"]
 
 
 def comprimir_textos(tabla):
@@ -430,15 +472,26 @@ def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
         return pd.DataFrame()
 
     corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
-    columnas = ["fecha", "unidad", "organismo", "convenio_marco",
-                "proveedor", "rut_proveedor", "producto", "total"]
+    # «producto» NO se carga: son 8 millones de textos casi todos distintos,
+    # y se usan solo para UN rut a la vez. Ver `productos_del_rut`.
+    columnas = ["fecha", "unidad", "organismo", "mecanismo", "convenio_marco",
+                "proveedor", "rut_proveedor", "total"]
 
     partes = []
     for archivo in sorted(BODEGA_OC.glob("*.parquet")):
         if archivo.stem < corte:
             continue
         try:
-            partes.append(pd.read_parquet(archivo, columns=columnas))
+            # Se piden solo las columnas que ese archivo TIENE. Pedir una que
+            # no esta hace reventar la lectura entera, y la bodega cambia de
+            # forma cada vez que se le agrega algo: el 27-08-2026 se le sumo
+            # `mecanismo` y los archivos viejos no lo traen. Un archivo con
+            # una columna de menos no puede dejar la app sin datos.
+            hay = set(pd.read_parquet(archivo, columns=[]).columns) or None
+            if hay is None:
+                import pyarrow.parquet as pq
+                hay = set(pq.read_schema(archivo).names)
+            partes.append(pd.read_parquet(archivo, columns=[c for c in columnas if c in hay]))
         except Exception as error:
             print(f"  no se pudo leer {archivo.name}: {type(error).__name__}")
 
