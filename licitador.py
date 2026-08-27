@@ -244,6 +244,65 @@ def anotar_cobertura() -> str:
     return ultimo
 
 
+def completar_comunas() -> str:
+    """Rellena la comuna y la region que le faltan al catalogo de unidades.
+
+    `bodega/unidades.parquet` lo escribia el bodeguero viejo, que ya no corre.
+    380 de sus 4.298 unidades quedaron sin comuna NI region porque la API de
+    ordenes de compra no las informa, y sin comuna no se pueden armar rutas de
+    visita. Los datos abiertos de licitaciones si las traen —`ComunaUnidad` y
+    `RegionUnidad` vienen en cada fila—, asi que se rellenan desde aca: gratis,
+    sin una sola consulta extra, y al dia porque esto corre todas las mañanas.
+
+    Medido el 27-08-2026: de las 326 unidades sin comuna que ademas compran,
+    se rellenan 243, que son $38.248 M de los $43.286 M en juego. Las 83 que
+    quedan ($5.038 M) nunca han licitado, solo compran por otras vias.
+
+    Solo se rellena lo que esta vacio. Lo que el catalogo ya sabe no se toca.
+    """
+    archivo = BODEGA.parent / "unidades.parquet"
+    if not archivo.exists():
+        return "no hay catalogo de unidades que completar"
+
+    unidades = pd.read_parquet(archivo)
+    if not {"codigo_unidad", "comuna", "region"} <= set(unidades.columns):
+        return "el catalogo de unidades no tiene las columnas esperadas"
+
+    conocidas = []
+    for parquet in sorted(BODEGA.glob("*.parquet")):
+        # Tres columnas y no mas: la bodega entera no cabe comoda en memoria.
+        trozo = pd.read_parquet(parquet, columns=["unidad", "comuna", "region"])
+        tiene = trozo["comuna"].notna() & (trozo["comuna"].astype(str).str.strip() != "")
+        conocidas.append(trozo[tiene])
+    if not conocidas:
+        return "la bodega de licitaciones esta vacia"
+
+    mapa = pd.concat(conocidas, ignore_index=True)
+    mapa["unidad"] = mapa["unidad"].astype(str).str.strip()
+    # `keep="last"`: si una unidad se muda de direccion, manda la licitacion
+    # mas nueva, igual que con el estado en `guardar`.
+    mapa = mapa.drop_duplicates(subset="unidad", keep="last").set_index("unidad")
+
+    codigos = unidades["codigo_unidad"].astype(str).str.strip()
+    rellenadas = 0
+    for columna in ("comuna", "region"):
+        vacias = (unidades[columna].isna()
+                  | (unidades[columna].astype(str).str.strip() == ""))
+        traido = codigos.map(mapa[columna])
+        aplicar = vacias & traido.notna()
+        if columna == "comuna":
+            rellenadas = int(aplicar.sum())
+        unidades.loc[aplicar, columna] = traido[aplicar]
+
+    if not rellenadas:
+        return "no habia comunas que rellenar"
+
+    unidades.to_parquet(archivo, index=False, compression="zstd")
+    quedan = int((unidades["comuna"].isna()
+                  | (unidades["comuna"].astype(str).str.strip() == "")).sum())
+    return f"{rellenadas} unidades recuperaron comuna · quedan {quedan} sin ella"
+
+
 def meses_por_procesar(completo: bool) -> list[tuple[int, int]]:
     """Que meses bajar en esta corrida.
 
@@ -298,6 +357,7 @@ def main() -> None:
 
     hasta_donde = anotar_cobertura()
     print(f"  la bodega de licitaciones llega hasta: {hasta_donde or 'sin datos'}")
+    print(f"  comunas del catalogo de unidades: {completar_comunas()}")
 
     for zip_viejo in DESCARGAS.glob("lic-*.zip"):
         zip_viejo.unlink()          # pesan decenas de MB, no se guardan
