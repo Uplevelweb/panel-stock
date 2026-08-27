@@ -250,29 +250,51 @@ def seccion_alertas():
                            "El RUT solo no alcanza: hay que elegir rubros o "
                            "escribir palabras.")
 
-        rubros = st.multiselect(
-            "Rubros", options=rubros_disponibles(sello), key="al_rubros",
-            help="Los que traen las propias licitaciones.")
-
-        # Cada palabra se convierte en una etiqueta al apretar Enter, igual que
-        # los rubros. Antes era un campo de texto con comas y no se veia lo que
-        # habias escrito hasta releerlo entero.
+        # UN SOLO CAMPO, no dos.
         #
-        # `accept_new_options` existe desde Streamlit 1.48. Si la version
-        # publicada fuera mas vieja reventaria, asi que se cae al campo de
-        # texto de siempre en vez de dejar la pantalla en blanco.
+        # Antes habia «Rubros» y «Palabras clave» separados, y nadie sabia cual
+        # usar. Ahora es una sola pregunta con los 58 rubros ya cargados: se
+        # empieza a escribir «alim» y aparecen los rubros de alimentos para
+        # elegir. Si ninguno calza, la palabra propia se agrega igual.
+        #
+        # Eso resuelve las dos cosas a la vez: quien no quiere pensar elige de
+        # la lista —que es lo que pidio Serling para gente mayor, que prefiere
+        # reconocer antes que escribir— y quien sabe exactamente lo que vende
+        # escribe su palabra y sigue.
+        catalogo = rubros_disponibles(sello)
         try:
-            palabras_clave = st.multiselect(
-                "Palabras clave", options=[], key="al_palabras",
+            elegidas_qv = st.multiselect(
+                "¿Qué vendes?", options=catalogo, key="al_que_vendes",
                 accept_new_options=True,
-                placeholder="Escribe una y aprieta Enter",
-                help="Cada palabra queda como etiqueta. Para quitarla, la ✕.")
+                placeholder="Escribe «alimentos», «aseo»… y elige de la lista",
+                help="Empieza a escribir y te muestra los rubros que se parecen. "
+                     "Si ninguno calza, escribe tu palabra y aprieta Enter: "
+                     "queda igual.")
         except TypeError:
-            palabras_texto = st.text_input(
-                "Palabras clave", key="al_palabras_texto",
-                placeholder="alimentos, aseo, papelería",
-                help="Separadas por coma.")
-            palabras_clave = [p.strip() for p in palabras_texto.split(",") if p.strip()]
+            # `accept_new_options` existe desde Streamlit 1.48. En una version
+            # mas vieja esto reventaria y dejaria la pantalla en blanco; asi al
+            # menos se pueden elegir rubros de la lista.
+            elegidas_qv = st.multiselect(
+                "¿Qué vendes?", options=catalogo, key="al_que_vendes",
+                placeholder="Elige de la lista")
+
+        # Lo elegido se separa: lo que estaba en la lista es rubro; lo que
+        # escribio de su cabeza es palabra clave. La base los guarda aparte.
+        conocidos = set(catalogo)
+        rubros = [x for x in elegidas_qv if x in conocidos]
+        palabras_clave = [x for x in elegidas_qv if x not in conocidos]
+
+        if elegidas_qv:
+            partes = []
+            if rubros:
+                partes.append(f"{len(rubros)} rubro" + ("s" if len(rubros) > 1 else ""))
+            if palabras_clave:
+                partes.append(f"{len(palabras_clave)} palabra" +
+                              ("s propias" if len(palabras_clave) > 1 else " propia"))
+            st.caption("Vas con " + " y ".join(partes) + ".")
+        else:
+            st.caption("Si escribiste tu RUT arriba, esto es opcional: las "
+                       "palabras salen solas de lo que ya has vendido.")
 
         st.markdown("**Dónde y desde cuánto**")
         regiones = st.multiselect("Regiones", options=REGIONES, key="al_regiones",
