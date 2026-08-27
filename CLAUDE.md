@@ -82,6 +82,7 @@ no.
 | `modulo_alertas.py` | Pestaña «Alertas»: configurar el correo y ver antes qué llegaría |
 | `modulo_oportunidades.py` | Pestaña «Oportunidades»: el mapa comercial por RUT |
 | `modulo_mercado.py` | Los cuatro gráficos de barras del mercado, dentro de esa misma pestaña. Miran las **seis vías**, no solo Convenio Marco |
+| `modulo_visitas.py` | El IPT: el itinerario de visitas y **la línea donde se deja de visitar y se empieza a llamar** |
 | `inspector_apis.py` | Mira qué traen de verdad las dos APIs. No envía ni escribe nada |
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
