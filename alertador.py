@@ -628,11 +628,21 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
         d = detalle[0] if detalle and isinstance(detalle[0], dict) else {}
         comprador = d.get("Comprador") if isinstance(d.get("Comprador"), dict) else {}
 
+        # LA VISITA A TERRENO ES DESCALIFICANTE.
+        # Muchas licitaciones exigen ir al lugar, o asistir a una charla, antes
+        # de poder ofertar: quien no va queda fuera, por buena que sea su
+        # oferta. Viene en la propia ficha y es de lo primero que hay que saber,
+        # porque si la visita es pasado mañana en Punta Arenas y el proveedor
+        # esta en Santiago, la decision es hoy.
+        fechas = d.get("Fechas") if isinstance(d.get("Fechas"), dict) else {}
+        visita = str(fechas.get("FechaVisitaTerreno") or "")
         salida.append({
             "tipo": "licitacion",
             "codigo": codigo,
             "nombre": str(_campo(fila, "Nombre", "nombre")),
             "descripcion": str(d.get("Descripcion") or ""),
+            "visita": visita[:16].replace("T", " ") if visita else "",
+            "direccion_visita": str(d.get("DireccionVisita") or "").strip(),
             "cierre": str(_campo(fila, "FechaCierre", "fechaCierre") or
                           _campo(d, "Fechas.FechaCierre"))[:10],
             "monto": 0.0,
@@ -699,6 +709,8 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
             salida.append({
                 "tipo": "compra_agil",
                 "codigo": codigo,
+                # Las compras agiles no exigen visita: se cotiza en linea.
+                "visita": "", "direccion_visita": "",
                 "nombre": str(_campo(fila, "nombre", "Nombre")),
                 "descripcion": adjuntos,
                 "cierre": str(_campo(fila, "fechas.fecha_cierre", "fecha_cierre"))[:10],
@@ -748,6 +760,7 @@ def fuente_de_prueba(dias: int = 3) -> list[dict]:
         salida.append({
             "tipo": "licitacion",
             "codigo": str(fila["codigo"]),
+            "visita": "", "direccion_visita": "",
             "nombre": str(fila["nombre"]),
             # `codigo_onu` es el numero del rubro, no su nombre: no aporta al
             # comparar palabras. Los nombres estan en rubro1/2/3.
@@ -837,6 +850,23 @@ def tarjeta(op: dict) -> str:
 
     monto = f"<br>Monto disponible: <strong>{plata(op['monto'])}</strong>" if op.get("monto") else ""
 
+    # La visita va ARRIBA del todo y en su propio recuadro, no como una linea
+    # mas entre los datos: es lo unico de la tarjeta que, si se pasa por alto,
+    # deja fuera al proveedor pase lo que pase con su oferta.
+    aviso_visita = ""
+    if op.get("visita"):
+        donde_visita = op.get("direccion_visita") or ""
+        aviso_visita = f"""
+          <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                 style="background:#fff4e8;border:1px solid {NARANJO};
+                        border-radius:5px;margin-bottom:12px;">
+            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:13px;line-height:1.5;">
+              <strong>VISITA A TERRENO OBLIGATORIA</strong><br>
+              {op['visita']}{(' · ' + donde_visita[:70]) if donde_visita else ''}<br>
+              <span style="color:#a86a35;">Si no asistes, quedas fuera.</span>
+            </td></tr>
+          </table>"""
+
     return f"""
   <tr>
     <td style="padding:10px 30px;">
@@ -852,6 +882,7 @@ def tarjeta(op: dict) -> str:
           <div style="color:{TEXTO_SUAVE};font-size:13px;margin-bottom:12px;">
             {donde} · cierra {op['cierre'] or 'sin fecha'}
           </div>
+{aviso_visita}
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:{FONDO};border-radius:4px;">
             <tr><td style="padding:10px 12px;color:{TEXTO};font-size:13px;line-height:1.6;">
