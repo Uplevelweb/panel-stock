@@ -83,6 +83,8 @@ no.
 | `modulo_oportunidades.py` | Pestaña «Oportunidades»: el mapa comercial por RUT |
 | `modulo_mercado.py` | Los cuatro gráficos de barras del mercado, dentro de esa misma pestaña. Miran las **seis vías**, no solo Convenio Marco |
 | `modulo_visitas.py` | El IPT: el itinerario de visitas y **la línea donde se deja de visitar y se empieza a llamar** |
+| `modulo_cuentas.py` | Cuentas, roles y territorios (pestaña «Mi equipo»). Quién entró y qué le toca ver |
+| `supabase-cuentas-para-copiar.txt` | El SQL de las tablas `cuentas` y `usuarios`. **Hay que pegarlo una vez** para que los roles empiecen a mandar |
 | `inspector_apis.py` | Mira qué traen de verdad las dos APIs. No envía ni escribe nada |
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
@@ -388,6 +390,28 @@ pasar es que esa clave llegue a una página web o al repositorio.
 
 Mientras se desarrolla, el ticket está en `C:\Users\serli\ticket-mp.txt`, **fuera del proyecto a
 propósito** para que no pueda subirse por error.
+
+### Quién entra y qué ve (27-08-2026)
+
+Son **dos cosas distintas y conviene no confundirlas**:
+
+- **Quién puede ABRIR el panel** lo decide la lista de Streamlit (*Manage app ▸
+  Settings ▸ Sharing*). Sigue siendo la puerta.
+- **Qué ve cada uno adentro** lo decide `modulo_cuentas.py` contra las tablas
+  `cuentas` y `usuarios` de Supabase: un RUT es una cuenta, el `admin` ve toda
+  su empresa y el `comercial` solo su territorio (regiones, o comunas si hay
+  que partir la Metropolitana entre dos personas).
+
+Mientras la puerta sea la lista de Streamlit, **agregar un comercial son dos
+pasos**: en la pestaña «Mi equipo» y en esa lista. Para vender el plan Empresa
+de verdad hay que cambiar la puerta por un login propio —Streamlit 1.61 ya trae
+`st.login()` / `st.user`, que es de donde el módulo saca el correo—; el módulo
+no cambia, solo se agrega el bloque `[auth]` a los secretos.
+
+**La regla que no se negocia: nunca dejar a nadie afuera.** Si las tablas no
+existen, si faltan credenciales o si la consulta falla, el panel se comporta
+como antes de que existiera el módulo y se ve todo. Un sistema de permisos que
+se cae cerrado convierte cualquier problema chico en «hoy no puedo trabajar».
 
 ## Lo que no es evidente y cuesta caro olvidar
 
