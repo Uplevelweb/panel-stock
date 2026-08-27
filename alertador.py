@@ -65,6 +65,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import ficha_licitacion
+
 # Este archivo tambien se importa desde la app (la pestana «Alertas»), y ahi
 # la salida no siempre es una consola que admita reconfigurarse. Si reventara,
 # se caeria la app entera por un detalle de impresion.
@@ -1092,6 +1094,27 @@ def tarjeta(op: dict) -> str:
             '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
             + "".join(filas) + '</table>'))
 
+    criterios = op.get("criterios") or []
+    if criterios:
+        # Ordenados de mayor a menor peso: lo primero que hay que saber es
+        # contra que se compite. Un 80% al precio y un 80% a lo tecnico son
+        # dos licitaciones distintas y no se preparan igual.
+        filas = []
+        for c in sorted(criterios, key=lambda x: -x["ponderacion"]):
+            filas.append(
+                f'<tr>'
+                f'<td width="52%" style="padding:3px 0;color:{TEXTO};font-size:12.5px;">'
+                f'{c["item"][:46]}</td>'
+                f'<td width="30%" style="padding:3px 8px;">'
+                f'{barra(c["ponderacion"], 100)}</td>'
+                f'<td align="right" style="padding:3px 0;color:{MARINO};'
+                f'font-size:13px;font-weight:700;">{c["ponderacion"]}%</td>'
+                f'</tr>')
+        bloques.append(seccion(
+            "Con qué te van a evaluar",
+            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+            + "".join(filas) + '</table>'))
+
     if not bloques:
         bloques.append(seccion(
             "Este comprador",
@@ -1434,6 +1457,20 @@ def main():
             radiografia = radiografia_de_unidades(unidades, bolsa)
             for o in elegidas:
                 o["radiografia"] = radiografia.get(str(o.get("unidad")), {})
+
+            # Los criterios de evaluacion y la visita a terreno NO estan en la
+            # API —comprobado sobre 93 campos de 12 licitaciones— pero si en el
+            # HTML de la ficha publica. Una peticion por oportunidad, solo para
+            # las ~15 que ya pasaron el filtro.
+            for o in elegidas:
+                if o["tipo"] != "licitacion":
+                    continue
+                documento = ficha_licitacion.bajar_ficha(o["codigo"])
+                if not documento:
+                    continue
+                o["criterios"] = ficha_licitacion.criterios_de_evaluacion(documento)
+                if not o.get("visita") and not o.get("mencion_visita"):
+                    o["mencion_visita"] = ficha_licitacion.menciona_visita_en_ficha(documento)
 
         if not elegidas:
             print("   nada que coincida hoy. No se envia.")
