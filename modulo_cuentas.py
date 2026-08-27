@@ -522,8 +522,13 @@ def seccion_soporte(usuario: dict) -> None:
     # resolver solo. Todo lo demas puede esperar; esto no.
     con_admin = set(usuarios[(usuarios["rol"] == "admin")
                              & (usuarios["activo"])]["cuenta_id"])
-    huerfanas = cuentas[(~cuentas["id"].isin(con_admin))
-                        & (cuentas["rut"] != "UPLEVEL")]
+    # La cuenta de Uplevel no cuenta: no tiene «admin» sino «superadmin», y si
+    # no se la excluye aparece siempre como huerfana. Se la reconoce por su
+    # plan y NO por su RUT: marcarla por el RUT se rompia en cuanto se pusiera
+    # el de verdad, que es exactamente lo que paso.
+    es_soporte_cuenta = (cuentas["plan"] == "soporte" if "plan" in cuentas.columns
+                         else pd.Series(False, index=cuentas.index))
+    huerfanas = cuentas[(~cuentas["id"].isin(con_admin)) & (~es_soporte_cuenta)]
     if len(huerfanas):
         st.error(f"**{len(huerfanas)} cuenta(s) sin ningún administrador "
                  "activo.** Esa empresa no puede administrarse a sí misma: "
