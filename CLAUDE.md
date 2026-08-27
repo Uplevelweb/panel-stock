@@ -86,6 +86,8 @@ no.
 | `modulo_cuentas.py` | Cuentas, roles y territorios (pestaña «Mi equipo»). Quién entró y qué le toca ver |
 | `supabase-cuentas-para-copiar.txt` | El SQL de las tablas `cuentas` y `usuarios`. **Hay que pegarlo una vez** para que los roles empiecen a mandar |
 | `supabase-soporte-para-copiar.txt` | El SQL del rol `superadmin` y la `bitacora_soporte`. Se pega **después** del anterior |
+| `modulo_seguimiento.py` | El embudo: en qué quedó cada oportunidad que avisó el correo (pestaña «Seguimiento») |
+| `supabase-seguimiento-para-copiar.txt` | El SQL de la tabla `seguimiento`, las `visitas` y la foto que `envios` guarda de cada oportunidad |
 | `inspector_apis.py` | Mira qué traen de verdad las dos APIs. No envía ni escribe nada |
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
@@ -391,6 +393,32 @@ pasar es que esa clave llegue a una página web o al repositorio.
 
 Mientras se desarrolla, el ticket está en `C:\Users\serli\ticket-mp.txt`, **fuera del proyecto a
 propósito** para que no pueda subirse por error.
+
+### El seguimiento: en qué quedó cada oportunidad (27-08-2026)
+
+Hasta ahora el correo mandaba y se olvidaba. `envios` guardaba que algo salió,
+no qué pasó después, y por eso **no se podía decir «esto te consiguió $X»** —
+que es la frase de la que depende que alguien renueve.
+
+Seis etapas: *por revisar · siguiendo · ofertando · ganada · perdida ·
+descartada*. **«Por revisar» no se guarda en ninguna parte**: es no tener fila
+en `seguimiento`. Así el embudo funciona desde el primer día, incluso con lo
+que se envió antes de que la tabla existiera, y no se escribe una fila por cada
+correo que sale.
+
+**La llave es el RUT, no el usuario**, porque el seguimiento es de la empresa:
+si el comercial del norte marca una como «ofertando», su jefa lo ve sin
+preguntar. Igual se guarda `quien` la movió.
+
+`alertador.py` guarda ahora la **foto** de cada oportunidad al enviarla
+(nombre, comprador, monto, cierre, y las palabras exactas por las que calzó).
+Sin eso, dibujar esta pantalla obligaría a volver a preguntarle a la API:
+ticket gastado por datos que en ese momento ya estaban en la mano.
+
+La urgencia **se calcula y depende del tipo**: una compra ágil que cierra en 20
+horas es normal —se contesta con un precio—, una licitación que cierra en 20
+horas ya no se alcanza a preparar. Avisar «cierra pronto» sin distinguirlas es
+mandar a alguien a perder la tarde.
 
 ### Quién entra y qué ve (27-08-2026)
 
