@@ -88,18 +88,29 @@ revoke all on table bitacora_soporte from anon;
 --  clientes, un soporte viviendo dentro de la cuenta del cliente numero uno
 --  no tendria ningun sentido.
 --
---  El RUT dice 'UPLEVEL' y no un numero porque no me lo diste y prefiero no
---  inventarlo. Cuando quieras poner el de verdad:
---     update cuentas set rut = '76.543.210-9' where rut = 'UPLEVEL';
-insert into cuentas (rut, nombre)
-values ('UPLEVEL', 'Uplevel (soporte)')
-on conflict (rut) do nothing;
+--  QUE LA DISTINGUE NO ES EL RUT, SINO `plan = 'soporte'`. La primera version
+--  la marcaba con un RUT falso que decia 'UPLEVEL', y eso se rompia solo en
+--  cuanto se pusiera el RUT de verdad: la cuenta de Uplevel habria empezado a
+--  aparecer en la lista de «empresas sin administrador». Marcarla por el plan
+--  no depende de como este escrito el RUT.
+
+--  Estas dos lineas juntas sirven tanto si la cuenta ya existe con el RUT
+--  provisional como si es la primera vez que se corre esto.
+update cuentas
+set rut = '77.711.959-1', nombre = 'Uplevel Web SpA', plan = 'soporte'
+where rut = 'UPLEVEL';
+
+insert into cuentas (rut, nombre, plan)
+values ('77.711.959-1', 'Uplevel Web SpA', 'soporte')
+on conflict (rut) do update
+  set nombre = excluded.nombre,
+      plan   = excluded.plan;
 
 --  `webuplevel@gmail.com` pasa a ser el soporte, y se mueve a la cuenta de
 --  Uplevel. Tus otros dos correos siguen siendo admin de Emergenza, que es
 --  como corresponde: ahi trabajas como KAM, no como proveedora del sistema.
 update usuarios
-set cuenta_id = (select id from cuentas where rut = 'UPLEVEL'),
+set cuenta_id = (select id from cuentas where plan = 'soporte' limit 1),
     rol       = 'superadmin'
 where email = 'webuplevel@gmail.com';
 
@@ -113,7 +124,7 @@ where email = 'webuplevel@gmail.com';
 create or replace view cuentas_sin_admin as
 select c.id, c.rut, c.nombre, c.activa
 from cuentas c
-where c.rut <> 'UPLEVEL'
+where c.plan <> 'soporte'
   and not exists (
     select 1 from usuarios u
     where u.cuenta_id = c.id and u.rol = 'admin' and u.activo
