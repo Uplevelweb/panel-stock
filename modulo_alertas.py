@@ -80,8 +80,9 @@ def cargar_ordenes(sello: str) -> pd.DataFrame:
     tabla = pd.concat(partes, ignore_index=True)
     tabla["unidad"] = tabla["unidad"].astype(str)
     tabla["total"] = pd.to_numeric(tabla["total"], errors="coerce").fillna(0.0)
-    tabla["rut_limpio"] = tabla["rut_proveedor"].map(alertador.solo_digitos_rut)
-    return tabla
+    tabla["rut_limpio"] = tabla["rut_proveedor"].astype(str).map(alertador.solo_digitos_rut)
+    # Ver `comprimir_textos` en alertador.py: de 198 MB a 71 MB.
+    return alertador.comprimir_textos(tabla)
 
 
 @st.cache_data(show_spinner=False)

@@ -327,7 +327,7 @@ def terminos_del_rut(rut: str, oc: pd.DataFrame) -> tuple[set[str], list[str]]:
     convenios = sorted(c for c in mias["convenio_marco"].dropna().unique() if c)
 
     # Se miran los productos mas vendidos, no todos: la cola larga mete ruido.
-    top = (mias.groupby("producto")["total"].sum()
+    top = (mias.groupby("producto", observed=True)["total"].sum()
            .sort_values(ascending=False).head(200).index)
 
     # Y de esos, solo las palabras que se repiten en VARIOS productos. Una
@@ -398,6 +398,28 @@ def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame) -> tuple[set[str], lis
 #  LA BODEGA DE ORDENES DE COMPRA (para enriquecer)
 # ======================================================================
 
+# Las columnas de texto se guardan como «categoria»: el nombre de cada
+# proveedor aparece una sola vez y las filas apuntan a el.
+#
+# Medido el 27-08-2026 sobre la bodega real: 1.216.263 filas pero solo 1.291
+# proveedores distintos y 4.212 unidades. Guardando el texto completo en cada
+# fila la tabla ocupa 198 MB; guardandolo una vez, 32 MB. Seis veces menos,
+# y sin perder un dato.
+#
+# Esto es lo que hace posible ampliar la bodega mas alla de Convenio Marco:
+# con 5,6 veces mas filas seguiria por debajo de lo que ocupa hoy.
+COLUMNAS_REPETIDAS = ["unidad", "convenio_marco", "rut_proveedor", "proveedor",
+                      "producto", "rut_limpio"]
+
+
+def comprimir_textos(tabla):
+    """Deja las columnas de texto repetido como categoria. Ver arriba el porque."""
+    for columna in COLUMNAS_REPETIDAS:
+        if columna in tabla.columns:
+            tabla[columna] = tabla[columna].astype("category")
+    return tabla
+
+
 def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
     """
     Solo las columnas que hacen falta. Cargar las 16 de los 25 archivos se
@@ -425,9 +447,12 @@ def cargar_ordenes(meses: int = 24) -> pd.DataFrame:
 
     oc = pd.concat(partes, ignore_index=True)
     oc["unidad"] = oc["unidad"].astype(str)
-    oc["rut_limpio"] = oc["rut_proveedor"].map(solo_digitos_rut)
+    # El rut limpio se calcula ANTES de comprimir, sobre texto normal, y
+    # despues se comprime igual que los demas: son 1.291 valores distintos
+    # repetidos 1,2 millones de veces, como el resto.
+    oc["rut_limpio"] = oc["rut_proveedor"].astype(str).map(solo_digitos_rut)
     oc["total"] = pd.to_numeric(oc["total"], errors="coerce").fillna(0.0)
-    return oc
+    return comprimir_textos(oc)
 
 
 def retrato_del_comprador(unidad: str, oc: pd.DataFrame, convenios: list[str]) -> dict:
@@ -450,7 +475,8 @@ def retrato_del_comprador(unidad: str, oc: pd.DataFrame, convenios: list[str]) -
         return vacio
 
     gasto = float(suyas["total"].sum())
-    por_proveedor = suyas.groupby("proveedor")["total"].sum().sort_values(ascending=False)
+    por_proveedor = (suyas.groupby("proveedor", observed=True)["total"].sum()
+                     .sort_values(ascending=False))
     lider = str(por_proveedor.index[0]) if len(por_proveedor) else ""
     share = float(por_proveedor.iloc[0] / gasto * 100) if gasto > 0 else 0.0
 

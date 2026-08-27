@@ -28,6 +28,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+import alertador
+
 CARPETA = Path(__file__).parent
 RUTA_BODEGA = CARPETA / "bodega"
 
@@ -99,7 +101,10 @@ def cargar_compras(sello: str) -> pd.DataFrame:
     tabla["rut"] = (tabla["rut_proveedor"].astype("string")
                     .str.replace(".", "", regex=False)
                     .str.replace("-", "", regex=False).str.strip().str.upper())
-    return tabla
+    # Ver `comprimir_textos` en alertador.py: seis veces menos memoria sin
+    # perder un dato, porque son pocos valores distintos repetidos un millon
+    # de veces. Se hace al final, cuando `rut` ya esta calculado.
+    return alertador.comprimir_textos(tabla)
 
 
 @st.cache_data(show_spinner=False)
@@ -131,11 +136,11 @@ def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
     mercado = compras[compras["convenio_marco"].isin(convenios)].copy()
     mercado["mio"] = mercado["rut"].str.startswith(cuerpo, na=False)
 
-    tabla = mercado.groupby("unidad").agg(
+    tabla = mercado.groupby("unidad", observed=True).agg(
         gasto=("total", "sum"),
         proveedores=("rut", "nunique"),
     ).reset_index()
-    vendido = (mercado[mercado["mio"]].groupby("unidad")["total"].sum()
+    vendido = (mercado[mercado["mio"]].groupby("unidad", observed=True)["total"].sum()
                .rename("vendido"))
     tabla = tabla.join(vendido, on="unidad").fillna({"vendido": 0})
     tabla["parte"] = (tabla["vendido"] / tabla["gasto"] * 100).round(1)
