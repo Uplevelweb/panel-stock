@@ -112,23 +112,10 @@ def cargar_unidades(sello: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 #  Calculo
 # --------------------------------------------------------------------------
-# Lo que la bodega escribe en `convenio_marco` cuando la orden NO es de
-# Convenio Marco. Desde que la bodega guarda las seis vias, la mayoria de las
-# lineas viene asi.
-SIN_CONVENIO = {"", "NA", "N/A", "NONE", "NAN"}
-
-
-def convenios_de(columna: pd.Series) -> list[str]:
-    """Los convenios marco de verdad que hay en esa columna.
-
-    Hay que sacar el «NA» a mano y no es un detalle: esta pantalla compara
-    contra «el mercado de sus rubros», y un rubro es un convenio marco. Si
-    «NA» entra en la lista, `isin` se lleva TODAS las lineas que no son de
-    Convenio Marco —licitaciones, tratos directos y compras agiles de Chile
-    entero— y el mercado del proveedor sale multiplicado por cien.
-    """
-    valores = {str(c).strip() for c in pd.Series(columna).dropna().unique()}
-    return sorted(c for c in valores if c.upper() not in SIN_CONVENIO)
+# El «NA» de los convenios se filtra en un solo lugar, `alertador.convenios_de`:
+# es la misma pregunta que se hace el correo diario y no puede contestarse
+# distinto en cada pantalla.
+convenios_de = alertador.convenios_de
 
 
 def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
