@@ -132,6 +132,27 @@ def solo_digitos_rut(rut: str) -> str:
     return re.sub(r"[^0-9kK]", "", str(rut or "")).upper()
 
 
+# Lo que la bodega escribe en `convenio_marco` cuando la orden NO es de
+# Convenio Marco. Desde que la bodega guarda las seis vias, la mayoria de las
+# lineas viene asi.
+SIN_CONVENIO = {"", "NA", "N/A", "NONE", "NAN"}
+
+
+def convenios_de(columna) -> list[str]:
+    """Los convenios marco de verdad que hay en esa columna.
+
+    Hay que sacar el «NA» a mano y no es un detalle. Todo lo que compara «el
+    mercado de sus rubros» lo hace con `isin(convenios)`, y si «NA» entra en la
+    lista, `isin` se lleva TODAS las lineas que no son Convenio Marco —las
+    licitaciones, los tratos directos y las compras agiles de Chile entero— y
+    el numero sale multiplicado.
+
+    Un valor de relleno que parece un dato: la misma trampa del RUT 'UPLEVEL'.
+    """
+    valores = {str(c).strip() for c in pd.Series(columna).dropna().unique()}
+    return sorted(c for c in valores if c.upper() not in SIN_CONVENIO)
+
+
 def plata(monto) -> str:
     """1234567 -> «$1.234.567». Los millones se acortan para que quepan."""
     try:
@@ -408,7 +429,10 @@ def terminos_del_rut(rut: str, oc: pd.DataFrame) -> tuple[set[str], list[str]]:
     if mias.empty:
         return set(), []
 
-    convenios = sorted(c for c in mias["convenio_marco"].dropna().unique() if c)
+    # Sin el «NA»: un proveedor que vende solo por licitacion tiene todas sus
+    # lineas asi, y ese «convenio» de mentira despues se usa para acotar el
+    # mercado del comprador. Ver `convenios_de`.
+    convenios = convenios_de(mias["convenio_marco"])
 
     # Se miran los productos mas vendidos, no todos: la cola larga mete ruido.
     top = (mias.groupby("producto", observed=True)["total"].sum()
