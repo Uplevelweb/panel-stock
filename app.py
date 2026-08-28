@@ -4312,6 +4312,16 @@ def main() -> None:
     icono_del_movil()
     cabecera()
 
+    # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
+    # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
+    # hacer trabajar al servidor.
+    #
+    # Mientras no exista el bloque `[auth]` en los secretos, `puerta()` devuelve
+    # exactamente lo mismo que antes y esto no se nota: la puerta sigue siendo
+    # la lista de Streamlit. El dia que se peguen las credenciales, cambia sola.
+    from modulo_cuentas import puerta
+    yo = puerta()
+
     # El catalogo de ofertas se lee una vez y lo usan las dos pestañas. La URL
     # sale del campo de «Análisis de compras», que se dibuja despues: en la
     # primera pasada todavia no esta en session_state y se usa la de fabrica.
@@ -4340,8 +4350,7 @@ def main() -> None:
     # «Soporte» solo aparece si quien entro es de Uplevel. No es seguridad —la
     # pantalla igual comprueba el rol adentro— sino no ponerle delante una
     # pestaña que no es suya a cada cliente que abre el panel.
-    from modulo_cuentas import es_soporte, quien_soy
-    yo = quien_soy()
+    from modulo_cuentas import es_soporte
     # «Seguimiento» va SEGUNDA, pegada a Oportunidades: son las dos caras de
     # lo mismo —a quien vender y en que quedo lo que ya se aviso— y quien
     # trabaja el dia a dia se mueve entre esas dos, no entre las otras.
