@@ -507,6 +507,24 @@ se cae cerrado convierte cualquier problema chico en «hoy no puedo trabajar».
   más escribe esa llave (los atajos escriben `mp_periodo`), Streamlit reclama en el registro.
 - **La app publicada se duerme** por inactividad: al abrirla aparece "Zzzz" y hay que
   despertarla. Es el plan gratuito.
+- **⚠️ El techo de memoria de Streamlit son ~1.000 MB, y pasarse NO deja traceback.** El proceso
+  muere, el registro se queda en «Updated app!» y la pantalla dice «Oh no. Error running app»:
+  exactamente lo que se ve cuando hay un error de código, pero sin ninguna pista. **Si el
+  registro no tiene traza, es memoria.** Pasó el 27-08-2026 al ampliar la bodega a las seis
+  vías (de 1,2 a 8,3 millones de líneas).
+- **La bodega se lee en UN solo lugar: `alertador.resumen_de_ordenes`**, y una sola
+  `@st.cache_data` la guarda (`modulo_oportunidades.cargar_compras`). **No hacer otra caché de
+  la bodega.** `st.tabs` dibuja TODAS las pestañas en cada corrida, así que dos cachés se
+  llenan siempre aunque nadie abra esa pestaña, y `@st.cache_data` además **devuelve una copia
+  en cada llamada**. Esa función no devuelve líneas sueltas: viene **resumida** —una fila por
+  comprador-vía-convenio-proveedor, con `total` y `lineas`—, que es el 22% de las filas con la
+  misma plata. Quien necesite contar órdenes usa `lineas`, no `len()`.
+- **Después de un cierre por memoria hay que REINICIAR la app**, no basta con subir el arreglo:
+  Streamlit sigue mostrando «Oh no» aunque despliegue el código nuevo. *Manage app ▸ ⋮ ▸ Reboot
+  app* (o el mismo menú en share.streamlit.io).
+- **`convenio_marco = "NA"` no es un convenio**: es lo que traen las órdenes que no son de
+  Convenio Marco. Si entra en una lista de convenios, `isin` se lleva todas las compras de las
+  otras cinco vías. Se filtra con `modulo_oportunidades.convenios_de()`.
 
 ## Verificación antes de entregar
 
