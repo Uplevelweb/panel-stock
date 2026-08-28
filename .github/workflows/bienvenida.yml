@@ -1,0 +1,123 @@
+# Manda el PRIMER correo a quien se acaba de inscribir.
+#
+# POR QUE EXISTE: quien se inscribe a las 15:00 no puede esperar hasta las
+# 08:00 del dia siguiente para ver algo. Diecisiete horas de silencio justo
+# en el momento de mas entusiasmo, y el producto todavia no se ha mostrado
+# ni una vez.
+#
+# QUIEN LO DISPARA: el reloj de Supabase, cada 5 minutos, y SOLO cuando hay
+# alguien esperando. Este archivo no lleva `schedule` a proposito: el de
+# GitHub llega horas tarde (medido el 28-08-2026: entre 7 y 10 horas) y
+# ademas duplicaria el envio.
+#
+# POR QUE SON DOS TRABAJOS Y NO UNO: el segundo baja el repositorio entero,
+# que pesa 121 MB por la bodega. El primero pregunta con un curl de dos
+# segundos y solo despierta al segundo si de verdad hay alguien. Asi este
+# workflow es seguro de disparar a mano desde cualquier parte.
+#
+# LA MARCA vive en `suscriptores.bienvenida_enviada`, y se escribe DESPUES
+# de que el correo salio. Si el envio falla, esa persona sigue en la cola y
+# lo recibe en la corrida siguiente.
+#
+# NO REPITE lo que manda: llama a `anotar_avisado` igual que el correo
+# diario, asi que las oportunidades de la bienvenida no vuelven a salir al
+# otro dia a las 08:00.
+#
+# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+
+name: Correo de bienvenida
+
+on:
+  workflow_dispatch:
+    inputs:
+      ensayo:
+        description: "Armar el correo pero NO enviarlo (para probar)"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  # ---------------------------------------------------------------
+  #  1. La pregunta barata: ¿hay alguien esperando?
+  # ---------------------------------------------------------------
+  mirar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      hay: ${{ steps.consulta.outputs.hay }}
+    steps:
+      - name: Preguntar a Supabase
+        id: consulta
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          RESPUESTA=$(curl -s --max-time 30 \
+            "$SUPABASE_URL/rest/v1/suscriptores?select=id&activo=eq.true&bienvenida_enviada=is.null&limit=1" \
+            -H "apikey: $SUPABASE_SECRET_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+
+          # Solo una lista con filas de verdad trae "id". Un error de
+          # Supabase (por ejemplo, que falte la columna) no lo trae, y
+          # entonces esta corrida se detiene aca sin hacer nada.
+          if printf '%s' "$RESPUESTA" | grep -q '"id"'; then
+            echo "hay=true" >> "$GITHUB_OUTPUT"
+            echo "Hay alguien esperando su primer correo."
+          else
+            echo "hay=false" >> "$GITHUB_OUTPUT"
+            echo "Nadie espera bienvenida. Respuesta: $RESPUESTA"
+          fi
+
+  # ---------------------------------------------------------------
+  #  2. El envio: solo despierta si el primero dijo que si
+  # ---------------------------------------------------------------
+  enviar:
+    needs: mirar
+    if: needs.mirar.outputs.hay == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow
+
+      - name: Armar y enviar la bienvenida
+        env:
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          # Una corrida programada SIEMPRE envia: es lo unico para lo que
+          # existe. `github.event.inputs` no existe cuando dispara el
+          # horario, asi que sin esta linea se iria por la rama del ensayo
+          # y no le llegaria nada a nadie. Le paso al correo diario el
+          # 27-08-2026 y no se noto: la corrida salia «success».
+          ENSAYO="${{ github.event.inputs.ensayo }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ENSAYO="false"
+          fi
+
+          if [ "$ENSAYO" = "false" ]; then
+            python alertador.py --enviar --bienvenidas
+          else
+            python alertador.py --guardar correo.html --bienvenidas
+          fi
+
+      # Solo en el ensayo: deja el correo para poder mirarlo. Se borra a
+      # los 3 dias. NUNCA se sube al repositorio.
+      - name: Guardar el correo de ensayo
+        if: ${{ github.event_name != 'schedule' && github.event.inputs.ensayo != 'false' && hashFiles('correo.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: correo-de-bienvenida
+          path: correo.html
+          retention-days: 3
