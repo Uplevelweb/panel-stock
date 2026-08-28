@@ -28,20 +28,25 @@ unico admin y desde adentro no tiene salida, o un correo mal escrito que deja
 a alguien afuera sin ningun mensaje que lo explique. Eso es lo que arregla
 `seccion_soporte`.
 
-LA REGLA QUE MAS IMPORTA: NUNCA DEJAR A NADIE AFUERA
-----------------------------------------------------
-Si las tablas de Supabase todavia no existen, si faltan las credenciales, si
-Streamlit no entrega el correo de quien entro, o si la consulta falla — el
-panel se comporta EXACTAMENTE como antes de que existiera este modulo: se ve
-todo. Un sistema de permisos que se cae dejando la puerta cerrada convierte
-cualquier problema chico en «no puedo trabajar hoy».
+LA REGLA QUE MAS IMPORTA, Y VA PARTIDA EN DOS
+----------------------------------------------
+QUE VE cada uno falla ABIERTO: si las tablas de Supabase no existen, si faltan
+las credenciales o si la consulta se cae, el panel se comporta exactamente como
+antes de que existiera este modulo y se ve todo. Un sistema de permisos que se
+cae cerrado convierte cualquier problema chico en «no puedo trabajar hoy».
 
-La puerta de verdad sigue siendo otra: hoy es la lista de Streamlit («Manage
-app ▸ Settings ▸ Sharing»), que decide quien puede ABRIR la app. Esto de aca
-decide que ve adentro cada uno. Son dos cosas distintas y conviene no
-confundirlas: mientras la puerta sea esa lista, agregar un comercial son dos
-pasos, aca y alla. El dia que se quiera vender el plan Empresa de verdad hay
-que cambiar la puerta por un login propio, y este modulo no cambia.
+QUIEN ENTRA falla CERRADO, y es lo unico del panel que lo hace. Ver `puerta()`.
+Mientras la puerta fue la lista de Streamlit («Manage app ▸ Settings ▸
+Sharing»), fallar abierto no tenia costo: alguien ya habia decidido quien pasa.
+Cuando la puerta es la app —desde que existe el bloque `[auth]` en los
+secretos— fallar abierto significa dejar entrar a un desconocido a la cartera
+de clientes. Para que «cerrado» no signifique «nadie puede arreglarlo», queda
+la llave de emergencia de `[acceso] siempre` en los secretos.
+
+MIENTRAS NO HAYA `[auth]`, NADA DE ESTO SE NOTA: `puerta()` devuelve lo mismo
+que `quien_soy()` y la puerta sigue siendo la lista de Streamlit. Y si el login
+se rompe, el arreglo son treinta segundos: **borrar el bloque `[auth]` de los
+secretos** y el panel vuelve a la lista de antes.
 
 DE DONDE SALE EL CORREO
 -----------------------
@@ -83,6 +88,9 @@ SIN_RESTRICCION = {
     "comunas": [],
     "motivo": "sin cuentas configuradas",
 }
+
+# El nombre del proveedor de identidad en los secretos: `[auth.auth0]`.
+PROVEEDOR = "auth0"
 
 
 # --------------------------------------------------------------------------
@@ -203,6 +211,127 @@ def quien_soy() -> dict:
 
 
 # --------------------------------------------------------------------------
+#  La puerta
+# --------------------------------------------------------------------------
+def hay_login() -> bool:
+    """Si el panel trae identificacion propia configurada.
+
+    Mientras no este el bloque `[auth]` en los secretos, todo se comporta
+    exactamente como antes y la puerta sigue siendo la lista de Streamlit. Por
+    eso este codigo se puede subir sin cambiar nada: el dia que se peguen las
+    credenciales de Auth0, la puerta cambia sola y sin tocar el codigo.
+    """
+    try:
+        return bool(dict(st.secrets.get("auth", {})).get("redirect_uri"))
+    except Exception:
+        return False
+
+
+def _entro() -> bool:
+    """Si Streamlit reconoce una sesion iniciada.
+
+    Se pregunta asi y no con `st.user.is_logged_in` a secas porque ese atributo
+    NO EXISTE cuando la identificacion no quedo bien configurada: revienta con
+    AttributeError en vez de devolver False, y eso tumbaria el panel entero por
+    una coma mal puesta en los secretos. Comprobado en pruebas.
+    """
+    try:
+        return bool(st.user.is_logged_in)
+    except Exception:
+        return False
+
+
+def _llaves_de_emergencia() -> set[str]:
+    """Correos que entran aunque la base no conteste.
+
+    Van en los SECRETOS y nunca en el codigo, porque el repositorio es publico:
+
+        [acceso]
+        siempre = ["serlingvera@gmail.com"]
+
+    Es la salida del unico bloqueo que no tendria arreglo desde adentro:
+    Supabase caido y nadie que pueda entrar a arreglarlo.
+    """
+    try:
+        lista = st.secrets.get("acceso", {}).get("siempre", []) or []
+    except Exception:
+        return set()
+    return {str(c).strip().lower() for c in lista if str(c).strip()}
+
+
+def _portada(titulo: str, bajada: str) -> None:
+    """La pantalla que se ve sin haber entrado. Sobria y en una columna."""
+    izquierda, centro, derecha = st.columns([1, 2, 1])
+    with centro:
+        st.markdown(f"### {titulo}")
+        st.caption("Compras Públicas · Chile")
+        st.write(bajada)
+
+
+def puerta() -> dict:
+    """Quien esta usando el panel. Con login propio, ESTA ES LA ENTRADA.
+
+    Es lo unico del panel que falla CERRADO, y es a proposito. El resto de este
+    modulo falla abierto —si la base no contesta se ve todo, en vez de dejar a
+    alguien sin trabajar—, pero esa regla vale para QUE VE cada uno, no para
+    QUIEN ENTRA. Mientras la puerta fue la lista de Streamlit, alguien ya habia
+    decidido quien pasa; cuando la puerta es la app, fallar abierto significa
+    dejar entrar a un desconocido a la cartera de clientes.
+
+    Y para que «cerrado» no signifique «nadie puede arreglarlo», queda la
+    llave de emergencia de los secretos.
+    """
+    if not hay_login():
+        return quien_soy()          # todavia manda la lista de Streamlit
+
+    if not _entro():
+        _portada("Uplevel Inteligencia",
+                 "Qué compra el Estado de lo que tú vendes, cuánto gasta y "
+                 "quién se lo está llevando hoy.")
+        izquierda, centro, derecha = st.columns([1, 2, 1])
+        with centro:
+            if st.button("Entrar o crear cuenta", type="primary",
+                         width="stretch", key="puerta_entrar"):
+                st.login(PROVEEDOR)
+            st.caption("Se entra con tu correo. La primera vez, la misma "
+                       "pantalla te deja crear la cuenta.")
+        st.stop()
+
+    email = correo_de_quien_entro()
+    yo = quien_soy()
+
+    if yo.get("identificado") and yo.get("rol") != "suspendido":
+        return yo
+
+    if email in _llaves_de_emergencia():
+        return dict(SIN_RESTRICCION, identificado=True, email=email,
+                    motivo="llave de emergencia de Uplevel")
+
+    if yo.get("rol") == "suspendido":
+        titulo, aviso = ("Tu cuenta está desactivada",
+                         "Alguien de tu empresa la desactivó, o la cuenta "
+                         "completa está suspendida. Quien la administra puede "
+                         "volver a activarla.")
+    elif "no se pudo consultar" in str(yo.get("motivo", "")):
+        titulo, aviso = ("No pudimos comprobar tu cuenta",
+                         "Es un problema nuestro, no tuyo. Vuelve a intentarlo "
+                         "en unos minutos.")
+    else:
+        titulo, aviso = ("Tu cuenta todavía no está habilitada",
+                         f"Entraste con **{email}**, pero ese correo no está "
+                         "en ninguna cuenta. Si te inscribiste con otro, sal y "
+                         "vuelve a entrar con ese.")
+
+    _portada(titulo, aviso)
+    izquierda, centro, derecha = st.columns([1, 2, 1])
+    with centro:
+        st.caption("Escríbenos a webuplevel@gmail.com y lo resolvemos.")
+        if st.button("Salir", key="puerta_salir", width="stretch"):
+            st.logout()
+    st.stop()
+
+
+# --------------------------------------------------------------------------
 #  El territorio
 # --------------------------------------------------------------------------
 def es_soporte(usuario: dict) -> bool:
@@ -301,6 +430,18 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
                    comunas_posibles: list[str]) -> None:
     """La pantalla donde el admin arma su equipo. Solo la ve el admin."""
     st.subheader("Mi equipo")
+
+    # El «salir» vive aca y no en la cabecera a proposito: es lo unico del
+    # panel que se aprieta una vez al mes, y la cabecera es de la marca. Quien
+    # entro se lee de un vistazo antes de tocar nada de su equipo.
+    if hay_login() and _entro():
+        quien, boton = st.columns([3, 1])
+        with quien:
+            st.caption(f"Estás dentro como **{usuario.get('email') or 'sin correo'}**"
+                       + (f" · {usuario.get('nombre')}" if usuario.get("nombre") else ""))
+        with boton:
+            if st.button("Salir", key="equipo_salir", width="stretch"):
+                st.logout()
 
     if not usuario.get("identificado"):
         st.info(
