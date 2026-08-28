@@ -79,7 +79,22 @@ jobs:
           fi
           echo "Turno: ${TURNO:-todos}"
 
-          if [ "${{ github.event.inputs.ensayo }}" = "false" ]; then
+          # UNA CORRIDA PROGRAMADA SIEMPRE ENVIA: es lo unico para lo que
+          # existe. El ensayo es para las corridas a mano, y por eso viene
+          # marcado por defecto arriba.
+          #
+          # Sin esta linea no manda nunca, y no se nota: `github.event.inputs`
+          # NO EXISTE cuando dispara el horario, asi que `ensayo` llega vacio,
+          # la comparacion con "false" da falso y la corrida de las 08:00 se va
+          # por la rama del ensayo. La corrida sale «success», el registro dice
+          # que armo el correo, y a nadie le llega nada. Encontrado el
+          # 27-08-2026, antes del primer turno de verdad.
+          ENSAYO="${{ github.event.inputs.ensayo }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ENSAYO="false"
+          fi
+
+          if [ "$ENSAYO" = "false" ]; then
             python alertador.py --enviar $TURNO
           else
             python alertador.py --guardar correo.html $TURNO
@@ -88,7 +103,7 @@ jobs:
       # Solo en el ensayo: deja el correo para poder mirarlo. Se borra a los
       # 3 dias. NUNCA se sube al repositorio.
       - name: Guardar el correo de ensayo
-        if: ${{ github.event.inputs.ensayo != 'false' && hashFiles('correo.html') != '' }}
+        if: ${{ github.event_name != 'schedule' && github.event.inputs.ensayo != 'false' && hashFiles('correo.html') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: correo-de-ensayo
