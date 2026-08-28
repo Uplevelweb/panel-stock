@@ -202,7 +202,28 @@ def seccion_alertas():
     )
 
     sello = _sello()
-    oc = cargar_ordenes(sello)
+
+    # La bodega se abre SOLO cuando de verdad hace falta. `st.tabs` dibuja esta
+    # pestaña en cada corrida aunque nadie la abra, asi que cargarla arriba era
+    # gastar la memoria del panel entero en una pantalla que nadie esta mirando.
+    # Con el formulario en blanco —que es como llega todo el que abre la app—
+    # ahora no se toca un solo parquet.
+    abierta: list = []
+
+    def bodega() -> pd.DataFrame:
+        if not abierta:
+            abierta.append(cargar_ordenes(sello))
+        return abierta[0]
+
+    def bolsa_de(config: dict):
+        """Los terminos del filtro. Solo abre la bodega si el filtro trae RUT.
+
+        `alertador.bolsa_de_terminos` mira `oc` unicamente cuando hay que sacar
+        las palabras de un RUT; sin RUT no lo toca, y pasarle una tabla vacia
+        no cambia nada de lo que devuelve.
+        """
+        return alertador.bolsa_de_terminos(
+            config, bodega() if config.get("rut_proveedor") else pd.DataFrame())
 
     izquierda, derecha = st.columns([1, 1], gap="large")
 
@@ -236,7 +257,7 @@ def seccion_alertas():
 
         del_rut, convenios = set(), []
         if rut.strip():
-            del_rut, convenios = alertador.terminos_del_rut(rut, oc)
+            del_rut, convenios = alertador.terminos_del_rut(rut, bodega())
             if del_rut:
                 st.success(f"Ese RUT vende en {len(convenios)} convenios marco. "
                            f"De ahí salieron {len(del_rut)} palabras solas.")
@@ -328,7 +349,7 @@ def seccion_alertas():
         st.caption("Calculado contra las licitaciones del último mes que ya están "
                    "en la bodega, con las mismas reglas que usa el correo.")
 
-        bolsa, _, origen = alertador.bolsa_de_terminos(config, oc)
+        bolsa, _, origen = bolsa_de(config)
 
         if not bolsa:
             st.info("Todavía no hay con qué filtrar. Escribe un RUT que venda en "
@@ -343,7 +364,7 @@ def seccion_alertas():
                 encaje = alertador.le_sirve(op, bolsa, config)
                 if encaje < minimo:
                     continue
-                retrato = alertador.retrato_del_comprador(op.get("unidad"), oc, convenios)
+                retrato = alertador.retrato_del_comprador(op.get("unidad"), bodega(), convenios)
                 valor, clase = alertador.nota(retrato)
                 elegidas.append({**op, "encaje": encaje, "retrato": retrato,
                                  "nota": valor, "clase": clase})
@@ -396,7 +417,7 @@ def seccion_alertas():
     if guardar or guardar_y_enviar:
         if not config["email"] or "@" not in config["email"]:
             st.error("Falta el correo.")
-        elif not alertador.bolsa_de_terminos(config, oc)[0]:
+        elif not bolsa_de(config)[0]:
             st.error("Falta decir qué avisar: un RUT con Convenio Marco, "
                      "rubros o palabras clave.")
         else:
@@ -406,7 +427,7 @@ def seccion_alertas():
                 st.session_state["al_guardado"] = config
                 if guardar_y_enviar:
                     aviso_paso = st.empty()
-                    fue, detalle = enviar_ahora(config, oc, aviso_paso)
+                    fue, detalle = enviar_ahora(config, bodega(), aviso_paso)
                     aviso_paso.empty()
                     if fue:
                         st.success(detalle + " Revisa tu bandeja.")
