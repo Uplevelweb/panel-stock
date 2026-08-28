@@ -60,7 +60,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -369,6 +369,84 @@ def anotar_avisado(suscriptor: dict, elegidas: list[dict],
     correo = suscriptor.get("email", "")
     datos[correo] = sorted(set(datos.get(correo, [])) | set(codigos))
     ENVIADOS_LOCAL.write_text(json.dumps(datos, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+# ======================================================================
+#  LA BIENVENIDA
+# ======================================================================
+#
+# Quien se inscribe a las 15:00 no puede esperar hasta las 08:00 del dia
+# siguiente para ver algo. Diecisiete horas de silencio en el momento de
+# mas entusiasmo. Por eso hay una corrida aparte, cada pocos minutos, que
+# le manda su PRIMER correo con oportunidades de verdad adentro.
+#
+# La marca de que ya se envio vive en `suscriptores.bienvenida_enviada`.
+# Se pregunta primero y barato: si no hay nadie esperando, la corrida
+# termina en segundos sin tocar la bodega.
+
+
+BIENVENIDAS_LOCAL = AQUI / "bienvenidas_enviadas.json"
+
+
+def pendientes_de_bienvenida(suscriptores: list[dict]) -> list[dict]:
+    """De los que llegan, los que nunca han recibido su primer correo."""
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+
+    if url and clave:
+        consulta = (f"{url}/rest/v1/suscriptores?select=id"
+                    "&activo=eq.true&bienvenida_enviada=is.null")
+        peticion = urllib.request.Request(consulta, headers={
+            "apikey": clave, "Authorization": f"Bearer {clave}",
+            "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+                filas = json.loads(respuesta.read().decode("utf-8"))
+        except Exception as error:
+            # Sin poder preguntar es mejor no mandar que mandar dos veces.
+            print(f"No se pudo leer quien espera bienvenida: {type(error).__name__}")
+            return []
+        ids = {str(f.get("id")) for f in filas}
+        return [s for s in suscriptores if str(s.get("id")) in ids]
+
+    # Sin base de datos la marca vive en un archivo al lado, igual que la
+    # memoria de lo ya avisado. Sirve para ensayar en el computador.
+    ya = set()
+    if BIENVENIDAS_LOCAL.exists():
+        ya = set(json.loads(BIENVENIDAS_LOCAL.read_text(encoding="utf-8")))
+    return [s for s in suscriptores if s.get("email") not in ya]
+
+
+def marcar_bienvenida(suscriptor: dict) -> None:
+    """Deja constancia de que su primer correo ya salio. Solo tras enviar."""
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+
+    if url and clave and suscriptor.get("id"):
+        cuerpo = json.dumps({
+            "bienvenida_enviada": datetime.now(timezone.utc).isoformat()
+        }).encode("utf-8")
+        peticion = urllib.request.Request(
+            f"{url}/rest/v1/suscriptores?id=eq.{suscriptor['id']}",
+            data=cuerpo, method="PATCH",
+            headers={"apikey": clave, "Authorization": f"Bearer {clave}",
+                     "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(peticion, timeout=60).read()
+        except Exception as error:
+            # Si esto falla, manana le llega otra bienvenida. Molesto, no
+            # grave: lo enviado ya quedo anotado y no se repite.
+            print(f"   no se pudo marcar la bienvenida: {type(error).__name__}")
+        return
+
+    ya = []
+    if BIENVENIDAS_LOCAL.exists():
+        ya = json.loads(BIENVENIDAS_LOCAL.read_text(encoding="utf-8"))
+    correo = suscriptor.get("email", "")
+    if correo and correo not in ya:
+        ya.append(correo)
+        BIENVENIDAS_LOCAL.write_text(json.dumps(ya, ensure_ascii=False, indent=1),
+                                     encoding="utf-8")
 
 
 # ======================================================================
@@ -1327,7 +1405,8 @@ def tarjeta(op: dict) -> str:
   </tr>"""
 
 
-def armar_correo(suscriptor: dict, oportunidades: list[dict]) -> str:
+def armar_correo(suscriptor: dict, oportunidades: list[dict],
+                 bienvenida: bool = False) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
     n = len(oportunidades)
     saludo = f"Hola {suscriptor['nombre'].split()[0]}, " if suscriptor.get("nombre") else ""
@@ -1350,6 +1429,20 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict]) -> str:
             "Con plazo para preparar la oferta."))
         bloques += [tarjeta(o) for o in licitaciones]
     tarjetas = "".join(bloques)
+
+    # El primer correo se presenta: quien lo recibe todavia no sabe que es
+    # esto ni cada cuanto le va a llegar. Del segundo en adelante, al grano.
+    if bienvenida:
+        titulo = "Tu cuenta quedó lista"
+        bajada = (f"{saludo}esto es lo que encontramos hoy en tus rubros: "
+                  f"{n} {'oportunidad' if n == 1 else 'oportunidades'}. "
+                  f"De aquí en adelante te llega cada mañana a las 8:00, y el "
+                  f"día que no haya nada que calce, no te escribimos.")
+    else:
+        titulo = "Oportunidades de hoy"
+        bajada = (f"{saludo}{n} "
+                  f"{'oportunidad coincide' if n == 1 else 'oportunidades coinciden'} "
+                  f"con lo que vendes · {hoy}")
 
     token = suscriptor.get("token_baja") or ""
     rut = suscriptor.get("rut_empresa") or "77.082.051-0"
@@ -1383,10 +1476,10 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict]) -> str:
   <tr>
     <td style="padding:26px 30px 6px;">
       <div style="color:{TEXTO};font-size:20px;font-weight:700;margin-bottom:4px;">
-        Oportunidades de hoy
+        {titulo}
       </div>
-      <div style="color:{TEXTO_SUAVE};font-size:14px;">
-        {saludo}{n} {'oportunidad coincide' if n == 1 else 'oportunidades coinciden'} con lo que vendes · {hoy}
+      <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.6;">
+        {bajada}
       </div>
     </td>
   </tr>
@@ -1488,6 +1581,8 @@ def main():
     parser.add_argument("--guardar", metavar="ARCHIVO",
                         help="escribe el correo a disco en vez de enviarlo")
     parser.add_argument("--enviar", action="store_true", help="envia de verdad")
+    parser.add_argument("--bienvenidas", action="store_true",
+                        help="solo a quienes nunca han recibido nada: su primer correo")
     parser.add_argument("--hora", type=int, metavar="N",
                         help="solo a quienes pidieron recibirlo a esa hora de Chile "
                              "(8, 13 o 18). Sin esto, va a todos")
@@ -1517,6 +1612,16 @@ def main():
 
     print(f"{len(suscriptores)} suscriptor(es) activo(s)\n")
 
+    # Se pregunta antes de cargar la bodega: si nadie espera su primer
+    # correo, la corrida termina en segundos y no gasta nada.
+    if args.bienvenidas:
+        antes = len(suscriptores)
+        suscriptores = pendientes_de_bienvenida(suscriptores)
+        print(f"Esperan su primer correo: {len(suscriptores)} de {antes}")
+        if not suscriptores:
+            print("Nadie espera bienvenida. Nada que hacer.")
+            return
+
     print("Cargando la bodega de ordenes de compra...")
     oc = resumen_de_ordenes()
     lineas = int(oc["lineas"].sum()) if not oc.empty else 0
@@ -1542,7 +1647,11 @@ def main():
         if not ticket:
             print("Falta TICKET_MP en el entorno. Con --prueba no hace falta.")
             return
-        universo = licitaciones_abiertas(ticket, union) + compras_agiles_abiertas(ticket)
+        # Para el primer correo se mira una semana de compras agiles en
+        # vez de un dia: hace falta material para que no llegue casi vacio.
+        dias_agiles = 7 if args.bienvenidas else 1
+        universo = (licitaciones_abiertas(ticket, union)
+                    + compras_agiles_abiertas(ticket, dias=dias_agiles))
 
     if not universo:
         print("No hay nada publicado. No se envia: el silencio construye confianza.")
@@ -1567,28 +1676,39 @@ def main():
         if vistos:
             print(f"   ya recibio {len(vistos)} oportunidades antes: esas no se repiten")
 
-        elegidas = []
-        for op in universo:
-            if op["codigo"] in vistos:
-                continue
-            encaje = le_sirve(op, bolsa, suscriptor)
-            if encaje < minimo:
-                continue
-            retrato = retrato_del_comprador(op.get("unidad"), oc, convenios)
-            valor, clase = nota(retrato)
-            elegidas.append({**op, "encaje": encaje, "retrato": retrato,
-                             "nota": valor, "clase": clase, "enlace": enlace(op)})
+        # Se aparta en una funcion para poder pedir la seleccion dos veces
+        # con distinta exigencia. La segunda vez solo ocurre en la bienvenida.
+        def escoger(exigencia: int) -> list[dict]:
+            salida = []
+            for op in universo:
+                if op["codigo"] in vistos:
+                    continue
+                encaje = le_sirve(op, bolsa, suscriptor)
+                if encaje < exigencia:
+                    continue
+                retrato = retrato_del_comprador(op.get("unidad"), oc, convenios)
+                valor, clase = nota(retrato)
+                salida.append({**op, "encaje": encaje, "retrato": retrato,
+                               "nota": valor, "clase": clase, "enlace": enlace(op)})
 
-        # PRIMERO lo que mas se parece a lo que vende; la nota solo desempata.
-        #
-        # Ordenando por la nota pasaba esto: «ALIMENTOS Y BEBIDAS ANIVERSARIO
-        # PATRIO», que es exactamente su rubro, quedaba ULTIMA con nota 1, y
-        # arriba iba un servicio de teleasistencia que no tiene nada que ver.
-        # La nota mide al COMPRADOR —cuanto gasta, que tan repartido esta—, no
-        # si la oportunidad le sirve. Un comprador desconocido saca nota baja
-        # aunque la licitacion le calce perfecto.
-        elegidas.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
-        elegidas = elegidas[:MAXIMO_POR_CORREO]
+            # PRIMERO lo que mas se parece a lo que vende; la nota solo desempata.
+            #
+            # Ordenando por la nota pasaba esto: «ALIMENTOS Y BEBIDAS ANIVERSARIO
+            # PATRIO», que es exactamente su rubro, quedaba ULTIMA con nota 1, y
+            # arriba iba un servicio de teleasistencia que no tiene nada que ver.
+            # La nota mide al COMPRADOR —cuanto gasta, que tan repartido esta—, no
+            # si la oportunidad le sirve. Un comprador desconocido saca nota baja
+            # aunque la licitacion le calce perfecto.
+            salida.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
+            return salida
+
+        elegidas = escoger(minimo)[:MAXIMO_POR_CORREO]
+
+        # Un primer correo vacio mata la impresion. Si nada alcanza el minimo
+        # exigido, se baja el liston UNA vez y van las mejores cinco.
+        if not elegidas and args.bienvenidas and minimo > 1:
+            print("   nada al minimo exigido: se relaja a 1 para el primer correo")
+            elegidas = escoger(1)[:5]
 
         # UNA sola pasada por los archivos para las ~15 elegidas, no una por
         # cada una: leer `producto` es lo caro y hay que hacerlo lo menos
@@ -1618,8 +1738,11 @@ def main():
             continue
         print(f"   {len(elegidas)} oportunidades · mejor nota {elegidas[0]['nota']} ({elegidas[0]['clase']})")
 
-        html = armar_correo(suscriptor, elegidas)
-        asunto = f"{len(elegidas)} oportunidades de hoy · Uplevel"
+        html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas)
+        if args.bienvenidas:
+            asunto = f"Tu cuenta quedó lista · {len(elegidas)} oportunidades para partir"
+        else:
+            asunto = f"{len(elegidas)} oportunidades de hoy · Uplevel"
 
         if args.guardar:
             Path(args.guardar).write_text(html, encoding="utf-8")
@@ -1635,6 +1758,10 @@ def main():
                 # Se anota DESPUES de que salio, nunca antes: si el envio
                 # falla, esas oportunidades tienen que poder salir manana.
                 anotar_avisado(suscriptor, elegidas, bolsa)
+                # La marca va DESPUES del envio, igual que lo anotado: si
+                # el correo no sale, esta persona sigue esperando el suyo.
+                if args.bienvenidas:
+                    marcar_bienvenida(suscriptor)
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
