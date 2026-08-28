@@ -92,6 +92,7 @@ no.
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
 | `alertas_config.json` | Configuración de prueba local. **NUNCA subirlo: el repo es público** |
+| `auth0-para-copiar.txt` | Los 9 pasos para encender el login propio. **NUNCA subirlo: lleva la clave de la sesión** |
 | `Mis-instituciones.xlsx` | Punto de partida de la hoja «Mis instituciones». Todavía no se usa: pendiente de la bitácora |
 
 ## Cómo se actualiza
@@ -424,8 +425,19 @@ mandar a alguien a perder la tarde.
 
 Son **dos cosas distintas y conviene no confundirlas**:
 
-- **Quién puede ABRIR el panel** lo decide la lista de Streamlit (*Manage app ▸
-  Settings ▸ Sharing*). Sigue siendo la puerta.
+- **Quién puede ABRIR el panel** lo decide `modulo_cuentas.puerta()` **si existe el
+  bloque `[auth]` en los secretos**; si no existe, sigue decidiéndolo la lista de
+  Streamlit (*Manage app ▸ Settings ▸ Sharing*) y nada de lo de abajo se nota. Los
+  pasos para encenderlo están en `auth0-para-copiar.txt` (**local, nunca al repo:
+  lleva la clave de la sesión**). Si el login se rompe, el arreglo son 30 segundos:
+  **borrar el bloque `[auth]` de los secretos** y todo vuelve a la lista de antes.
+  - `st.user.is_logged_in` **revienta con AttributeError** si la identificación no
+    quedó bien configurada, en vez de devolver `False`. Por eso se pregunta por
+    `_entro()` y nunca directo: una coma mal puesta en los secretos tumbaría el
+    panel entero.
+  - **`st.user` ya no trae el correo de la cuenta de Community Cloud** (cambió en
+    Streamlit 1.42). Sin `[auth]` no hay identidad, y por eso hoy el panel se ve
+    entero y la pestaña Soporte no aparece nunca.
 - **Qué ve cada uno adentro** lo decide `modulo_cuentas.py` contra las tablas
   `cuentas` y `usuarios` de Supabase. Tres roles: el `superadmin` es Uplevel y
   ve todas las cuentas; el `admin` ve toda su empresa; el `comercial` solo su
@@ -448,10 +460,13 @@ de verdad hay que cambiar la puerta por un login propio —Streamlit 1.61 ya tra
 `st.login()` / `st.user`, que es de donde el módulo saca el correo—; el módulo
 no cambia, solo se agrega el bloque `[auth]` a los secretos.
 
-**La regla que no se negocia: nunca dejar a nadie afuera.** Si las tablas no
-existen, si faltan credenciales o si la consulta falla, el panel se comporta
-como antes de que existiera el módulo y se ve todo. Un sistema de permisos que
-se cae cerrado convierte cualquier problema chico en «hoy no puedo trabajar».
+**La regla, partida en dos.** *Qué ve* cada uno falla **abierto**: si las tablas no
+existen, si faltan credenciales o si la consulta falla, se ve todo — un sistema de
+permisos que se cae cerrado convierte cualquier problema chico en «hoy no puedo
+trabajar». Pero *quién entra* falla **cerrado**, y es lo único del panel que lo
+hace: cuando la puerta es la app, dejar pasar a un desconocido es dejarlo entrar a
+la cartera de clientes. La salida a ese candado es `[acceso] siempre` en los
+secretos: los correos de Uplevel entran aunque Supabase esté caído.
 
 ## Lo que no es evidente y cuesta caro olvidar
 
