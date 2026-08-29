@@ -1175,6 +1175,16 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
             })
         if len(filas) < 50:
             break
+    else:
+        # El `for` llego al final sin cortar: se acabaron las paginas
+        # permitidas, no las compras. Habia mas y NO se pidieron.
+        #
+        # Antes esto pasaba callado. El 29-08-2026 la bienvenida trajo
+        # exactamente 2000 —40 paginas de 50, el techo justo—, que es la
+        # firma de que quedaron compras afuera y nadie se entero. Un numero
+        # redondo en un dato de la calle es siempre sospechoso.
+        print(f"  TECHO: {techo_paginas} paginas y seguian llegando. "
+              "Quedaron compras agiles sin pedir.")
     print(f"  {len(salida)} compras agiles abiertas")
     return salida
 
@@ -1824,11 +1834,21 @@ def main():
         # agil cierra en 24 a 72 horas, asi que una de hace una semana ya esta
         # cerrada. Mostrarsela a alguien en su PRIMER correo es peor que no
         # mostrarle nada.
-        marca = time.perf_counter()
         dias_agiles = 3 if args.bienvenidas else 1
-        universo = (licitaciones_abiertas(ticket, union)
-                    + compras_agiles_abiertas(ticket, dias=dias_agiles))
-        print("[tiempo] consultas a Mercado Publico: %.0f s" % (time.perf_counter() - marca))
+
+        # Las dos consultas se miden POR SEPARADO. Juntas decian «1194 s» y
+        # no se podia saber cual acortar: son cosas distintas y se arreglan
+        # distinto. Las licitaciones pagan 2 segundos de espera obligatoria
+        # por cada detalle; las compras agiles pagan paginas.
+        marca = time.perf_counter()
+        lic = licitaciones_abiertas(ticket, union)
+        print("[tiempo] licitaciones: %.0f s" % (time.perf_counter() - marca))
+
+        marca = time.perf_counter()
+        agi = compras_agiles_abiertas(ticket, dias=dias_agiles)
+        print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
+
+        universo = lic + agi
 
     if not universo:
         print("No hay nada publicado. No se envia: el silencio construye confianza.")
