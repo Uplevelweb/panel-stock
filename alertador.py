@@ -1679,7 +1679,14 @@ def main():
 
     print("Cargando la bodega de ordenes de compra...")
     marca = time.perf_counter()
-    oc = resumen_de_ordenes()
+    # DOCE meses, no 24, y no es por velocidad: la tarjeta del correo dice
+    # «en lo que tu vendes · ultimos 12 meses» y la bodega se leia a 24. La
+    # cifra que veia el cliente estaba al doble de lo que prometia su propia
+    # etiqueta. Encontrado el 29-08-2026 midiendo otra cosa.
+    #
+    # El panel sigue leyendo 24 y esta bien: alli la columna se llama
+    # «Gasto 24m» y dice lo que muestra.
+    oc = resumen_de_ordenes(12)
     lineas = int(oc["lineas"].sum()) if not oc.empty else 0
     print(f"  {lineas:,} lineas en {len(oc):,} filas\n".replace(",", "."))
     print("[tiempo] bodega: %.0f s" % (time.perf_counter() - marca))
@@ -1706,10 +1713,15 @@ def main():
         if not ticket:
             print("Falta TICKET_MP en el entorno. Con --prueba no hace falta.")
             return
-        # Para el primer correo se mira una semana de compras agiles en
-        # vez de un dia: hace falta material para que no llegue casi vacio.
+        # Para el primer correo se miran 3 dias de compras agiles en vez de
+        # uno: hace falta material para que no llegue casi vacio.
+        #
+        # Eran 7 y se bajo a 3 el 29-08-2026. No es solo velocidad: una compra
+        # agil cierra en 24 a 72 horas, asi que una de hace una semana ya esta
+        # cerrada. Mostrarsela a alguien en su PRIMER correo es peor que no
+        # mostrarle nada.
         marca = time.perf_counter()
-        dias_agiles = 7 if args.bienvenidas else 1
+        dias_agiles = 3 if args.bienvenidas else 1
         universo = (licitaciones_abiertas(ticket, union)
                     + compras_agiles_abiertas(ticket, dias=dias_agiles))
         print("[tiempo] consultas a Mercado Publico: %.0f s" % (time.perf_counter() - marca))
