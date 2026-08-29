@@ -90,8 +90,13 @@ no.
 | `supabase-seguimiento-para-copiar.txt` | El SQL de la tabla `seguimiento`, las `visitas` y la foto que `envios` guarda de cada oportunidad |
 | `inspector_apis.py` | Mira qué traen de verdad las dos APIs. No envía ni escribe nada |
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
+| `bienvenida-workflow-para-copiar.txt` | El SQL de la columna + el workflow del primer correo |
+| `disparador-instantaneo-para-copiar.txt` | El trigger que avisa a GitHub en el momento del alta |
+| `modulo_planes.py` | **Qué abre cada plan.** Una sola fuente de verdad; no hacer otra lista |
+| `alta-automatica-para-copiar.txt` | El SQL que crea la cuenta y el usuario al inscribirse |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
 | `alertas_config.json` | Configuración de prueba local. **NUNCA subirlo: el repo es público** |
+| `bienvenidas_enviadas.json` | A quién ya se le mandó el primer correo, en pruebas locales. **NUNCA subirlo: lleva correos de clientes** |
 | `auth0-para-copiar.txt` | Los 9 pasos para encender el login propio. **NUNCA subirlo: lleva la clave de la sesión** |
 | `Mis-instituciones.xlsx` | Punto de partida de la hoja «Mis instituciones». Todavía no se usa: pendiente de la bitácora |
 
@@ -344,6 +349,90 @@ correo repite lo mismo cada mañana. Se registra en `envios` (o en
 `envios_enviados.json` en pruebas locales) **después** de que el envío salió: si
 falla, esas oportunidades tienen que poder salir mañana.
 
+### ⚠️ Manejar el navegador de Serling: qué sí y qué no
+
+Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
+
+- **SÍ funciona:** apretar botones, marcar casillas, elegir de listas desplegables.
+  El formulario del token de GitHub se llenó entero así.
+- **NO funciona: escribir en campos de texto.** Ni tecleando por coordenada ni
+  fijando el valor por elemento (`form_input` devuelve `Set text value to ""`).
+  Falló en el nombre del token de GitHub, en el editor SQL de Supabase y en los
+  campos de Tenant Settings de Auth0.
+- **Los clics por coordenada se desvían** en Supabase y Auth0: el marco de la
+  captura no calza con el de la página y terminan en el botón de al lado. En
+  Supabase abrieron dos veces el panel «Connect» sin querer. Ahí conviene parar:
+  es una base de producción.
+- **Moraleja operativa:** cualquier cosa que se escriba —SQL, claves, nombres—
+  la pega ella. Lo que se aprieta se puede automatizar. Y para diagnosticar
+  GitHub sirve más `gh` desde el computador que el navegador.
+
+
+### ⚠️ El reloj NO es el de GitHub
+
+**`schedule:` en GitHub Actions es «cuando se pueda», no «a esta hora».** Medido el
+28-08-2026 sobre las tres primeras corridas reales: el turno de las 08:00 corrió a
+las 17:45, el de las 13:00 a las 21:13, el de las 18:00 a la 01:53 del día
+siguiente. Entre 7 y 10 horas de atraso, consistente. En repositorios públicos la
+cola tiene la prioridad más baja y GitHub lo documenta: no hay nada que configurar.
+
+Eso mataba el argumento central del producto —«las ágiles cierran en 24 a 72 horas:
+si no te enteras el mismo día, se pasó»—, así que **el reloj se mudó a Supabase**
+(`pg_cron` + `pg_net`), que sí es puntual. El SQL está en
+`reloj-supabase-para-copiar.txt`.
+
+- Supabase solo **da la orden de partida**; GitHub sigue haciendo el trabajo pesado.
+- **Los workflows disparados por el reloj no llevan `schedule:` propio.** Si lo
+  llevan, se disparan dos veces: una puntual y otra horas tarde.
+- La llave de GitHub vive en el baúl de Supabase (`vault`), nunca en el SQL ni en
+  el repositorio.
+- Para ver si el reloj corrió: `select * from cron.job_run_details order by
+  start_time desc limit 10;`. Para ver qué contestó GitHub: `select status_code from
+  net._http_response order by created desc limit 3;` — **204 es el «recibido»**.
+
+
+### El primer correo, al inscribirse
+
+`alertador.py --bienvenidas` manda el correo a **quien nunca ha recibido nada**.
+Lo dispara `.github/workflows/bienvenida.yml` cada 15 minutos, y el instructivo
+está en `bienvenida-workflow-para-copiar.txt`.
+
+- Es **el mismo camino** que el correo diario, no una copia: mismas tarjetas,
+  mismo `anotar_avisado`. Solo cambian el bloque de arriba («Tu cuenta quedó
+  lista» en vez de «Oportunidades de hoy»), el asunto, y que mira **una semana**
+  de compras ágiles en vez de un día, para que no llegue casi vacío.
+- **Un primer correo vacío mata la impresión.** Si nada alcanza el mínimo de
+  coincidencias, se baja el listón a 1 una sola vez y van las mejores cinco.
+  Esa relajación **solo ocurre en la bienvenida**, nunca en el diario.
+- La marca vive en `suscriptores.bienvenida_enviada` y se escribe **después** de
+  enviar, igual que lo avisado. Si el envío falla, esa persona sigue en la cola.
+- El workflow son **dos trabajos**: uno pregunta con un `curl` de dos segundos y
+  el otro —el que baja los 121 MB del repositorio— solo despierta si hay alguien.
+  Sin eso serían 96 descargas diarias para descubrir que no hay nadie.
+- ⚠️ **Al crear la columna hay que marcar a los suscriptores que ya existen**
+  (`update suscriptores set bienvenida_enviada = now() where ... is null`). Sin
+  eso, la primera corrida les manda a todos una bienvenida que no esperaban.
+
+
+- **Dos caminos disparan la bienvenida, a proposito.** El trigger
+  `al_inscribirse` avisa en el instante del alta (`after insert`, nunca puede
+  tumbar la inscripcion: si falla, avisa y deja pasar). El reloj de cada 5
+  minutos queda como red de seguridad. **No sacar el reloj**: sin el, un aviso
+  perdido deja a esa persona sin su primer correo para siempre.
+- **El trigger es `after insert`, asi que no ve las re-inscripciones.** Quien se
+  inscribe con un correo que ya existe actualiza su fila y no dispara nada —
+  correcto, ya recibio su bienvenida—. Confundio a Serling el 29-08-2026.
+- ⚠️ **`bienvenida.yml` lleva `concurrency` y no se le puede sacar.** El reloj
+  dispara cada 5 minutos y el trabajo demora ~15: sin eso se apilan corridas y
+  **cada una manda su propio correo a la misma persona**. Pasó el 29-08-2026:
+  hubo tres en vuelo a la vez y se cancelaron dos a mano. Con `cancel-in-progress:
+  false` la nueva espera, y al arrancar su `mirar` vuelve a preguntar — si la
+  primera ya marcó `bienvenida_enviada`, termina en segundos sin bajar nada.
+- **Cuánto demora, medido el 29-08-2026:** 14 min 32 s de punta a punta. La
+  landing promete «en unos minutos»; está estirado pero es defendible. Si hay que
+  acortarlo, la palanca es `dias_agiles` (hoy 7 para la bienvenida, 1 para el
+  diario): menos días, menos peticiones a la API, menos material.
+
 ### ⚠️ El límite que decide a quién se le puede vender
 
 **La bodega guarda SOLO órdenes de Convenio Marco** (`bodeguero.py` descarta todo
@@ -438,6 +527,42 @@ Son **dos cosas distintas y conviene no confundirlas**:
   - **`st.user` ya no trae el correo de la cuenta de Community Cloud** (cambió en
     Streamlit 1.42). Sin `[auth]` no hay identidad, y por eso hoy el panel se ve
     entero y la pestaña Soporte no aparece nunca.
+  - **`st.login()` necesita DOS librerías que no vienen con Streamlit**, las dos en
+    `requirements.txt`: `Authlib` y `httpx`. Sin la primera, apretar el botón tumba
+    el panel con `StreamlitMissingAuthlibError`; sin la segunda —que Authlib declara
+    como opcional y no instala sola— sale `Internal server error.` en pantalla y
+    `ModuleNotFoundError: No module named 'httpx'` en el registro. Las dos revientan
+    **al apretar entrar**, no al volver de Auth0: si el error aparece ahí, no es la
+    configuración del proveedor. Ojo: tocar `requirements.txt` hace que Streamlit
+    rearme el ambiente entero — 3 a 5 minutos, no los segundos de un cambio de código.
+- **Qué MÓDULOS ve** lo decide `modulo_planes.py` con `cuentas.plan`. Cuatro reglas
+  que conviene no romper:
+  - **Falla abierto.** Plan vacío, desconocido o consulta caída ⇒ `soporte`, ve todo.
+    Dejar a un cliente que paga sin su pestaña es mucho peor que mostrar de más.
+  - **La pestaña cerrada NO se esconde:** dice qué es y en qué plan viene. Es la
+    única publicidad que se lee, porque la mira alguien que ya está adentro.
+  - **Mercado Público y Cotizador son la excepción y sí se esconden.** Leen el Drive
+    de Emergenza, no le sirven a otro cliente y no están a la venta. Se dan por
+    cuenta con `modulos_extra`, nunca por plan.
+  - **El IPT vive dentro de Mercado, que vive dentro de Oportunidades.** Su candado
+    está en `modulo_mercado.py` y lee a quien entró de `st.session_state["yo"]`,
+    que lo deja `app.main()`. Arrastrarlo por tres firmas era peor.
+- ⚠️ **La cuenta de Uplevel necesita `plan = 'soporte'`** o pierde Mercado Público y
+  el Cotizador. `es_soporte()` mira el ROL y no salva eso: son cosas distintas.
+- **El muro del fin de prueba** vive en `modulo_planes.muro_de_prueba()` y se dibuja
+  ANTES de las pestañas, en `app.main()`. Dos extensiones de 10 días, y **cada una se
+  paga con un dato**: el teléfono la primera, el motivo la segunda. Diseño de Serling:
+  un vencimiento normal solo pierde clientes; este los convierte en una conversación.
+- **El aviso de que se acaba viaja también en el correo diario**, a falta de 3 días
+  o menos (`alertador.dias_de_prueba` + el bloque naranjo de `armar_correo`). La
+  franja del panel solo la ve quien entra, y el que hay que recuperar es justo el
+  que no entra. **Falla abierto:** si la consulta se cae o la columna `hasta` no
+  existe todavía, el correo sale igual, sin la franja.
+- **La identidad tolera que las columnas nuevas no existan.** `_buscar_usuario` pide
+  primero `hasta,extensiones,modulos_extra` y, si PostgREST responde error porque
+  todavía no están, vuelve a preguntar por lo mínimo. Así no importa el orden entre
+  pegar el SQL y subir el código: sin las columnas el panel funciona igual, solo que
+  sin muro ni módulos extra.
 - **Qué ve cada uno adentro** lo decide `modulo_cuentas.py` contra las tablas
   `cuentas` y `usuarios` de Supabase. Tres roles: el `superadmin` es Uplevel y
   ve todas las cuentas; el `admin` ve toda su empresa; el `comercial` solo su
