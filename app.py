@@ -4321,16 +4321,29 @@ def main() -> None:
     # la lista de Streamlit. El dia que se peguen las credenciales, cambia sola.
     from modulo_cuentas import puerta
     yo = puerta()
+    # Lo guardan los modulos anidados —el itinerario vive dentro de Mercado,
+    # que vive dentro de Oportunidades— para saber si el plan lo incluye sin
+    # tener que pasarlo de mano en mano por tres funciones.
+    st.session_state["yo"] = yo
 
     # El catalogo de ofertas se lee una vez y lo usan las dos pestañas. La URL
     # sale del campo de «Análisis de compras», que se dibuja despues: en la
     # primera pasada todavia no esta en session_state y se usa la de fabrica.
     url_ofertas = st.session_state.get("url_ofertas", URL_OFERTAS_POR_DEFECTO)
-    precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
-    # El catalogo completo (lo que vende) vive en la misma carpeta de Drive.
-    try:
-        catalogo_propio, fuente_catalogo = cargar_catalogo_propio(url_ofertas)
-    except Exception:
+    # Solo se lee el Drive si esta cuenta tiene alguno de los dos modulos que
+    # lo usan. Para un cliente cualquiera esa lectura no sirve de nada y son
+    # segundos de espera en cada pantalla.
+    from modulo_planes import puede
+    usa_catalogo = puede(yo, "mercado_publico") or puede(yo, "cotizador")
+    if usa_catalogo:
+        precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
+        # El catalogo completo (lo que vende) vive en la misma carpeta de Drive.
+        try:
+            catalogo_propio, fuente_catalogo = cargar_catalogo_propio(url_ofertas)
+        except Exception:
+            catalogo_propio, fuente_catalogo = {}, ""
+    else:
+        precios_oferta, fuente_ofertas, error_ofertas = {}, "", ""
         catalogo_propio, fuente_catalogo = {}, ""
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
@@ -4354,49 +4367,77 @@ def main() -> None:
     # «Seguimiento» va SEGUNDA, pegada a Oportunidades: son las dos caras de
     # lo mismo —a quien vender y en que quedo lo que ya se aviso— y quien
     # trabaja el dia a dia se mueve entre esas dos, no entre las otras.
-    etiquetas = ["🎯 Oportunidades", "📌 Seguimiento", "🔔 Alertas",
-                 "🏛️ Mercado Público", "🧾 Módulo Cotizador", "👥 Mi equipo"]
+    # Se avisa ANTES de las pestañas: quien esta por quedarse sin prueba tiene
+    # que verlo al entrar, no al chocar con el muro.
+    from modulo_planes import candado, aviso_de_prueba
+    aviso_de_prueba(yo)
+
+    # Las tres del plan se dibujan SIEMPRE, esten incluidas o no. Si el plan no
+    # las trae, la pestaña dice que es y en cual viene: es la unica publicidad
+    # que se lee, porque la mira alguien que ya esta adentro y ya sabe para que
+    # sirve. Esconderla seria peor: no sabria que existe y nunca la pediria.
+    #
+    # Los dos extras de Emergenza NO se dibujan cerrados: leen su catalogo de
+    # Drive, a otro cliente no le sirven y no estan a la venta.
+    orden = [("oportunidades", "🎯 Oportunidades"),
+             ("seguimiento", "📌 Seguimiento"),
+             ("alertas", "🔔 Alertas")]
+    for clave, etiqueta in (("mercado_publico", "🏛️ Mercado Público"),
+                            ("cotizador", "🧾 Módulo Cotizador")):
+        if puede(yo, clave):
+            orden.append((clave, etiqueta))
+    orden.append(("equipo", "👥 Mi equipo"))
     if es_soporte(yo):
-        etiquetas.append("🛟 Soporte")
-    creadas = st.tabs(etiquetas)
-    (pestana_op, pestana_sg, pestana_al, pestana_mp, pestana_region,
-     pestana_equipo) = creadas[:6]
-    pestana_soporte = creadas[6] if len(creadas) > 6 else None
-    with pestana_mp:
-        seccion_mercado_publico(precios_oferta, catalogo_propio)
-    with pestana_region:
-        seccion_cotizacion_regional(url_ofertas, precios_oferta)
-    with pestana_op:
-        # Vive en su propio archivo: no comparte nada con las otras dos y asi
-        # un error suyo no puede tumbar el cotizador, que es el trabajo diario.
-        from modulo_oportunidades import seccion_oportunidades
-        seccion_oportunidades()
-    with pestana_sg:
-        # El embudo de lo ya avisado. Va aparte de «Alertas» a proposito:
-        # aquella configura QUE llega, esta dice EN QUE QUEDO.
-        from modulo_seguimiento import seccion_seguimiento
-        seccion_seguimiento()
-    with pestana_al:
-        # Igual que la anterior: en su propio archivo, y ademas importa
-        # `alertador.py` para que la vista previa use las mismas reglas que
-        # el correo de verdad y no una copia que se puede desalinear.
-        from modulo_alertas import seccion_alertas
-        seccion_alertas()
-    with pestana_equipo:
-        # Cuentas, roles y territorios. Si las tablas de Supabase todavia no
-        # existen, esta pantalla lo dice y el resto del panel sigue igual que
-        # siempre: nadie se queda afuera por no haber configurado nada.
-        from modulo_cuentas import seccion_equipo
-        from modulo_oportunidades import _sello, cargar_unidades
-        catalogo = cargar_unidades(_sello())
-        if catalogo.empty:
-            regiones_posibles, comunas_posibles = [], []
-        else:
-            regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
-            comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
-        seccion_equipo(yo, regiones_posibles, comunas_posibles)
-    if pestana_soporte is not None:
-        with pestana_soporte:
+        orden.append(("soporte", "🛟 Soporte"))
+
+    pestanas = dict(zip([c for c, _ in orden], st.tabs([e for _, e in orden])))
+
+    def abierta(clave: str) -> bool:
+        """Si el plan no lo incluye, dibuja el candado y corta."""
+        if puede(yo, clave):
+            return True
+        candado(clave)
+        return False
+
+    with pestanas["oportunidades"]:
+        if abierta("oportunidades"):
+            # Vive en su propio archivo: no comparte nada con las otras y asi
+            # un error suyo no puede tumbar el resto del panel.
+            from modulo_oportunidades import seccion_oportunidades
+            seccion_oportunidades()
+    with pestanas["seguimiento"]:
+        if abierta("seguimiento"):
+            # El embudo de lo ya avisado. Va aparte de «Alertas» a proposito:
+            # aquella configura QUE llega, esta dice EN QUE QUEDO.
+            from modulo_seguimiento import seccion_seguimiento
+            seccion_seguimiento()
+    with pestanas["alertas"]:
+        if abierta("alertas"):
+            # Importa `alertador.py` para que la vista previa use las mismas
+            # reglas que el correo de verdad y no una copia desalineada.
+            from modulo_alertas import seccion_alertas
+            seccion_alertas()
+    if "mercado_publico" in pestanas:
+        with pestanas["mercado_publico"]:
+            seccion_mercado_publico(precios_oferta, catalogo_propio)
+    if "cotizador" in pestanas:
+        with pestanas["cotizador"]:
+            seccion_cotizacion_regional(url_ofertas, precios_oferta)
+    with pestanas["equipo"]:
+        if abierta("equipo"):
+            # Cuentas, roles y territorios. Si las tablas de Supabase todavia
+            # no existen, esta pantalla lo dice y el resto sigue igual.
+            from modulo_cuentas import seccion_equipo
+            from modulo_oportunidades import _sello, cargar_unidades
+            catalogo = cargar_unidades(_sello())
+            if catalogo.empty:
+                regiones_posibles, comunas_posibles = [], []
+            else:
+                regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
+                comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
+            seccion_equipo(yo, regiones_posibles, comunas_posibles)
+    if "soporte" in pestanas:
+        with pestanas["soporte"]:
             from modulo_cuentas import seccion_soporte
             seccion_soporte(yo)
 
