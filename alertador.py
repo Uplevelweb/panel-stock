@@ -451,6 +451,64 @@ def marcar_bienvenida(suscriptor: dict) -> None:
 
 
 # ======================================================================
+#  CUANTO LE QUEDA DE PRUEBA
+# ======================================================================
+#
+# El panel avisa en pantalla («te quedan N dias»), pero esa franja solo la ve
+# quien entra. El que no entra hace una semana se entera chocando con el muro,
+# y ese es justo el que hay que recuperar. Por eso el aviso viaja tambien en
+# el correo diario, que si abre.
+
+def dias_de_prueba(suscriptores: list[dict]) -> dict:
+    """{correo: dias que le quedan de prueba}. Negativo = ya vencio.
+
+    UNA sola consulta para toda la tanda, no una por persona.
+
+    Devuelve {} y sigue de largo ante cualquier problema: que falte la
+    columna `hasta` —porque el SQL de los planes no se ha pegado todavia—,
+    que la consulta se caiga, lo que sea. El correo con las oportunidades del
+    dia vale mucho mas que el recordatorio de la prueba: nunca se deja de
+    enviar por esto.
+    """
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    correos = [s.get("email") for s in suscriptores if s.get("email")]
+    if not (url and clave and correos):
+        return {}
+
+    # Las comillas van porque un correo lleva puntos y comas raras, y el
+    # `in.()` de PostgREST parte la lista por comas si va en crudo.
+    lista = ",".join('"%s"' % c.replace('"', "") for c in correos)
+    consulta = (f"{url}/rest/v1/usuarios?select=email,cuentas(hasta)"
+                f"&email=in.({urllib.parse.quote(lista)})")
+    peticion = urllib.request.Request(consulta, headers={
+        "apikey": clave, "Authorization": f"Bearer {clave}",
+        "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(peticion, timeout=30) as respuesta:
+            filas = json.loads(respuesta.read().decode("utf-8"))
+    except Exception as error:
+        print(f"   no se pudo leer el fin de prueba: {type(error).__name__}")
+        return {}
+
+    hoy = date.today()
+    salida = {}
+    for fila in filas:
+        cuenta = fila.get("cuentas") or {}
+        if isinstance(cuenta, list):
+            cuenta = cuenta[0] if cuenta else {}
+        hasta = str(cuenta.get("hasta") or "")[:10]
+        if not hasta:
+            continue          # la cuenta de Uplevel no vence: `hasta` va nulo
+        try:
+            fin = datetime.fromisoformat(hasta).date()
+        except ValueError:
+            continue
+        salida[fila.get("email")] = (fin - hoy).days
+    return salida
+
+
+# ======================================================================
 #  LA BOLSA DE TERMINOS DE CADA SUSCRIPTOR
 # ======================================================================
 
@@ -1407,7 +1465,7 @@ def tarjeta(op: dict) -> str:
 
 
 def armar_correo(suscriptor: dict, oportunidades: list[dict],
-                 bienvenida: bool = False) -> str:
+                 bienvenida: bool = False, quedan: int | None = None) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
     n = len(oportunidades)
     saludo = f"Hola {suscriptor['nombre'].split()[0]}, " if suscriptor.get("nombre") else ""
@@ -1494,6 +1552,47 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     </td>
   </tr>"""
 
+    # La franja de fin de prueba. Solo en el correo DIARIO: la bienvenida ya
+    # dice «tienes 20 dias con todo abierto» tres centimetros mas arriba, y
+    # repetirlo el primer dia suena a apuro por cobrar.
+    #
+    # Aparece a falta de 3 dias, no antes: una cuenta atras de tres semanas se
+    # convierte en ruido y se deja de leer justo cuando importa.
+    bloque_prueba = ""
+    if not bienvenida and quedan is not None and quedan <= 3:
+        if quedan >= 1:
+            verbo, dia = ("queda", "día") if quedan == 1 else ("quedan", "días")
+            encabezado = f"Te {verbo} {quedan} {dia} de prueba"
+            cuerpo = ("Después el panel queda con lo que incluya tu plan. "
+                      "<strong>Este correo te sigue llegando igual.</strong>")
+        elif quedan == 0:
+            encabezado = "Hoy es el último día de tu prueba"
+            cuerpo = ("Mañana el panel queda con lo que incluya tu plan. "
+                      "<strong>Este correo te sigue llegando igual.</strong>")
+        else:
+            encabezado = "Tu prueba terminó"
+            cuerpo = ("Al entrar al panel te pedimos un dato y la extendemos, "
+                      "o escríbenos y lo vemos. <strong>Este correo te sigue "
+                      "llegando igual.</strong>")
+        bloque_prueba = f"""
+  <tr>
+    <td style="padding:14px 30px 4px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#fff6ee;border:1px solid {NARANJO};border-radius:8px;">
+        <tr><td style="padding:14px 18px;">
+          <div style="color:{TEXTO};font-size:14px;font-weight:700;margin-bottom:4px;">
+            {encabezado}
+          </div>
+          <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;margin-bottom:8px;">
+            {cuerpo}
+          </div>
+          <a href="{PANEL}" style="color:{MARINO};font-size:13px;font-weight:700;
+             text-decoration:none;">Entrar al panel &rsaquo;</a>
+        </td></tr>
+      </table>
+    </td>
+  </tr>"""
+
     token = suscriptor.get("token_baja") or ""
     rut = suscriptor.get("rut_empresa") or "77.082.051-0"
     desde = suscriptor.get("fecha_consentimiento") or ""
@@ -1534,6 +1633,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     </td>
   </tr>
 {bloque_panel}
+{bloque_prueba}
 {tarjetas}
   <tr>
     <td style="padding:22px 30px 26px;border-top:1px solid {BORDE};">
@@ -1666,6 +1766,10 @@ def main():
             return
 
     print(f"{len(suscriptores)} suscriptor(es) activo(s)\n")
+
+    # Cuanto le queda de prueba a cada uno, para avisarlo en el correo.
+    # En la bienvenida no hace falta: recien empieza.
+    prueba = {} if args.bienvenidas else dias_de_prueba(suscriptores)
 
     # Se pregunta antes de cargar la bodega: si nadie espera su primer
     # correo, la corrida termina en segundos y no gasta nada.
@@ -1811,7 +1915,8 @@ def main():
             continue
         print(f"   {len(elegidas)} oportunidades · mejor nota {elegidas[0]['nota']} ({elegidas[0]['clase']})")
 
-        html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas)
+        html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas,
+                            quedan=prueba.get(suscriptor.get("email")))
         if args.bienvenidas:
             asunto = f"Tu cuenta quedó lista · {len(elegidas)} oportunidades para partir"
         else:
