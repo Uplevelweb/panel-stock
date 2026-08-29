@@ -98,6 +98,7 @@ TEXTO_SUAVE = "#6b7c8f"
 BORDE = "#e1e8ed"
 FONDO = "#f5f7fa"
 LOGO = "https://uplevelweb.art/img/logo.png"
+PANEL = "https://panel-stock-uplevel.streamlit.app"
 
 # Palabras que aparecen en todas las licitaciones y no distinguen nada.
 VACIAS = {
@@ -1444,6 +1445,55 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                   f"{'oportunidad coincide' if n == 1 else 'oportunidades coinciden'} "
                   f"con lo que vendes · {hoy}")
 
+    # El bloque del panel va SOLO en la bienvenida. Sin esto el cliente recibe
+    # sus alertas y nunca se entera de que ademas tiene un panel: la mitad del
+    # producto quedaba invisible.
+    #
+    # Y solo si dejo RUT, porque solo entonces se le creo la cuenta. Al que no
+    # lo dejo se le pide, que ademas le mejora las alertas: con el RUT los
+    # terminos salen de lo que su empresa ya le vendio al Estado.
+    bloque_panel = ""
+    if bienvenida:
+        if solo_digitos_rut(suscriptor.get("rut_empresa") or ""):
+            bloque_panel = f"""
+  <tr>
+    <td style="padding:4px 30px 22px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#f6f8fb;border:1px solid {BORDE};border-radius:8px;">
+        <tr><td style="padding:18px 20px;">
+          <div style="color:{TEXTO};font-size:15px;font-weight:700;margin-bottom:6px;">
+            También tienes un panel
+          </div>
+          <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.6;margin-bottom:14px;">
+            Ahí ves a quién le puedes vender y todavía no le vendes, cuánto gasta
+            cada comprador en tus rubros y en qué quedó cada oportunidad que te
+            avisamos. <strong>Tienes 20 días con todo abierto.</strong>
+          </div>
+          <a href="{PANEL}" style="display:inline-block;background:{NARANJO};
+             color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
+             padding:11px 22px;border-radius:7px;">Entrar al panel</a>
+          <div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:11px;">
+            Entra con este mismo correo. La primera vez elige
+            <strong>«Sign up»</strong> y defines tu contraseña.
+          </div>
+        </td></tr>
+      </table>
+    </td>
+  </tr>"""
+        else:
+            bloque_panel = f"""
+  <tr>
+    <td style="padding:4px 30px 22px;">
+      <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;
+                  border-left:3px solid {NARANJO};padding-left:13px;">
+        <strong style="color:{TEXTO};">Dinos el RUT de tu empresa</strong> y estas
+        alertas mejoran solas: sacamos qué vendes de lo que ya le has vendido al
+        Estado, en vez de adivinarlo por palabras. Además te abrimos el panel.
+        Respóndenos este correo con el RUT y lo dejamos listo.
+      </div>
+    </td>
+  </tr>"""
+
     token = suscriptor.get("token_baja") or ""
     rut = suscriptor.get("rut_empresa") or "77.082.051-0"
     desde = suscriptor.get("fecha_consentimiento") or ""
@@ -1483,6 +1533,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
       </div>
     </td>
   </tr>
+{bloque_panel}
 {tarjetas}
   <tr>
     <td style="padding:22px 30px 26px;border-top:1px solid {BORDE};">
