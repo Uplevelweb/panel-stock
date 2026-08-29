@@ -1286,3 +1286,44 @@ compras ágiles y no se pidieron.
 - Es el mismo error que la cifra de los 12 meses, en otra parte: **un dato que sale
   mal sin que nada falle**. No hay excepción, no hay log rojo, el correo se ve
   perfecto.
+
+### 29-08-2026 · La pantalla de entrada quedó con cara de Uplevel
+
+Personalizada en dos lugares de Auth0, que es como Auth0 lo separa:
+
+| Dónde | Qué |
+|---|---|
+| **Settings ▸ General** | Friendly Name `Uplevel`, Logo URL, Support Email, Support URL, idioma español |
+| **Branding ▸ Universal Login** | Primary `#f18c3f`, Page Background `#0c2c57` |
+
+Comprobado con **Getting Started ▸ Login Box ▸ Try It Out**, que abre la pantalla real
+sin necesitar el panel: sale «Te damos la bienvenida», «Inicia sesión en **Uplevel**»,
+botón naranjo y fondo marino.
+
+- **El logo va DENTRO del recuadro blanco**, no sobre el fondo. Por eso su fondo blanco
+  sólido no se nota y no hizo falta una versión transparente. Era la única duda que
+  había quedado abierta al personalizarlo.
+- **El Support URL apunta al WhatsApp** (`wa.me` con `?text=` ya escrito), para que el
+  mensaje llegue diciendo de dónde viene. Ese número queda público: lo ve cualquiera
+  que se tope con una pantalla de error de Auth0. Decisión tomada sabiéndolo.
+- La aplicación ya se llamaba `Uplevel Inteligencia`, así que la frase «para continuar
+  con…» sale bien sin tocar nada. La otra, `Default App`, la creó Auth0 y no se usa.
+
+### 29-08-2026 · El botón de Google queda con llaves de prueba, a propósito
+
+`google-oauth2` usa las **llaves de desarrollo de Auth0**: Client ID y Secret vacíos, y
+Auth0 lo avisa en amarillo («not recommended for Production environments»).
+
+**Decisión de Serling: dejarlo así por ahora** y salir a vender. Queda anotado qué
+implica, para reconocerlo si aparece:
+
+- Límites de uso de Auth0, la pantalla de permisos de Google no dice Uplevel, y Auth0
+  no lo soporta para producción.
+- **El riesgo que más va a doler no son las llaves**, es otro: el sistema encuentra al
+  cliente porque el correo del panel es el MISMO con que se suscribió. Quien toca
+  «Continuar con Google» suele elegir su Gmail personal y cae en «Tu cuenta todavía no
+  está habilitada».
+- **Síntoma a reconocer:** un cliente que dice que no puede entrar. La primera pregunta
+  es si entró con el botón de Google.
+- Se apaga en un clic cuando se quiera (Authentication ▸ Social), o se arregla bien con
+  credenciales propias de Google Cloud (~30 min).
