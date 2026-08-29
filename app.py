@@ -4326,6 +4326,13 @@ def main() -> None:
     # tener que pasarlo de mano en mano por tres funciones.
     st.session_state["yo"] = yo
 
+    # El muro del fin de prueba va ANTES que todo: quien se quedo sin prueba no
+    # deberia ver un panel a medias, sino una sola pregunta clara. Devuelve
+    # True cuando dibujo la pantalla, y ahi no se sigue.
+    from modulo_planes import muro_de_prueba
+    if muro_de_prueba(yo):
+        st.stop()
+
     # El catalogo de ofertas se lee una vez y lo usan las dos pestañas. La URL
     # sale del campo de «Análisis de compras», que se dibuja despues: en la
     # primera pasada todavia no esta en session_state y se usa la de fabrica.
