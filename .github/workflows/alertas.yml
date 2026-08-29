@@ -21,11 +21,20 @@
 
 name: Correo diario de oportunidades
 
+# EL RELOJ YA NO ES EL DE GITHUB (28-08-2026). Este workflow NO lleva
+# `schedule`. Lo dispara pg_cron desde Supabase, a la hora exacta, con
+# `hora` y `ensayo` en los inputs. El SQL esta en
+# `reloj-supabase-para-copiar.txt` (local, no va al repositorio).
+#
+# POR QUE: medido sobre las tres primeras corridas automaticas, el
+# `schedule` de GitHub llego con 9h45, 8h13 y 7h53 de atraso. El correo de
+# las 08:00 salia a las 17:45. En repositorios publicos la cola tiene la
+# prioridad mas baja y GitHub lo documenta: no habia nada que configurar.
+#
+# SI SE VUELVE A PONER UN `schedule` AQUI, se dispara dos veces: una
+# puntual desde Supabase y otra horas tarde desde GitHub.
+
 on:
-  schedule:
-    - cron: "0 12 * * 1-5"    # turno de las 08:00 en Chile
-    - cron: "0 17 * * 1-5"    # turno de las 13:00
-    - cron: "0 22 * * 1-5"    # turno de las 18:00
   workflow_dispatch:
     inputs:
       ensayo:
