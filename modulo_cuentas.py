@@ -162,9 +162,17 @@ def _buscar_usuario(email: str) -> dict | None:
     """
     if not email:
         return None
-    filas = _pedir(
-        "usuarios?select=email,nombre,rol,regiones,comunas,activo,cuenta_id,"
-        f"cuentas(nombre,rut,activa,plan)&email=eq.{urllib.parse.quote(email)}&limit=1")
+    # Se piden primero las columnas de la prueba y los extras. Si todavia no
+    # existen —el SQL de `alta-automatica-para-copiar.txt` no se ha pegado—
+    # PostgREST responde error y se vuelve a preguntar por lo minimo. Asi no
+    # importa el orden en que se hagan las cosas: sin las columnas el panel
+    # funciona igual, solo que sin muro de prueba ni modulos extra.
+    base = ("usuarios?select=email,nombre,rol,regiones,comunas,activo,cuenta_id,"
+            "cuentas(nombre,rut,activa,plan{mas})"
+            f"&email={urllib.parse.quote('eq.' + email)}&limit=1")
+    filas = _pedir(base.format(mas=",hasta,extensiones,modulos_extra"))
+    if filas is None:
+        filas = _pedir(base.format(mas=""))
     if filas is None:
         return None
     return filas[0] if filas else {}
@@ -218,6 +226,9 @@ def quien_soy() -> dict:
         # usuario: los comerciales de una empresa ven lo mismo que su jefe.
         "plan": str(empresa.get("plan") or "soporte"),
         "modulos_extra": list(empresa.get("modulos_extra") or []),
+        # Vacias mientras no existan las columnas: sin fecha no hay muro.
+        "hasta": empresa.get("hasta") or "",
+        "extensiones": int(empresa.get("extensiones") or 0),
         "motivo": "",
     }
 
@@ -614,6 +625,22 @@ def _cambiar_campo(email: str, campo: str, valor) -> bool:
     """Cambia un campo de un usuario. True si quedo."""
     filas = _pedir(f"usuarios?email=eq.{urllib.parse.quote(email)}", "PATCH",
                    {campo: valor}, extra={"Prefer": "return=representation"})
+    return filas is not None
+
+
+def extender_prueba(cuenta_id: str, hasta: str, extensiones: int,
+                    campo: str, valor: str) -> bool:
+    """Corre la fecha de término de la prueba y guarda lo que la pagó.
+
+    La extensión se cobra con un dato, no con plata: el teléfono la primera
+    vez, el motivo la segunda. Por eso el campo y el valor van juntos con la
+    fecha: si no se guarda el dato, tampoco se regalan los días.
+    """
+    if not cuenta_id:
+        return False
+    filas = _pedir(f"cuentas?id=eq.{urllib.parse.quote(str(cuenta_id))}", "PATCH",
+                   {"hasta": hasta, "extensiones": extensiones, campo: valor},
+                   extra={"Prefer": "return=representation"})
     return filas is not None
 
 
