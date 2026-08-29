@@ -1246,3 +1246,43 @@ correo no.
   con las oportunidades del día vale mucho más que el recordatorio.
 - Probado con los 9 casos: sin fecha, a 20, a 4, a 3, a 1, el último día, vencida, y
   las dos de bienvenida.
+
+### 29-08-2026 · Dónde se van los 20 minutos de la bienvenida
+
+Primera medición completa, corrida 33230120662 (todavía con 24 meses y 7 días):
+
+| Tramo | Tiempo |
+|---|---|
+| Bodega | 5 s |
+| Bolsas de términos | 14 s |
+| **Consultas a Mercado Público** | **1.194 s** |
+| Fichas y envío | 29 s |
+| TOTAL | 1.242 s (20 m 42 s) |
+
+**El 96% son las consultas a la API.** La bodega no tiene nada que ver, así que
+los 24→12 meses no acortan casi nada: se hicieron por la etiqueta que mentía, y
+eso sigue siendo motivo suficiente.
+
+- **La marca estaba mal puesta:** una sola para las dos consultas. Decía «1.194 s»
+  sin decir cuál de las dos, y son cosas distintas que se arreglan distinto. Las
+  licitaciones pagan **2 segundos de espera obligatoria por cada detalle** (170
+  candidatas de 4.717 ⇒ ~340 s solo en esperas); las compras ágiles pagan páginas.
+  Ahora se miden por separado.
+- **No se tocó nada más todavía.** Con el reparto medido se decide; sin él, acortar
+  a ciegas es apostar.
+
+### 29-08-2026 · El techo de páginas cortaba en silencio
+
+`compras_agiles_abiertas` trajo **exactamente 2.000**: 40 páginas de 50, el techo
+justo. Un número redondo en un dato de la calle es siempre sospechoso — había más
+compras ágiles y no se pidieron.
+
+- El techo de las licitaciones **sí avisa** («se piden solo las primeras 400»); el
+  de las ágiles terminaba el `for` sin decir nada. Ahora avisa igual, con un
+  `for ... else`.
+- **No se subió el techo.** Puede que no importe —si la API devuelve lo más nuevo
+  primero, lo que quedó fuera son ágiles ya cerradas— pero eso hay que comprobarlo,
+  no suponerlo. Primero que se vea; después se decide.
+- Es el mismo error que la cifra de los 12 meses, en otra parte: **un dato que sale
+  mal sin que nada falle**. No hay excepción, no hay log rojo, el correo se ve
+  perfecto.
