@@ -184,18 +184,8 @@ def aviso_de_prueba(usuario: dict) -> None:
     Solo se dibuja si la cuenta trae fecha de término. Nadie deberia enterarse
     de que se le acabo la prueba chocando con el muro.
     """
-    from datetime import date, datetime
-
-    hasta = usuario.get("hasta")
-    if not hasta:
-        return
-    try:
-        fin = datetime.fromisoformat(str(hasta)[:10]).date()
-    except ValueError:
-        return
-
-    quedan = (fin - date.today()).days
-    if quedan > 5:
+    quedan = _dias_que_quedan(usuario)
+    if quedan is None or quedan > 5:
         return
     if quedan >= 1:
         st.warning(f"Te quedan **{quedan} días** de prueba. Después el panel "
@@ -204,3 +194,100 @@ def aviso_de_prueba(usuario: dict) -> None:
         st.warning("**Hoy es el último día** de tu prueba.")
     else:
         st.error("Tu prueba terminó.")
+
+
+# --------------------------------------------------------------------------
+#  El muro del día 21
+# --------------------------------------------------------------------------
+#
+# Diseño de Serling: la prueba no se corta de golpe. Se extiende dos veces, y
+# cada extensión se paga con un dato — el teléfono primero, el motivo después.
+#
+# Un vencimiento normal solo pierde clientes. Este los convierte en una
+# conversación y en información de producto: quien no contesta el teléfono
+# igual deja escrito qué le faltó para pagar.
+
+DIAS_DE_EXTENSION = 10
+EXTENSIONES_MAXIMAS = 2
+
+
+def _dias_que_quedan(usuario: dict):
+    """Días hasta el fin de la prueba. None si esta cuenta no vence."""
+    from datetime import date, datetime
+
+    hasta = usuario.get("hasta")
+    if not hasta:
+        return None
+    try:
+        fin = datetime.fromisoformat(str(hasta)[:10]).date()
+    except ValueError:
+        return None
+    return (fin - date.today()).days
+
+
+def muro_de_prueba(usuario: dict) -> bool:
+    """La pantalla de fin de prueba. True si hay que parar el panel acá.
+
+    Se dibuja ANTES que las pestañas: quien se quedó sin prueba no debería
+    ver un panel a medias, sino una sola pregunta clara.
+    """
+    from datetime import date, timedelta
+
+    quedan = _dias_que_quedan(usuario)
+    if quedan is None or quedan >= 0:
+        return False
+
+    usadas = int(usuario.get("extensiones") or 0)
+    nombre = usuario.get("empresa") or "tu empresa"
+
+    # Ya usó las dos extensiones: hasta acá llega el panel.
+    if usadas >= EXTENSIONES_MAXIMAS:
+        st.subheader("Tu prueba terminó")
+        st.write(
+            f"El panel de **{nombre}** queda cerrado, pero **el correo diario "
+            "sigue llegando**: cada mañana vas a seguir viendo lo que se "
+            "publicó en tus rubros.")
+        st.info("Para volver a abrirlo, escríbenos a **webuplevel@gmail.com** "
+                "y lo activamos el mismo día.")
+        return True
+
+    # Le queda extensión. Se pide el dato que la paga.
+    primera = usadas == 0
+    st.subheader("Tu prueba terminó")
+    st.write(f"Podemos extenderla **{DIAS_DE_EXTENSION} días más** para "
+             f"{nombre}, sin costo.")
+
+    if primera:
+        st.caption("Solo necesitamos un teléfono para poder llamarte y "
+                   "resolver dudas. No lo usamos para nada más.")
+        etiqueta, campo, marcador = "Tu teléfono", "telefono", "+56 9 1234 5678"
+    else:
+        st.caption("Esta vez solo queremos entender qué te faltó. Nos sirve "
+                   "para mejorar, y es la razón por la que podemos seguir "
+                   "regalando días.")
+        etiqueta, campo, marcador = ("¿Qué te falta para contratarlo?",
+                                     "motivo_no_paga",
+                                     "El precio, me falta tal cosa, todavía "
+                                     "no lo pruebo bien…")
+
+    with st.form("muro_prueba"):
+        escrito = st.text_input(etiqueta, placeholder=marcador)
+        enviar = st.form_submit_button(
+            f"Extender {DIAS_DE_EXTENSION} días", type="primary")
+
+    if enviar:
+        limpio = str(escrito or "").strip()
+        if len(limpio) < 4:
+            st.error("Escribe algo primero: con eso se extiende la prueba.")
+            return True
+        from modulo_cuentas import extender_prueba
+        nueva = (date.today() + timedelta(days=DIAS_DE_EXTENSION)).isoformat()
+        if extender_prueba(usuario.get("cuenta_id", ""), nueva, usadas + 1,
+                           campo, limpio):
+            st.cache_data.clear()
+            st.success(f"Listo. Tienes {DIAS_DE_EXTENSION} días más.")
+            st.rerun()
+        else:
+            st.error("No se pudo extender. Escríbenos a webuplevel@gmail.com "
+                     "y lo hacemos nosotros.")
+    return True
