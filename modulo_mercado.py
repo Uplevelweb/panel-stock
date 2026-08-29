@@ -322,7 +322,17 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
 
     # El itinerario de visitas se cuelga de estos mismos datos: ya estan en
     # memoria y no hay que volver a leer la bodega.
-    modulo_visitas.seccion_visitas(datos, unidades)
+    #
+    # Va detras del plan porque es lo que separa a Empresa. Quien entro se lee
+    # de `session_state` y no se pasa por parametro: esta funcion la llama
+    # `modulo_oportunidades`, que a su vez la llama `app`, y arrastrar el
+    # usuario por tres firmas para una comprobacion es peor que leerlo aca.
+    from modulo_planes import puede, candado
+    if puede(st.session_state.get("yo", {}), "ipt"):
+        modulo_visitas.seccion_visitas(datos, unidades)
+    else:
+        st.divider()
+        candado("ipt")
 
 
 def _plata(monto: float) -> str:
