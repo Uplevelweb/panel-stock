@@ -1588,6 +1588,10 @@ def main():
                              "(8, 13 o 18). Sin esto, va a todos")
     args = parser.parse_args()
 
+    # Marcas de tiempo: sin esto se optimiza a ciegas, sin saber si lo caro
+    # es cargar la bodega o preguntarle a la API. Se miden los tramos.
+    reloj_total = time.perf_counter()
+
     suscriptores = configuracion()
     if not suscriptores:
         # Antes se salia callado y la corrida terminaba «bien» en 18 segundos,
@@ -1623,14 +1627,17 @@ def main():
             return
 
     print("Cargando la bodega de ordenes de compra...")
+    marca = time.perf_counter()
     oc = resumen_de_ordenes()
     lineas = int(oc["lineas"].sum()) if not oc.empty else 0
     print(f"  {lineas:,} lineas en {len(oc):,} filas\n".replace(",", "."))
+    print("[tiempo] bodega: %.0f s" % (time.perf_counter() - marca))
 
     # --- la bolsa de cada uno, ANTES de pedir nada ---
     # La union de todas sirve para descartar de una sola pasada lo que no le
     # interesa a nadie, que es la enorme mayoria. Sin eso habria que pedir el
     # detalle de las 4.580 licitaciones activas: dos horas y medio ticket.
+    marca = time.perf_counter()
     bolsas: dict[str, tuple] = {}
     union: set[str] = set()
     for suscriptor in suscriptores:
@@ -1638,6 +1645,7 @@ def main():
         bolsas[suscriptor["email"]] = (bolsa, convenios, origen)
         union |= bolsa
     print(f"Bolsa comun de todos los suscriptores: {len(union)} terminos\n")
+    print("[tiempo] bolsas de terminos: %.0f s" % (time.perf_counter() - marca))
 
     # --- de donde salen las oportunidades de hoy ---
     if args.prueba:
@@ -1649,9 +1657,11 @@ def main():
             return
         # Para el primer correo se mira una semana de compras agiles en
         # vez de un dia: hace falta material para que no llegue casi vacio.
+        marca = time.perf_counter()
         dias_agiles = 7 if args.bienvenidas else 1
         universo = (licitaciones_abiertas(ticket, union)
                     + compras_agiles_abiertas(ticket, dias=dias_agiles))
+        print("[tiempo] consultas a Mercado Publico: %.0f s" % (time.perf_counter() - marca))
 
     if not universo:
         print("No hay nada publicado. No se envia: el silencio construye confianza.")
@@ -1766,6 +1776,7 @@ def main():
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
     print(f"\nListo. Correos enviados: {enviados_hoy}")
+    print("[tiempo] TOTAL: %.0f s" % (time.perf_counter() - reloj_total))
 
 
 if __name__ == "__main__":
