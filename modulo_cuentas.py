@@ -86,6 +86,11 @@ SIN_RESTRICCION = {
     "rut": "",
     "regiones": [],
     "comunas": [],
+    # `soporte` ve todos los modulos. Es a proposito: si no se supo el plan
+    # —consulta caida, cuenta vieja sin la columna— es mucho peor dejar a un
+    # cliente que paga sin su pestaña que mostrarle de mas por un rato.
+    "plan": "soporte",
+    "modulos_extra": [],
     "motivo": "sin cuentas configuradas",
 }
 
@@ -159,7 +164,7 @@ def _buscar_usuario(email: str) -> dict | None:
         return None
     filas = _pedir(
         "usuarios?select=email,nombre,rol,regiones,comunas,activo,cuenta_id,"
-        f"cuentas(nombre,rut,activa)&email=eq.{urllib.parse.quote(email)}&limit=1")
+        f"cuentas(nombre,rut,activa,plan)&email=eq.{urllib.parse.quote(email)}&limit=1")
     if filas is None:
         return None
     return filas[0] if filas else {}
@@ -192,7 +197,10 @@ def quien_soy() -> dict:
             "nombre": ficha.get("nombre") or "", "rol": "suspendido",
             "cuenta_id": ficha.get("cuenta_id") or "",
             "empresa": empresa.get("nombre") or "", "rut": empresa.get("rut") or "",
-            "regiones": [], "comunas": [], "motivo": "cuenta o usuario desactivado",
+            "regiones": [], "comunas": [],
+            "plan": str(empresa.get("plan") or "soporte"),
+            "modulos_extra": list(empresa.get("modulos_extra") or []),
+            "motivo": "cuenta o usuario desactivado",
         }
 
     rol = str(ficha.get("rol") or "comercial")
@@ -206,6 +214,10 @@ def quien_soy() -> dict:
         "rut": empresa.get("rut") or "",
         "regiones": list(ficha.get("regiones") or []),
         "comunas": list(ficha.get("comunas") or []),
+        # El plan decide que pestañas se dibujan. Vive en la cuenta, no en el
+        # usuario: los comerciales de una empresa ven lo mismo que su jefe.
+        "plan": str(empresa.get("plan") or "soporte"),
+        "modulos_extra": list(empresa.get("modulos_extra") or []),
         "motivo": "",
     }
 
