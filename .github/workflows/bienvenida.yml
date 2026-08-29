@@ -27,6 +27,19 @@
 
 name: Correo de bienvenida
 
+# UNA SOLA A LA VEZ. El reloj dispara cada 5 minutos y este trabajo demora
+# mas que eso —baja 121 MB de bodega, cruza y pide el detalle a la API—,
+# asi que sin esto se apilan: el 29-08-2026 hubo dos corridas en paralelo y
+# cada una habria mandado su propio correo de bienvenida a la misma persona.
+#
+# `cancel-in-progress: false` a proposito: la que ya esta enviando NO se
+# corta. La nueva espera, y cuando le toca su trabajo `mirar` vuelve a
+# preguntar; si la primera ya marco `bienvenida_enviada`, no encuentra a
+# nadie y termina en segundos sin bajar nada.
+concurrency:
+  group: correo-de-bienvenida
+  cancel-in-progress: false
+
 on:
   workflow_dispatch:
     inputs:
