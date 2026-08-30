@@ -1327,3 +1327,42 @@ implica, para reconocerlo si aparece:
   es si entró con el botón de Google.
 - Se apaga en un clic cuando se quiera (Authentication ▸ Social), o se arregla bien con
   credenciales propias de Google Cloud (~30 min).
+
+### 30-08-2026 · El panel quedó público, y la puerta aguanta
+
+Se abrió `Manage app ▸ Settings ▸ Sharing` a acceso por enlace. Es el interruptor que
+faltaba: hasta hoy ningún cliente llegaba al panel aunque se le creara la cuenta.
+
+**No es irreversible**, al contrario de lo que decía el documento de planificación: en
+Streamlit Community Cloud el acceso se cambia de público a privado y de vuelta cuando
+se quiera. Se corrigió el dato antes de tocar nada, porque cambiaba la decisión.
+
+**Comprobado desde un navegador sin sesión alguna:**
+
+1. La URL pública muestra **solo la portada** y el botón. Ni un dato.
+2. El botón lleva a Auth0 con la marca puesta: «Te damos la bienvenida», «Inicia
+   sesión en **Uplevel** para continuar con **Uplevel Inteligencia**», en español,
+   botón naranjo, fondo marino.
+
+Sirve `puerta()`, que corre ANTES de leer el Drive y la bodega. Un desconocido no hace
+trabajar al servidor.
+
+**Falsa alarma que vale anotar:** la primera prueba en incógnito mostró el itinerario
+completo con cifras. No era un agujero: era la sesión de `webuplevel@gmail.com`, que es
+`superadmin` y ve todo. **Probar «como si fuera un desconocido» no vale si uno se
+identifica en medio de la prueba.**
+
+### 30-08-2026 · El RUT se compara por dígitos, no por texto
+
+Al probar el alta automática se creó una cuenta duplicada de la propia Uplevel: el RUT
+llegó como `777119591` y en `cuentas` estaba como `77.711.959-1`. Comparando texto
+literal no son iguales, así que el disparador no encontró la cuenta y creó otra.
+
+- **Lo que costaba en la calle:** dos comerciales de la misma empresa, uno escribe el
+  RUT con puntos y el otro sin, y quedan en dos cuentas separadas con dos pruebas de 20
+  días. No comparten nada y ninguno entiende por qué.
+- El disparador ahora normaliza con `regexp_replace(rut, '[^0-9kK]', '', 'g')` en los
+  dos lados de la comparación. Comprobado: preguntando por `770820510` devuelve
+  «Comercial Emergenza», guardada como `77.082.051-0`.
+- `alertador.solo_digitos_rut` ya hacía esto desde antes. **La regla existía y no se
+  aplicó en el lugar nuevo** — es el modo típico en que estas cosas se escapan.
