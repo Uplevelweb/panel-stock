@@ -1089,7 +1089,7 @@ def fichas_guardadas(codigos: list[str]) -> dict[str, dict]:
                     salida[str(fila.get("codigo"))] = fila
         except Exception as error:
             print(f"   no se pudieron leer las fichas guardadas: "
-                  f"{type(error).__name__}")
+                  f"{_por_que_fallo(error)}")
             return {}
     return salida
 
@@ -1110,7 +1110,26 @@ def guardar_fichas(fichas: list[dict]) -> None:
     try:
         urllib.request.urlopen(peticion, timeout=60).read()
     except Exception as error:
-        print(f"   no se pudieron guardar las fichas: {type(error).__name__}")
+        print(f"   no se pudieron guardar las fichas: {_por_que_fallo(error)}")
+
+
+def _por_que_fallo(error: Exception) -> str:
+    """El codigo HTTP y lo que contesto el servidor, no solo el nombre.
+
+    Los tres avisos de `fichas_licitacion` decian «HTTPError» y nada mas. El
+    31-08-2026 esa cache llevaba dias caida y costo 1.199 s de reloj en cada
+    corrida —el 85% del total, a 2 segundos por detalle que no hacia falta
+    volver a pedir— sin que ningun mensaje dijera si era la tabla que no
+    existe, el permiso o la clave. Un fallo que no se puede diagnosticar
+    vuelve siempre.
+    """
+    if isinstance(error, urllib.error.HTTPError):
+        try:
+            detalle = error.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            detalle = ""
+        return f"HTTP {error.code} {error.reason} {detalle}".strip()
+    return f"{type(error).__name__}: {error}"[:220]
 
 
 def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) -> list[dict]:
@@ -1677,7 +1696,7 @@ def direcciones_guardadas(unidades: set[str]) -> dict[str, str]:
                     salida.setdefault(str(fila.get("unidad")),
                                       str(fila.get("direccion") or ""))
         except Exception as error:
-            print(f"   no se pudieron leer las direcciones: {type(error).__name__}")
+            print(f"   no se pudieron leer las direcciones: {_por_que_fallo(error)}")
             return {}
     return salida
 
