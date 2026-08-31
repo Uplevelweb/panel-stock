@@ -1,3 +1,23 @@
+## 30-08-2026 · La direccion de la unidad compradora ya no se bota
+
+`Comprador.DireccionUnidad` viene dentro del detalle de licitacion que el correo
+ya pide todas las mañanas —y que desde hoy guarda en `fichas_licitacion`—. Se
+estaba descartando.
+
+Importa porque es la base del itinerario de visitas: **las instituciones con
+muchas unidades de compra no publican donde queda cada una**, y sin eso no hay
+ruta posible. Una direccion tentativa y cercana ya sirve para armarla.
+
+No cuesta nada: la respuesta ya estaba pagada. Empieza a acumularse en la
+corrida de mañana, ~170 fichas por dia, solo de las unidades que aparecen en
+licitaciones que calzan con algun suscriptor. Es parcial y lento a proposito:
+la alternativa era un barrido dedicado que gasta ticket.
+
+`unidades.parquet` NO tiene direccion (solo region y comuna), y la bodega de
+datos abiertos tampoco la trae. Esta es la unica fuente gratis que hay.
+
+---
+
 ## 30-08-2026 · El SQL ya no lo pega ella
 
 Los dos bloques de hoy —la tabla `fichas_licitacion` y la función del alta con
