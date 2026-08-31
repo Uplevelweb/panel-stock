@@ -70,6 +70,8 @@ import urllib.request
 import pandas as pd
 import streamlit as st
 
+import modulo_planes
+
 # Los que un admin puede repartir dentro de su empresa. `superadmin` NO esta
 # aca a proposito: es de Uplevel y no se lo puede dar un cliente a si mismo.
 ROLES = ("admin", "comercial")
@@ -611,8 +613,23 @@ def _anotar(quien: str, accion: str, sobre: str = "", cuenta: str = "",
 
 
 def _todas_las_cuentas():
-    filas = _pedir("cuentas?select=id,rut,nombre,plan,activa&order=nombre")
+    # `modulos_extra` y `hasta` los necesita la pantalla de interruptores.
+    # Si las columnas todavia no existen PostgREST responde error, asi que se
+    # vuelve a preguntar por lo minimo: el soporte tiene que abrir igual.
+    filas = _pedir("cuentas?select=id,rut,nombre,plan,activa,modulos_extra,hasta"
+                   "&order=nombre")
+    if filas is None:
+        filas = _pedir("cuentas?select=id,rut,nombre,plan,activa&order=nombre")
     return None if filas is None else pd.DataFrame(filas)
+
+
+def _cambiar_cuenta(cuenta_id: str, campos: dict) -> bool:
+    """Cambia campos de una CUENTA (no de un usuario). True si quedo."""
+    if not cuenta_id or not campos:
+        return False
+    filas = _pedir(f"cuentas?id=eq.{urllib.parse.quote(str(cuenta_id))}",
+                   "PATCH", campos, extra={"Prefer": "return=representation"})
+    return filas is not None
 
 
 def _todos_los_usuarios():
@@ -808,6 +825,85 @@ def seccion_soporte(usuario: dict) -> None:
                 st.rerun()
             else:
                 st.error("No se pudo corregir el correo.")
+
+    # ----------------------------------------------------------------------
+    #  Que ve cada cuenta
+    # ----------------------------------------------------------------------
+    st.divider()
+    st.markdown("**Qué ve cada cuenta**")
+    st.caption(
+        "El plan abre lo suyo y no se puede cerrar desde acá: pagar un plan y "
+        "no recibirlo no tiene arreglo posible. Lo que sí se puede es "
+        "**regalar** módulos a una cuenta, que es la oferta de la feria — paga "
+        "el plan de entrada y recibe el de arriba.")
+
+    if "modulos_extra" not in cuentas.columns:
+        st.warning("Falta la columna `modulos_extra` en la tabla `cuentas`. "
+                   "Está en `alta-automatica-para-copiar.txt`, paso 1.")
+    else:
+        cual = st.selectbox(
+            "¿Qué cuenta?", cuentas["id"].tolist(), key="sop_cuenta",
+            format_func=lambda i: (
+                f"{cuentas[cuentas['id'] == i]['nombre'].iloc[0]} — "
+                f"{cuentas[cuentas['id'] == i]['plan'].iloc[0]}"))
+        cuenta = cuentas[cuentas["id"] == cual].iloc[0]
+        extras_hoy = list(cuenta.get("modulos_extra") or [])
+        plan_hoy = str(cuenta.get("plan") or "")
+        origen = modulo_planes.origen_de(plan_hoy, extras_hoy)
+
+        st.caption(f"Hoy tiene el plan **{plan_hoy}** y "
+                   f"{len(extras_hoy)} módulo(s) regalado(s).")
+
+        # Un interruptor por modulo. Los del plan van encendidos y bloqueados.
+        marcados = {}
+        columnas = st.columns(2)
+        for i, (modulo, ficha) in enumerate(modulo_planes.MODULOS.items()):
+            with columnas[i % 2]:
+                del_plan = origen[modulo] == "plan"
+                marcados[modulo] = st.toggle(
+                    ficha["nombre"],
+                    value=del_plan or origen[modulo] == "extra",
+                    disabled=del_plan,
+                    key=f"sop_mod_{modulo}",
+                    help=("Viene en el plan y no se puede quitar."
+                          if del_plan else ficha.get("que_es") or ""))
+
+        boton_a, boton_b = st.columns(2)
+
+        with boton_a:
+            if st.button("Guardar lo marcado", key="sop_mod_guardar",
+                         width="stretch", type="primary"):
+                # Solo se guardan como extra los que NO vienen en el plan:
+                # duplicarlos ahi haria que un cambio de plan dejara restos.
+                nuevos = sorted(m for m, si in marcados.items()
+                                if si and origen[m] != "plan")
+                if nuevos == sorted(extras_hoy):
+                    st.info("No cambió nada.")
+                elif _cambiar_cuenta(cual, {"modulos_extra": nuevos}):
+                    _anotar(usuario["email"], "cambiar modulos", "",
+                            str(cuenta["nombre"]),
+                            f"{sorted(extras_hoy)} pasa a {nuevos}")
+                    _buscar_usuario.clear()
+                    st.success(f"{cuenta['nombre']}: quedaron "
+                               f"{len(nuevos)} módulo(s) regalado(s).")
+                    st.rerun()
+                else:
+                    st.error("No se pudo guardar.")
+
+        with boton_b:
+            if st.button("Abrirle todo (oferta de feria)", key="sop_mod_todo",
+                         width="stretch"):
+                todos = modulo_planes.extras_para_abrir_todo(plan_hoy)
+                if sorted(todos) == sorted(extras_hoy):
+                    st.info("Ya lo tiene todo abierto.")
+                elif _cambiar_cuenta(cual, {"modulos_extra": todos}):
+                    _anotar(usuario["email"], "abrir todo", "",
+                            str(cuenta["nombre"]), f"regalados: {todos}")
+                    _buscar_usuario.clear()
+                    st.success(f"{cuenta['nombre']} quedó con todo abierto.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo guardar.")
 
     # ----------------------------------------------------------------------
     #  La bitacora
