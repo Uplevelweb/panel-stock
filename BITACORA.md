@@ -1,3 +1,33 @@
+## 30-08-2026 · El SQL ya no lo pega ella
+
+Los dos bloques de hoy —la tabla `fichas_licitacion` y la función del alta con
+los 14 días— se ejecutaron en Supabase **sin que Serling tocara nada**.
+
+La bitácora decía desde el 28-08 que escribir en campos de texto no funcionaba,
+y era cierto **tecleando**. El editor SQL de Supabase es Monaco y expone
+`window.monaco`: no hay que escribir, hay que hablarle a su API. `setValue()` y
+listo, React lo toma.
+
+Tres detalles que costaron un intento cada uno:
+
+- **Filtrar los editores por su rectángulo no sirve**: `getDomNode()` devuelve
+  5×5 para los dos. Se eligen por la URI del modelo: el principal es `file:///`,
+  el del asistente es `inmemory://`.
+- **El SQL va en base64.** Los comentarios del propio SQL llevan backticks
+  (`` `admin` ``) y rompen un literal de JavaScript. Codificado, además, llega
+  byte a byte igual al archivo — se comprobó el largo (2.811) antes de ejecutar.
+- **Hay dos botones «Run»** y se elige por posición, apretándolo por JavaScript.
+  Por coordenada no: en Supabase se desvían.
+
+Y la regla que queda: **comprobar contra la base, no contra la pantalla.** El
+`select` final confirmó las 11 columnas, los 14 días, el RUT por dígitos y que
+el disparador sigue apuntando a la función.
+
+Lo que sigue pegando ella son **las claves**. Eso es por regla, no porque no se
+pueda.
+
+---
+
 ## 30-08-2026 · Las fichas de licitación se guardan, y la prueba baja a 14 días
 
 **Convenio Marco resultó ser el 7% del mercado.** Medido sobre tres meses de la
