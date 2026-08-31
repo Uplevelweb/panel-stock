@@ -363,6 +363,31 @@ reusa 30 días.
   gasta ticket ni espera, así que no tiene por qué ocupar cupo: con la caché
   llena, el correo alcanza a mirar más licitaciones que antes, no menos.
 
+### El bloque «Tus 3 del mes» en el correo
+
+Una puerta de cada tipo —la mejor CRECER, la mejor RECOMPRA, la mejor NUEVO—
+con su dirección, cuántos proveedores se la reparten y cuánta plata es peleable
+**por servicio**. Sin nada que llenar: el mes siguiente la bodega dice sola si
+esa unidad compró.
+
+⚠️ **El correo usa lo que YA VENDIÓ, no el catálogo del Drive**, y es a
+propósito: `alertas.yml` instala solo `pandas` y `pyarrow`, sin `openpyxl` ni
+`streamlit`, así que ahí no se puede leer el Drive. Y está bien: el correo manda
+a golpear **puertas**, y una puerta no se echa a perder porque un producto se
+haya deshabilitado. **La oferta producto a producto —que sí depende del catálogo
+vigente— vive en el panel.** Si algún día el correo tiene que leer el catálogo,
+hay que agregar `openpyxl` al workflow y sacar el lector de `app.py`, que
+arrastra streamlit.
+
+- **Falla abierto en todo.** Sin RUT, sin bodega o si algo revienta, el correo
+  sale igual sin ese bloque.
+- ⚠️ **Se lee la bodega DOS VECES POR SUSCRIPTOR** (una para sus IDs, otra para
+  el mercado). Con dos suscriptores está bien; **pasando de diez clientes hay
+  que juntarlo en una sola pasada para todos**. La corrida imprime
+  `[tiempo] puertas del mes` para poder verlo venir.
+- Las direcciones salen de `fichas_licitacion`, que se llena sola desde el
+  detalle que este mismo correo ya pide cada mañana.
+
 ### La memoria de lo avisado
 
 Una licitación abierta sigue abierta una o dos semanas. Sin anotar lo enviado, el
