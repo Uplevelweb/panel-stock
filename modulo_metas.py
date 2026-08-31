@@ -300,3 +300,70 @@ def oferta_para(mercado: pd.DataFrame, rut: str, unidades: set,
     # vender y esto dice lo que YA despacho alguna vez. Se marca y ella decide.
     o["probado"] = o["idp"].isin(vendidos or set())
     return o.sort_values("por_ganar", ascending=False)[columnas]
+
+
+def ids_vendidos(rut: str, meses: int = 24, bodega=None) -> set[str]:
+    """Los IDs de Convenio Marco que ese RUT ha vendido.
+
+    PARA EL CORREO DIARIO, que corre en GitHub Actions con solo pandas y
+    pyarrow instalados: ahi no se puede leer el catalogo del Drive —hace falta
+    openpyxl, y el lector vive en `app.py`, que arrastra streamlit—.
+
+    Y esta bien que sea asi: el correo manda a golpear PUERTAS, y una puerta no
+    se echa a perder porque un producto se haya deshabilitado. La oferta
+    producto a producto, que si depende del catalogo vigente, vive en el panel.
+
+    Se leen tres columnas angostas, mes a mes.
+    """
+    carpeta = bodega or alertador.BODEGA_OC
+    if not rut or not carpeta.exists():
+        return set()
+
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    salida: set[str] = set()
+    for archivo in sorted(carpeta.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            hay = _columnas(archivo)
+            pedidas = [c for c in ("id_producto", "rut_proveedor", "mecanismo",
+                                   "convenio") if c in hay]
+            if "id_producto" not in pedidas or "rut_proveedor" not in pedidas:
+                continue
+            mes = pd.read_parquet(archivo, columns=pedidas)
+        except Exception:
+            continue
+        mias = mes[mes["rut_proveedor"].astype(str).map(alertador.solo_digitos_rut) == rut]
+        if not mias.empty:
+            idp = mias["id_producto"].astype(str).str.strip()
+            salida |= set(idp[idp.str.isdigit()])
+        del mes
+    return salida
+
+
+def nombres_de_unidades(bodega=None) -> pd.DataFrame:
+    """Codigo de unidad -> como se llama y donde queda.
+
+    El correo no puede decir «unidad 1411»: tiene que decir «Gendarmeria,
+    Puente Alto». Sale del mismo parquet que arma el bodeguero.
+    """
+    carpeta = bodega or alertador.BODEGA_OC.parent
+    archivo = carpeta / "unidades.parquet"
+    if not archivo.exists():
+        return pd.DataFrame()
+    try:
+        u = pd.read_parquet(archivo).drop_duplicates("codigo_unidad")
+    except Exception:
+        return pd.DataFrame()
+
+    # El parquet viene de un CSV en latin-1 y los acentos llegan al reves.
+    def arreglar(s):
+        try:
+            return str(s).encode("latin-1").decode("utf-8")
+        except Exception:
+            return str(s)
+
+    for col in ("nombre_unidad", "nombre_organismo", "comuna", "region"):
+        if col in u.columns:
+            u[col] = u[col].map(arreglar)
+    return u.set_index("codigo_unidad")
