@@ -97,7 +97,19 @@ TEXTO = "#2c3e50"
 TEXTO_SUAVE = "#6b7c8f"
 BORDE = "#e1e8ed"
 FONDO = "#f5f7fa"
-LOGO = "https://uplevelweb.art/img/logo.png"
+# ⚠️ APUNTA AL SUBDOMINIO, NO A LA RAIZ. `uplevelweb.art/img/logo.png` NO
+# EXISTE: el paquete que publica `publicar.ps1` no lleva `img/` en la raiz,
+# y el .htaccess devuelve el index.html entero con un 200. O sea que la
+# etiqueta <img> recibia 198 KB de HTML y el logo salia roto en el correo.
+# Comprobado el 31-08-2026: los primeros bytes eran «<!DOCTYPE html>».
+# `logo-correo.png` ademas viene recortado: el original tenia 65% de margen
+# blanco y estaba descentrado, asi que a 34 px se veia diminuto.
+LOGO = "https://inteligencia.uplevelweb.art/img/logo.png"
+# PENDIENTE: cambiar a `logo-correo.png` cuando ese archivo este publicado.
+# Viene recortado —el original tiene 65% de margen blanco y esta
+# descentrado, asi que a 34 px se ve diminuto— pero el 31-08-2026 la subida
+# a Hostinger se topo con su limite diario y quedo sin publicar. Se apunta
+# mientras al que si existe: mas vale un logo chico que uno roto.
 PANEL = "https://panel-stock-uplevel.streamlit.app"
 
 # Palabras que aparecen en todas las licitaciones y no distinguen nada.
