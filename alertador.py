@@ -1231,7 +1231,24 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
     return salida
 
 
-def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40) -> list[dict]:
+def habiles_atras(n: int, desde: date | None = None) -> date:
+    """La fecha que queda `n` dias HABILES atras, saltandose sabado y domingo.
+
+    Serling lo pidio en habiles y no en corridos (31-08-2026): un lunes, siete
+    dias corridos alcanzan el lunes anterior y se pierden los publicados el
+    viernes, que es cuando mas sale. Siete habiles llegan hasta el jueves de
+    la semana anterior.
+    """
+    dia = desde or date.today()
+    while n > 0:
+        dia -= timedelta(days=1)
+        if dia.weekday() < 5:          # 5 y 6 son sabado y domingo
+            n -= 1
+    return dia
+
+
+def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
+                            habiles: bool = False) -> list[dict]:
     """
     Las publicadas de la v2. Cierran en 24-72 horas, asi que son las que mas
     se agradecen en un correo de la manana.
@@ -1246,7 +1263,11 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
       reintentar en un rato: se restablece al cambiar el dia.
     """
     print("Pidiendo compras agiles publicadas...")
-    desde = (date.today() - timedelta(days=dias)).isoformat()
+    inicio = habiles_atras(dias) if habiles else date.today() - timedelta(days=dias)
+    desde = inicio.isoformat()
+    hoy = date.today().isoformat()
+    cerradas = 0
+    print(f"  desde {desde} ({dias} dias {'habiles' if habiles else 'corridos'})")
     salida = []
     for pagina in range(1, techo_paginas + 1):
         url = (f"{V2}?estado=publicada&tamano_pagina=50&numero_pagina={pagina}"
@@ -1277,6 +1298,20 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
                 for doc in (fila.get("documentos") or [])
                 if isinstance(doc, dict)
             )
+            # Una compra agil que YA CERRO no le sirve a nadie, y en el
+            # PRIMER correo es peor que no mandar nada: la persona hace clic,
+            # llega a algo cerrado y aprende que el correo no es de fiar.
+            #
+            # Antes no habia filtro: la unica proteccion era `estado=publicada`
+            # de la API, y por eso el 29-08-2026 se bajo la ventana de 7 dias
+            # a 3 —para no alcanzar a mostrar nada viejo—. Con este filtro la
+            # ventana puede ser ancha sin ese riesgo, que es lo que permitio
+            # volver a 7 el 31-08-2026.
+            cierre = str(_campo(fila, "fechas.fecha_cierre", "fecha_cierre"))[:10]
+            if cierre and cierre < hoy:
+                cerradas += 1
+                continue
+
             salida.append({
                 "tipo": "compra_agil",
                 "codigo": codigo,
@@ -1284,7 +1319,7 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
                 "visita": "", "direccion_visita": "",
                 "nombre": str(_campo(fila, "nombre", "Nombre")),
                 "descripcion": adjuntos,
-                "cierre": str(_campo(fila, "fechas.fecha_cierre", "fecha_cierre"))[:10],
+                "cierre": cierre,
                 "monto": float(_campo(fila, "montos.monto_disponible_clp", "monto_disponible_clp", defecto=0) or 0),
                 # Para cruzar con la bodega sirve el codigo de la unidad, que
                 # es el prefijo; el nombre solo se usa para mostrarlo.
@@ -1307,6 +1342,8 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40)
         # redondo en un dato de la calle es siempre sospechoso.
         print(f"  TECHO: {techo_paginas} paginas y seguian llegando. "
               "Quedaron compras agiles sin pedir.")
+    if cerradas:
+        print(f"  {cerradas} descartadas por estar ya cerradas")
     print(f"  {len(salida)} compras agiles abiertas")
     return salida
 
@@ -1438,7 +1475,7 @@ def tarjeta(op: dict) -> str:
         ancho = max(2, int(monto / tope * 100)) if tope else 2
         return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
                 f'<tr><td width="{ancho}%" style="background:{NARANJO};height:4px;'
-                f'font-size:0;line-height:0;border-radius:2px;">&nbsp;</td>'
+                f'font-size:0;line-height:0;border-radius:999px;">&nbsp;</td>'
                 f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>')
 
     def seccion(titulo, cuerpo):
@@ -1547,7 +1584,7 @@ def tarjeta(op: dict) -> str:
         aviso_visita = f"""
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fffaf2;border:1px dashed {NARANJO};
-                        border-radius:5px;margin-bottom:12px;">
+                        border-radius:12px;margin-bottom:12px;">
             <tr><td style="padding:10px 12px;color:#8a4b12;font-size:12.5px;line-height:1.5;">
               <strong>MENCIONA VISITA A TERRENO</strong><br>
               <span style="color:#a86a35;font-style:italic;">
@@ -1560,7 +1597,7 @@ def tarjeta(op: dict) -> str:
         aviso_visita = f"""
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fff4e8;border:1px solid {NARANJO};
-                        border-radius:5px;margin-bottom:12px;">
+                        border-radius:12px;margin-bottom:12px;">
             <tr><td style="padding:10px 12px;color:#8a4b12;font-size:13px;line-height:1.5;">
               <strong>VISITA A TERRENO OBLIGATORIA</strong><br>
               {op['visita']}{(' · ' + donde_visita[:70]) if donde_visita else ''}<br>
@@ -1572,7 +1609,7 @@ def tarjeta(op: dict) -> str:
   <tr>
     <td style="padding:10px 30px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
-             style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:6px;">
+             style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:16px 18px;">
           <div style="color:{NARANJO};font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:8px;">
             PRIORIDAD {clase} · {valor}
@@ -1587,7 +1624,7 @@ def tarjeta(op: dict) -> str:
           {detalle}{monto}
           <a href="{op['enlace']}"
              style="display:inline-block;margin-top:14px;padding:9px 18px;background:{MARINO};
-                    color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;border-radius:5px;">
+                    color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;border-radius:999px;">
             Ver en Mercado Público
           </a>
         </td></tr>
@@ -1751,7 +1788,7 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
     return f"""
   <tr><td style="padding:16px 14px 4px;">
     <table width="100%" cellpadding="0" cellspacing="0"
-           style="background:#f7f9fb;border-radius:8px;padding:16px 18px;">
+           style="background:#f7f9fb;border-radius:12px;padding:16px 18px;">
       <tr><td style="padding-bottom:6px;">
         <div style="font-size:16px;font-weight:700;color:#12293f;">Tus 3 del mes</div>
         <div style="color:#5b6b7c;font-size:13px;">
@@ -1817,7 +1854,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   <tr>
     <td style="padding:4px 30px 22px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
-             style="background:#f6f8fb;border:1px solid {BORDE};border-radius:8px;">
+             style="background:#f6f8fb;border:1px solid {BORDE};border-radius:12px;">
         <tr><td style="padding:18px 20px;">
           <div style="color:{TEXTO};font-size:15px;font-weight:700;margin-bottom:6px;">
             También tienes un panel
@@ -1829,7 +1866,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
           </div>
           <a href="{PANEL}" style="display:inline-block;background:{NARANJO};
              color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
-             padding:11px 22px;border-radius:7px;">Entrar al panel</a>
+             padding:11px 22px;border-radius:999px;">Entrar al panel</a>
           <div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:11px;">
             Entra con este mismo correo. La primera vez elige
             <strong>«Sign up»</strong> y defines tu contraseña.
@@ -1879,7 +1916,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   <tr>
     <td style="padding:14px 30px 4px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
-             style="background:#fff6ee;border:1px solid {NARANJO};border-radius:8px;">
+             style="background:#fff6ee;border:1px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:14px 18px;">
           <div style="color:{TEXTO};font-size:14px;font-weight:700;margin-bottom:4px;">
             {encabezado}
@@ -1905,7 +1942,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 6px;">
 <tr><td align="center">
 <table width="600" cellpadding="0" cellspacing="0" border="0"
-       style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;
+       style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;
               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
 
   <!-- LA CABECERA VA MARINA, Y EL LOGO SOBRE UNA PLACA BLANCA.
@@ -1923,7 +1960,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   <tr>
     <td style="background:{MARINO};padding:16px 18px;">
       <table cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="background:#ffffff;border-radius:8px;padding:7px;
+        <td style="background:#ffffff;border-radius:12px;padding:7px;
                    line-height:0;">
           <img src="{LOGO}" alt="Uplevel" width="34" height="34"
                style="display:block;border:0;"></td>
@@ -2130,14 +2167,21 @@ def main():
         if not ticket:
             print("Falta TICKET_MP en el entorno. Con --prueba no hace falta.")
             return
-        # Para el primer correo se miran 3 dias de compras agiles en vez de
-        # uno: hace falta material para que no llegue casi vacio.
+        # Para el primer correo se miran 7 dias HABILES de compras agiles en
+        # vez de uno: hace falta material para que no llegue casi vacio.
         #
-        # Eran 7 y se bajo a 3 el 29-08-2026. No es solo velocidad: una compra
-        # agil cierra en 24 a 72 horas, asi que una de hace una semana ya esta
-        # cerrada. Mostrarsela a alguien en su PRIMER correo es peor que no
-        # mostrarle nada.
-        dias_agiles = 3 if args.bienvenidas else 1
+        # Historia de este numero, porque va y viene:
+        #   - Eran 7 corridos.
+        #   - El 29-08-2026 se bajaron a 3, por dos razones distintas: una
+        #     compra agil suele cerrar en 24 a 72 horas y no habia filtro que
+        #     descartara las cerradas; y con 7 dias se topaba el techo de 40
+        #     paginas —vinieron exactamente 2000— y quedaban compras afuera.
+        #   - El 31-08-2026 vuelven a 7, ahora HABILES, porque Serling —que le
+        #     vende al Estado desde 2017— avisa que hay compras agiles con mas
+        #     dias de vigencia y con 3 se pierden. Las dos razones de agosto
+        #     estan tapadas: ahora se descartan las ya cerradas al leerlas, y
+        #     el techo de paginas sube para el primer correo.
+        dias_agiles = 7 if args.bienvenidas else 1
 
         # Las dos consultas se miden POR SEPARADO. Juntas decian «1194 s» y
         # no se podia saber cual acortar: son cosas distintas y se arreglan
@@ -2148,7 +2192,12 @@ def main():
         print("[tiempo] licitaciones: %.0f s" % (time.perf_counter() - marca))
 
         marca = time.perf_counter()
-        agi = compras_agiles_abiertas(ticket, dias=dias_agiles)
+        # El techo sube SOLO para la bienvenida: con 7 dias habiles hay
+        # muchas mas y con 40 paginas se cortaria en silencio. El correo
+        # diario mira un dia y con 40 le sobra.
+        agi = compras_agiles_abiertas(
+            ticket, dias=dias_agiles, habiles=args.bienvenidas,
+            techo_paginas=120 if args.bienvenidas else 40)
         print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
 
         universo = lic + agi
