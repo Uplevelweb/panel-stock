@@ -112,6 +112,11 @@ def _credenciales() -> tuple[str, str]:
         return "", ""
 
 
+# El ultimo fallo de PostgREST, para poder mostrarlo en la pantalla de error.
+# Es un dict y no una variable suelta para no tener que declarar `global`.
+_ULTIMO_FALLO = {"motivo": ""}
+
+
 def _pedir(ruta: str, metodo: str = "GET", cuerpo=None, extra: dict | None = None):
     """Una llamada a PostgREST. Devuelve la lista de filas, o None si fallo.
 
@@ -122,6 +127,9 @@ def _pedir(ruta: str, metodo: str = "GET", cuerpo=None, extra: dict | None = Non
     """
     url, clave = _credenciales()
     if not url or not clave:
+        _ULTIMO_FALLO["motivo"] = (
+            "falta el bloque [supabase] en los secretos de Streamlit, "
+            "o no tiene las llaves `url` y `secret_key`")
         return None
     cabeceras = {
         "apikey": clave,
@@ -138,7 +146,19 @@ def _pedir(ruta: str, metodo: str = "GET", cuerpo=None, extra: dict | None = Non
         with urllib.request.urlopen(peticion, timeout=30) as respuesta:
             texto = respuesta.read().decode("utf-8")
             return json.loads(texto) if texto.strip() else []
-    except Exception:
+    except urllib.error.HTTPError as error:
+        # El codigo y lo que contesto PostgREST. Sin esto, «no se pudo
+        # consultar» tapaba por igual una clave vencida, una tabla que no
+        # existe y una columna mal escrita. Paso el 31-08-2026: la puerta
+        # del panel llevaba horas cerrada y no habia forma de saber por que.
+        try:
+            detalle = error.read().decode("utf-8", "replace")[:200]
+        except Exception:
+            detalle = ""
+        _ULTIMO_FALLO["motivo"] = f"HTTP {error.code} {error.reason} {detalle}".strip()
+        return None
+    except Exception as error:
+        _ULTIMO_FALLO["motivo"] = f"{type(error).__name__}: {error}"[:220]
         return None
 
 
@@ -188,6 +208,13 @@ def quien_soy() -> dict:
 
     ficha = _buscar_usuario(email)
     if ficha is None:
+        # `_buscar_usuario` se guarda 5 minutos, y guardar un FRACASO deja a
+        # la persona golpeando una puerta que ya se abrio. Se borra al vuelo:
+        # el proximo intento vuelve a preguntar de verdad.
+        try:
+            _buscar_usuario.clear()
+        except Exception:
+            pass
         return dict(SIN_RESTRICCION, email=email,
                     motivo="no se pudo consultar las cuentas")
     if not ficha:
@@ -351,6 +378,9 @@ def puerta() -> dict:
     izquierda, centro, derecha = st.columns([1, 2, 1])
     with centro:
         st.caption("Escríbenos a webuplevel@gmail.com y lo resolvemos.")
+        if _ULTIMO_FALLO["motivo"]:
+            with st.expander("Detalles técnicos"):
+                st.code(_ULTIMO_FALLO["motivo"], language=None)
         if st.button("Salir", key="puerta_salir", width="stretch"):
             st.logout()
     st.stop()
