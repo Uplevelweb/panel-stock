@@ -1,3 +1,42 @@
+## 30-08-2026 · Paso 1 del IPT: el plan se guarda y la historia no se pisa
+
+`plan_visitas` y `movimientos_plan` creadas y probadas en produccion.
+
+**El hallazgo que justifica todo esto:** `seguimiento` tiene `unique (rut,
+codigo)` y `visitas` tiene `primary key (rut, email)`. Las dos guardan SOLO EL
+PRESENTE. Serling propuso llevar el CRM en Excel para poder comparar tres meses,
+y el diagnostico era correcto —hoy no se puede— pero la causa no era la pantalla:
+**la historia nunca se guardo**. En Excel el problema no se arregla, se muda, y
+ademas se pierde la vista compartida que hace que la jefa vea a su equipo.
+
+Excel queda, pero como SALIDA (el informe de tres meses sale de una consulta) y
+como ENTRADA en el paso 2 (subir la cartera que el vendedor ya tiene).
+
+Las dos decisiones que no se cambian despues:
+- **Llave: RUT de la empresa, vendedor como columna.** Respuesta de Serling: cada
+  vendedor arma el suyo con sus instituciones, y corresponde a la gestion de la
+  empresa.
+- **Nunca pisar.** Lo escribe un disparador y no la aplicacion, para que ningun
+  camino pueda cambiar el plan sin dejar rastro. Probado con `begin/rollback`
+  contra produccion: un alta y cuatro cambios dejaron cinco lineas y no quedo
+  ninguna fila de prueba.
+
+**Excluir es un estado editable, no un borrado.** Decision de Serling.
+
+Dos trampas nuevas, las dos costaron un intento:
+
+- ⚠️ **El editor de Supabase se cuelga con la palabra DROP, incluso dentro de un
+  comentario.** Abre un dialogo de confirmacion a mano y el SQL no corre, sin
+  ningun error visible: la pantalla sigue mostrando el resultado anterior y
+  parece que funciono. Se descubrio porque la comprobacion dijo `relation
+  "plan_visitas" does not exist` despues de un Run aparentemente exitoso.
+  Se usa `create or replace trigger`.
+- ⚠️ **`current_date` de la base va un dia adelante de Chile en las noches.**
+  Medido a las 21:00 del 30-08: la base decia 2026-08-31. Para agendar visitas la
+  fecha se saca de la hora de Chile, no de la base.
+
+---
+
 ## 30-08-2026 · La direccion de la unidad compradora ya no se bota
 
 `Comprador.DireccionUnidad` viene dentro del detalle de licitacion que el correo
