@@ -15,6 +15,11 @@ mismo dato.
 
 Con esta tabla se pide una vez y se guarda 30 dias.
 
+Y de paso guarda algo que antes se botaba: la DIRECCION de la unidad
+compradora. Viene dentro del mismo detalle que ya se paga, y es la base del
+itinerario de visitas: muchas instituciones con varias unidades no publican
+donde queda cada una.
+
 Lo que SI cambia de un dia para otro —que la licitacion siga abierta y
 su fecha de cierre— NO sale de aca: sale del listado de activas, que se
 sigue pidiendo entero todas las mananas. Por eso una ficha guardada no
@@ -40,6 +45,7 @@ create table if not exists fichas_licitacion (
   organismo         text,
   region            text,
   comuna            text,
+  direccion         text,   -- donde queda esa unidad compradora
   cierre            text,
   guardada          timestamptz not null default now()
 );
