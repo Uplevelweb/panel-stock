@@ -104,12 +104,16 @@ FONDO = "#f5f7fa"
 # Comprobado el 31-08-2026: los primeros bytes eran «<!DOCTYPE html>».
 # `logo-correo.png` ademas viene recortado: el original tenia 65% de margen
 # blanco y estaba descentrado, asi que a 34 px se veia diminuto.
-LOGO = "https://inteligencia.uplevelweb.art/img/logo.png"
-# PENDIENTE: cambiar a `logo-correo.png` cuando ese archivo este publicado.
-# Viene recortado —el original tiene 65% de margen blanco y esta
-# descentrado, asi que a 34 px se ve diminuto— pero el 31-08-2026 la subida
-# a Hostinger se topo con su limite diario y quedo sin publicar. Se apunta
-# mientras al que si existe: mas vale un logo chico que uno roto.
+# ⚠️ EL LOGO DEL CORREO VIVE EN LA RAIZ Y ESTA EN `$aIncluir` DE publicar.ps1.
+# Antes apuntaba a `uplevelweb.art/img/logo.png`, que NO EXISTE: el paquete no
+# lleva `img/` en la raiz y el .htaccess devuelve el index.html entero con un
+# 200, asi que la etiqueta <img> recibia 198 KB de HTML y el logo salia roto.
+# Comprobado el 31-08-2026: los primeros bytes eran «<!DOCTYPE html>».
+# Este archivo ademas viene recortado. El original tenia 65% de margen blanco y
+# estaba descentrado (127 px a la izquierda contra 88 a la derecha), asi que a
+# 34 px el logo de verdad medida unos 20. Recortado se ve 65% mas grande sin
+# cambiar ni una medida del correo.
+LOGO = "https://uplevelweb.art/logo-correo.png"
 PANEL = "https://panel-stock-uplevel.streamlit.app"
 
 # Palabras que aparecen en todas las licitaciones y no distinguen nada.
