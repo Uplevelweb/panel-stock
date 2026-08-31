@@ -377,14 +377,36 @@ Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
   El formulario del token de GitHub se llenó entero así.
 - **NO funciona: escribir en campos de texto.** Ni tecleando por coordenada ni
   fijando el valor por elemento (`form_input` devuelve `Set text value to ""`).
-  Falló en el nombre del token de GitHub, en el editor SQL de Supabase y en los
-  campos de Tenant Settings de Auth0.
+  Falló en el nombre del token de GitHub y en los campos de Tenant Settings de
+  Auth0.
+- **SÍ funciona el editor SQL de Supabase, por JavaScript** (comprobado el
+  30-08-2026: se crearon `fichas_licitacion` y la función del alta sin que
+  Serling tocara nada). El truco es no escribir: se le habla al editor por su
+  propia API.
+  - `window.monaco` queda expuesto una vez que carga el editor (esperar: al
+    entrar todavía no está).
+  - Hay **dos** modelos y los dos son `pgsql`. El del editor principal es el que
+    tiene URI `file:///...`; el `inmemory://` es el panel del asistente. Elegir
+    por la URI, no por el tamaño: `getDomNode()` devuelve 5×5 en los dos y
+    filtrar por rectángulo no encuentra ninguno.
+  - `modelo.setValue(SQL)` escribe y React lo toma (aparece «Unsaved edits»).
+  - El botón **Run** se aprieta por JavaScript buscándolo por su texto, **no por
+    coordenada** —las coordenadas se desvían en Supabase—. Hay dos botones «Run»:
+    el de la barra principal es el de menor `left`.
+  - **El SQL viaja en base64** y se decodifica con `atob` + `TextDecoder`. Un
+    literal de JavaScript se rompe con los backticks que llevan los comentarios
+    del propio SQL, y además así llega byte a byte idéntico al archivo.
+  - **Comprobar el largo contra el archivo antes de apretar Run**, y después
+    comprobar el resultado **con un `select` contra la base**, no mirando la
+    pantalla.
 - **Los clics por coordenada se desvían** en Supabase y Auth0: el marco de la
   captura no calza con el de la página y terminan en el botón de al lado. En
   Supabase abrieron dos veces el panel «Connect» sin querer. Ahí conviene parar:
   es una base de producción.
-- **Moraleja operativa:** cualquier cosa que se escriba —SQL, claves, nombres—
-  la pega ella. Lo que se aprieta se puede automatizar. Y para diagnosticar
+- **Moraleja operativa, corregida el 30-08-2026:** lo que se aprieta se
+  automatiza, y **lo que se escribe también, si el campo tiene una API detrás**
+  (el editor de Supabase la tiene). Lo que sigue pegando ella son **las claves**,
+  por regla, no por limitación. Y para diagnosticar
   GitHub sirve más `gh` desde el computador que el navegador.
 
 
