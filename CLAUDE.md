@@ -95,6 +95,7 @@ no.
 | `modulo_planes.py` | **Qué abre cada plan.** Una sola fuente de verdad; no hacer otra lista |
 | `alta-automatica-para-copiar.txt` | El SQL que crea la cuenta y el usuario al inscribirse |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
+| `supabase-fichas-para-copiar.txt` | El SQL de `fichas_licitacion`: las fichas guardadas de un día para otro |
 | `alertas_config.json` | Configuración de prueba local. **NUNCA subirlo: el repo es público** |
 | `bienvenidas_enviadas.json` | A quién ya se le mandó el primer correo, en pruebas locales. **NUNCA subirlo: lleva correos de clientes** |
 | `auth0-para-copiar.txt` | Los 9 pasos para encender el login propio. **NUNCA subirlo: lleva la clave de la sesión** |
@@ -171,7 +172,10 @@ los lee al instante y **sin gastar el ticket**.
 disponible desde 2007. Bajar 2025-2026 entero pasó de **51 días a 54 minutos**, y además trae el
 **convenio marco de cada orden**, que la API no entrega.
 
-Estado actual: **1,29 millones de líneas de Convenio Marco, 20 meses, 35,4 MB en parquet.**
+Estado actual (medido 30-08-2026): **8,26 millones de líneas resumidas en 869.131
+filas, las seis vías de compra, 121 MB en parquet.** Los meses de producción pesan
+~21 MB cada uno; si en un clon local pesan ~2 MB, esa copia es anterior al
+27-08-2026 y solo tiene Convenio Marco.
 
 **Dos trampas del archivo, ambas costaron tiempo:**
 
@@ -342,6 +346,22 @@ El logo de Uplevel tiene fondo blanco. Sobre el azul marino deja un recuadro y
 se ve pegoteado. La cabecera es blanca con el nombre en marino, y el color de
 marca lo pone una franja naranja de 3px debajo.
 
+### Las fichas de licitación se guardan de un día para otro
+
+El 96% del tiempo del correo se va pidiendo detalles de a uno con 2 segundos
+obligatorios entre cada uno. Pero una licitación sigue abierta una o dos semanas
+y su ficha —comprador, región, descripción, visita a terreno— no cambia. Se
+guarda en `fichas_licitacion` (SQL en `supabase-fichas-para-copiar.txt`) y se
+reusa 30 días.
+
+- **Lo que cambia día a día NO sale de la ficha**: que siga abierta y su fecha de
+  cierre salen del listado de activas, que se sigue pidiendo entero cada mañana.
+  Por eso una ficha guardada no puede envejecer mal sin que nadie lo note.
+- **Falla abierto**: sin tabla o sin Supabase, se piden todas como antes.
+- **El techo de 400 cuenta solo las que hay que pedir.** Una ficha guardada no
+  gasta ticket ni espera, así que no tiene por qué ocupar cupo: con la caché
+  llena, el correo alcanza a mirar más licitaciones que antes, no menos.
+
 ### La memoria de lo avisado
 
 Una licitación abierta sigue abierta una o dos semanas. Sin anotar lo enviado, el
@@ -433,21 +453,29 @@ está en `bienvenida-workflow-para-copiar.txt`.
   acortarlo, la palanca es `dias_agiles` (hoy 7 para la bienvenida, 1 para el
   diario): menos días, menos peticiones a la API, menos material.
 
-### ⚠️ El límite que decide a quién se le puede vender
+### A quién se le puede vender (medido el 30-08-2026)
 
-**La bodega guarda SOLO órdenes de Convenio Marco** (`bodeguero.py` descarta todo
-código que no termine en `CM`). Consecuencia directa, comprobada en la primera
-corrida real del 27-08-2026:
+**Esto decía que la bodega guardaba solo Convenio Marco. Ya no es cierto** y la
+nota vieja costó un diagnóstico equivocado: `bodeguero.py` no filtra por
+mecanismo desde el 27-08-2026. Medido sobre tres meses de la bodega **de
+producción** (1.215.678 líneas):
 
-| Cliente | Encuentra oportunidades | Dice cuánto gasta el comprador |
+| Vía | Monto 3 meses | Proveedores |
 |---|---|---|
-| Proveedor de Convenio Marco (Emergenza) | ✅ | ✅ el diferenciador completo |
-| Proveedor fuera de CM (software, obras) | ✅ | ❌ sin historial: sale «PRIORIDAD D · 0» |
+| SE (licitación) | $1.417.516 MM | 15.399 |
+| TD (trato directo) | $496.193 MM | 9.412 |
+| AG (compra ágil) | $209.164 MM | 21.947 |
+| **CM (convenio marco)** | **$168.031 MM** | **861** |
+| CC / CT | $7.827 MM | 286 |
 
-Con palabras clave de software, las cuatro oportunidades salieron en D con gasto
-cero. **No es un fallo del cálculo**: es que esas licitaciones no son Convenio
-Marco y la bodega no tiene con qué cruzarlas. Para venderle a proveedores fuera
-de CM hay que ampliar la bodega a **todas** las órdenes de compra.
+**Convenio Marco es el 7% de la plata y el 2,4% de los proveedores.** Hay 36.623
+proveedores vendiéndole al Estado y el panel nació mirando 861.
+
+⚠️ **Lo que sigue SIN comprobar** es si el encaje y la nota de prioridad
+funcionan bien fuera de Convenio Marco. La única prueba que hay —cuatro
+oportunidades de software en «PRIORIDAD D · 0»— es del 27-08, el mismo día de la
+ampliación, y casi seguro corrió contra la bodega vieja. **Repetirla antes de
+prometerle nada a un proveedor de servicios.**
 
 ### Resend
 
@@ -549,7 +577,8 @@ Son **dos cosas distintas y conviene no confundirlas**:
     que lo deja `app.main()`. Arrastrarlo por tres firmas era peor.
 - ⚠️ **La cuenta de Uplevel necesita `plan = 'soporte'`** o pierde Mercado Público y
   el Cotizador. `es_soporte()` mira el ROL y no salva eso: son cosas distintas.
-- **El muro del fin de prueba** vive en `modulo_planes.muro_de_prueba()` y se dibuja
+- **El muro del fin de prueba** (14 días, ver `alta-automatica-para-copiar.txt`)
+  vive en `modulo_planes.muro_de_prueba()` y se dibuja
   ANTES de las pestañas, en `app.main()`. Dos extensiones de 10 días, y **cada una se
   paga con un dato**: el teléfono la primera, el motivo la segunda. Diseño de Serling:
   un vencimiento normal solo pierde clientes; este los convierte en una conversación.
