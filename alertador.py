@@ -1032,6 +1032,71 @@ def unidad_del_codigo(codigo: str) -> str:
     return tramo if tramo.isdigit() else ""
 
 
+# Una licitacion sigue abierta una o dos semanas. Se guardan 30 dias: mas
+# arriba de eso, volver a preguntar sale mas barato que confiar.
+FICHAS_FRESCAS = 30
+
+
+def fichas_guardadas(codigos: list[str]) -> dict[str, dict]:
+    """Las fichas de licitacion que ya se pidieron otro dia.
+
+    El detalle de una licitacion —comprador, region, descripcion, visita a
+    terreno— no cambia mientras siga abierta, y son 2 segundos obligatorios
+    cada vez. Pedirlo de nuevo cada manana es regalar el unico tiempo que de
+    verdad cuesta.
+
+    Lo que SI cambia —que siga abierta, y su fecha de cierre— no sale de aca:
+    sale del listado de activas, que se pide entero todas las mananas.
+
+    Falla abierto: si no se puede leer, se piden todas como antes.
+    """
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave and codigos):
+        return {}
+
+    desde = (date.today() - timedelta(days=FICHAS_FRESCAS)).isoformat()
+    salida: dict[str, dict] = {}
+    # De a cien: la lista de codigos viaja dentro de la URL y no puede crecer
+    # sola. Los codigos llevan guiones, asi que van entre comillas.
+    for i in range(0, len(codigos), 100):
+        lista = ",".join('"%s"' % c.replace('"', "") for c in codigos[i:i + 100])
+        consulta = (f"{url}/rest/v1/fichas_licitacion?select=*"
+                    f"&codigo=in.({urllib.parse.quote(lista)})"
+                    f"&guardada=gte.{desde}")
+        peticion = urllib.request.Request(consulta, headers={
+            "apikey": clave, "Authorization": f"Bearer {clave}",
+            "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+                for fila in json.loads(respuesta.read().decode("utf-8")):
+                    salida[str(fila.get("codigo"))] = fila
+        except Exception as error:
+            print(f"   no se pudieron leer las fichas guardadas: "
+                  f"{type(error).__name__}")
+            return {}
+    return salida
+
+
+def guardar_fichas(fichas: list[dict]) -> None:
+    """Anota las fichas nuevas. Si falla no pasa nada: manana se vuelven a pedir."""
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave and fichas):
+        return
+    peticion = urllib.request.Request(
+        f"{url}/rest/v1/fichas_licitacion",
+        data=json.dumps(fichas).encode("utf-8"), method="POST",
+        headers={"apikey": clave, "Authorization": f"Bearer {clave}",
+                 "Content-Type": "application/json",
+                 # Si ya estaba, se pisa con lo recien pedido.
+                 "Prefer": "resolution=merge-duplicates"})
+    try:
+        urllib.request.urlopen(peticion, timeout=60).read()
+    except Exception as error:
+        print(f"   no se pudieron guardar las fichas: {type(error).__name__}")
+
+
 def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) -> list[dict]:
     """
     Las activas de la v1, en dos pasadas.
@@ -1060,13 +1125,24 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
         if palabras(nombre) & bolsa_comun:
             candidatas.append((str(_campo(fila, "CodigoExterno", "Codigo", "codigo")), fila))
     print(f"  {len(candidatas)} sobreviven al nombre")
-    if len(candidatas) > techo:
+
+    # Las que ya se pidieron otro dia no se vuelven a pedir.
+    guardadas = fichas_guardadas([c for c, _ in candidatas])
+    if guardadas:
+        print(f"  {len(guardadas)} ya estaban guardadas de otro dia")
+    faltan = [(c, f) for c, f in candidatas if c not in guardadas]
+
+    # El techo cuenta SOLO las que hay que pedir: una ficha guardada no gasta
+    # ticket ni los 2 segundos de espera, asi que no tiene por que ocupar cupo.
+    if len(faltan) > techo:
         print(f"  se piden solo las primeras {techo} para no agotar el ticket")
-        candidatas = candidatas[:techo]
+        fuera = {c for c, _ in faltan[techo:]}
+        faltan = faltan[:techo]
+        candidatas = [(c, f) for c, f in candidatas if c not in fuera]
 
     # --- segunda pasada: el detalle, que es donde esta lo que sirve ---
-    salida = []
-    for i, (codigo, fila) in enumerate(candidatas, 1):
+    nuevas: list[dict] = []
+    for i, (codigo, _fila) in enumerate(faltan, 1):
         if i > 1:
             time.sleep(ESPERA_V1)  # menos de 2 s y la API responde 429
         detalle = _primera_lista(_pedir(
@@ -1082,19 +1158,11 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
         # esta en Santiago, la decision es hoy.
         fechas = d.get("Fechas") if isinstance(d.get("Fechas"), dict) else {}
         visita = str(fechas.get("FechaVisitaTerreno") or "")
-        nombre_lic = str(_campo(fila, "Nombre", "nombre"))
-        mencion = menciona_visita(nombre_lic, d.get("Descripcion"))
-        salida.append({
-            "tipo": "licitacion",
+        ficha = {
             "codigo": codigo,
-            "nombre": str(_campo(fila, "Nombre", "nombre")),
             "descripcion": str(d.get("Descripcion") or ""),
             "visita": visita[:16].replace("T", " ") if visita else "",
             "direccion_visita": str(d.get("DireccionVisita") or "").strip(),
-            "mencion_visita": mencion,
-            "cierre": str(_campo(fila, "FechaCierre", "fechaCierre") or
-                          _campo(d, "Fechas.FechaCierre"))[:10],
-            "monto": 0.0,
             # CodigoUnidad y el prefijo del codigo son lo mismo; se prefiere el
             # que viene declarado y se cae al prefijo si no vino.
             "unidad": str(comprador.get("CodigoUnidad") or unidad_del_codigo(codigo)),
@@ -1102,9 +1170,41 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
             "organismo": str(comprador.get("NombreOrganismo") or ""),
             "region": str(comprador.get("RegionUnidad") or ""),
             "comuna": str(comprador.get("ComunaUnidad") or ""),
-        })
+            # Respaldo por si el listado no trajo la fecha de cierre.
+            "cierre": str(_campo(d, "Fechas.FechaCierre") or "")[:10],
+        }
+        guardadas[codigo] = ficha
+        nuevas.append(ficha)
         if i % 25 == 0:
-            print(f"    {i}/{len(candidatas)} detalles pedidos")
+            print(f"    {i}/{len(faltan)} detalles pedidos")
+    guardar_fichas(nuevas)
+
+    # --- armar la salida ---
+    # La ficha pone lo que no cambia; el listado de hoy pone lo que si cambia,
+    # que es la fecha de cierre. Por eso una ficha guardada no envejece mal.
+    salida = []
+    for codigo, fila in candidatas:
+        ficha = guardadas.get(codigo)
+        if ficha is None:
+            continue
+        nombre_lic = str(_campo(fila, "Nombre", "nombre"))
+        salida.append({
+            "tipo": "licitacion",
+            "codigo": codigo,
+            "nombre": nombre_lic,
+            "descripcion": str(ficha.get("descripcion") or ""),
+            "visita": str(ficha.get("visita") or ""),
+            "direccion_visita": str(ficha.get("direccion_visita") or ""),
+            "mencion_visita": menciona_visita(nombre_lic, ficha.get("descripcion")),
+            "cierre": str(_campo(fila, "FechaCierre", "fechaCierre") or
+                          ficha.get("cierre") or "")[:10],
+            "monto": 0.0,
+            "unidad": str(ficha.get("unidad") or unidad_del_codigo(codigo)),
+            "nombre_unidad": str(ficha.get("nombre_unidad") or ""),
+            "organismo": str(ficha.get("organismo") or ""),
+            "region": str(ficha.get("region") or ""),
+            "comuna": str(ficha.get("comuna") or ""),
+        })
 
     return salida
 
@@ -1535,7 +1635,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
           <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.6;margin-bottom:14px;">
             Ahí ves a quién le puedes vender y todavía no le vendes, cuánto gasta
             cada comprador en tus rubros y en qué quedó cada oportunidad que te
-            avisamos. <strong>Tienes 20 días con todo abierto.</strong>
+            avisamos. <strong>Tienes 14 días con todo abierto.</strong>
           </div>
           <a href="{PANEL}" style="display:inline-block;background:{NARANJO};
              color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
@@ -1563,7 +1663,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   </tr>"""
 
     # La franja de fin de prueba. Solo en el correo DIARIO: la bienvenida ya
-    # dice «tienes 20 dias con todo abierto» tres centimetros mas arriba, y
+    # dice «tienes 14 dias con todo abierto» tres centimetros mas arriba, y
     # repetirlo el primer dia suena a apuro por cobrar.
     #
     # Aparece a falta de 3 dias, no antes: una cuenta atras de tres semanas se
