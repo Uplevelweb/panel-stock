@@ -873,3 +873,39 @@ app.button(key="mp_consultar").click().run()
 
 Las tablas se buscan **por sus columnas, no por su posición** (`app.dataframe[-1]` se rompió al
 cambiar el orden de las pestañas).
+
+## Los tres trabajos automáticos
+
+| Archivo | Cuándo | Qué hace |
+|---|---|---|
+| `bodega.yml` | 02:00 Chile | llena la bodega de Mercado Público |
+| `licitaciones.yml` | 07:00 Chile | llena la bodega de licitaciones |
+| `bienvenidas.yml` | cada 15 min | manda el **primer** correo a quien se acaba de inscribir |
+
+**El correo DIARIO sigue sin trabajo automático.** Se corre a mano con
+`python alertador.py --enviar`. Es lo próximo que falta.
+
+### Por qué `bienvenidas.yml` tiene un portero
+
+La bodega pesa 121 MB. Bajarla 96 veces al día para descubrir que no hay nadie
+esperando es un desperdicio, así que el primer paso pregunta a Supabase con un
+`curl` —sin bajar nada— si alguien tiene `bienvenida_enviada IS NULL`. Si no,
+la corrida termina en segundos y los demás pasos ni se ejecutan.
+
+### La trampa que el portero también tapa
+
+Si `SUPABASE_URL` o `SUPABASE_SECRET_KEY` faltan, `alertador.py` cae a su
+respaldo local `bienvenidas_enviadas.json`, que **no está en el repositorio**.
+Sin ese archivo creería que nadie ha recibido nada y le mandaría la bienvenida
+**a todos otra vez**. Por eso el portero falla ruidosamente cuando los
+secretos no están, en vez de dejar pasar la corrida.
+
+Y `concurrency: bienvenidas` impide que dos corridas se pisen: la segunda
+leería la lista antes de que la primera alcance a marcar, y saldrían dos
+correos a la misma persona.
+
+### La promesa de la página
+
+`inteligencia.uplevelweb.art` dice **«tu primera alerta sale en unos minutos»**.
+Hasta el 31-08-2026 eso era mentira: no había nada que lo disparara. Si algún
+día se apaga `bienvenidas.yml`, hay que cambiar también ese texto.
