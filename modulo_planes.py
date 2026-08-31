@@ -109,6 +109,47 @@ NOMBRE_DE_PLAN = {
 }
 
 
+def origen_de(plan: str, extras=()) -> dict[str, str]:
+    """De donde viene cada modulo para una cuenta: 'plan', 'extra' o ''.
+
+    Es lo que dibuja los interruptores de Soporte, y vive aca —y no en la
+    pantalla— para poder probarlo sin abrir un navegador.
+
+    'plan'   lo incluye el plan. El interruptor va encendido y bloqueado:
+             apagarlo seria cobrar un plan y no entregarlo.
+    'extra'  se le regalo a esta cuenta. Se puede apagar.
+    ''       no lo tiene. Se puede encender.
+    """
+    # El MISMO respaldo que `plan_de`: un plan desconocido cae en `soporte` y
+    # ve todo. Si aca se usara otra regla, Soporte mostraria una cosa y el
+    # cliente veria otra, que es la peor pantalla de soporte posible.
+    limpio = str(plan or "").strip().lower()
+    del_plan = PLANES[limpio if limpio in PLANES else "soporte"]
+    dados = {str(m) for m in (extras or ())}
+    salida = {}
+    for modulo in MODULOS:
+        if modulo in del_plan:
+            salida[modulo] = "plan"
+        elif modulo in dados:
+            salida[modulo] = "extra"
+        else:
+            salida[modulo] = ""
+    return salida
+
+
+def extras_para_abrir_todo(plan: str) -> list[str]:
+    """Los modulos que hay que regalar para que una cuenta lo vea todo.
+
+    Es la oferta de la feria: paga el plan de entrada y recibe el de arriba.
+    Se excluyen `mercado_publico` y `cotizador` a proposito: leen el Drive de
+    Emergenza, no le sirven a ningun otro cliente y no estan a la venta.
+    """
+    limpio = str(plan or "").strip().lower()
+    del_plan = PLANES[limpio if limpio in PLANES else "soporte"]
+    return sorted(m for m, ficha in MODULOS.items()
+                  if not ficha.get("extra") and m not in del_plan)
+
+
 def plan_que_lo_abre(modulo: str) -> str:
     """El plan más barato que incluye ese módulo. '' si es un extra."""
     for plan in ORDEN_DE_PLANES:
