@@ -1,0 +1,181 @@
+========================================================================
+ EL PLAN DE VISITAS  ·  PASO 1 DEL IPT OPERATIVO
+ Que el itinerario se guarde, y que nada se pise sin dejar rastro
+========================================================================
+
+POR QUE
+-------
+Hasta ahora el itinerario se recalculaba cada vez que se abria la pantalla.
+Si el vendedor movia una visita, se perdia al recargar.
+
+Y hay algo peor, que se descubrio mirando las tablas viejas: `seguimiento`
+tiene `unique (rut, codigo)` y `visitas` tiene `primary key (rut, email)`.
+Las dos guardan SOLO EL PRESENTE. Cuando algo cambia, lo anterior
+desaparece. Por eso hoy no se puede comparar como venia el trabajo hace
+tres meses: la historia nunca se guardo.
+
+Estas dos tablas arreglan las dos cosas.
+
+
+LAS DOS DECISIONES QUE NO SE CAMBIAN DESPUES
+--------------------------------------------
+1. LA LLAVE ES EL RUT DE LA EMPRESA, y el vendedor es una columna.
+   Cada vendedor arma y mueve su propio plan con sus instituciones, pero
+   el plan es de la gestion de la empresa: la jefa lo ve entero sin tener
+   que pedirlo. Es el mismo patron del embudo.
+
+2. NUNCA SE PISA, SIEMPRE SE AGREGA UNA LINEA.
+   Cada cambio de fecha, de estado o de inclusion escribe un registro en
+   `movimientos_plan`. Lo escribe un DISPARADOR, no la aplicacion: asi no
+   depende de que alguien se acuerde de anotarlo.
+
+   Con eso, comparar tres meses es una consulta, y el Excel para mostrar
+   sale de esa consulta.
+
+
+EXCLUIR NO ES BORRAR
+--------------------
+`incluida` es una casilla que el vendedor prende y apaga. Marcar una
+institucion como «no» la saca del plan pero no la borra: se puede devolver
+cuando quiera, y el movimiento queda anotado.
+
+
+------------------------------------------------------------------------
+ PASO UNICO · PEGAR ENTERO
+------------------------------------------------------------------------
+Supabase ▸ SQL Editor ▸ New query ▸ pegar ▸ RUN
+
+- - - - - - - - - - - - - -  COPIA DESDE AQUI  - - - - - - - - - - - - -
+
+-- ---------------------------------------------------------------
+-- 1. EL PLAN: una fila por institucion que el vendedor lleva.
+-- ---------------------------------------------------------------
+create table if not exists plan_visitas (
+  id             uuid primary key default gen_random_uuid(),
+  rut            text not null,              -- la empresa. La llave.
+  vendedor       text not null default '',   -- el correo de quien la lleva
+  unidad         text not null,              -- codigo de la unidad compradora
+  nombre_unidad  text,
+  organismo      text,
+  comuna         text,
+  region         text,
+  direccion      text,                       -- se llena desde fichas_licitacion
+  por_ganar      numeric,                    -- lo que habia para ganar al armarlo
+  fecha          date,                       -- cuando esta programada
+  orden          smallint,                   -- el orden dentro del dia
+  incluida       boolean not null default true,
+  estado         text not null default 'programada'
+                 check (estado in ('programada', 'visitada', 'no_visitada')),
+  nota           text,
+  creada         timestamptz not null default now(),
+  actualizada    timestamptz not null default now(),
+  unique (rut, vendedor, unidad)
+);
+
+create index if not exists plan_visitas_rut    on plan_visitas (rut);
+create index if not exists plan_visitas_agenda on plan_visitas (rut, vendedor, fecha);
+
+alter table plan_visitas enable row level security;
+
+
+-- ---------------------------------------------------------------
+-- 2. LA HISTORIA: una linea por cada cambio. Nunca se borra.
+-- ---------------------------------------------------------------
+create table if not exists movimientos_plan (
+  id        bigserial primary key,
+  rut       text not null,
+  vendedor  text,
+  unidad    text,
+  que       text not null,    -- 'alta', 'fecha', 'estado', 'incluida', 'nota'
+  antes     text,
+  despues   text,
+  cuando    timestamptz not null default now()
+);
+
+create index if not exists movimientos_plan_cuando on movimientos_plan (rut, cuando);
+
+alter table movimientos_plan enable row level security;
+
+
+-- ---------------------------------------------------------------
+-- 3. EL DISPARADOR que escribe la historia solo.
+--    Va en la base y no en la aplicacion a proposito: asi ningun
+--    camino puede cambiar el plan sin dejar rastro.
+-- ---------------------------------------------------------------
+create or replace function anotar_movimiento_plan()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $function$
+begin
+  if TG_OP = 'INSERT' then
+    insert into movimientos_plan (rut, vendedor, unidad, que, antes, despues)
+    values (new.rut, new.vendedor, new.unidad, 'alta', null,
+            coalesce(new.nombre_unidad, new.unidad));
+    return new;
+  end if;
+
+  -- Una linea por cada cosa que de verdad cambio.
+  if new.fecha is distinct from old.fecha then
+    insert into movimientos_plan (rut, vendedor, unidad, que, antes, despues)
+    values (new.rut, new.vendedor, new.unidad, 'fecha',
+            old.fecha::text, new.fecha::text);
+  end if;
+
+  if new.estado is distinct from old.estado then
+    insert into movimientos_plan (rut, vendedor, unidad, que, antes, despues)
+    values (new.rut, new.vendedor, new.unidad, 'estado', old.estado, new.estado);
+  end if;
+
+  if new.incluida is distinct from old.incluida then
+    insert into movimientos_plan (rut, vendedor, unidad, que, antes, despues)
+    values (new.rut, new.vendedor, new.unidad, 'incluida',
+            old.incluida::text, new.incluida::text);
+  end if;
+
+  if new.nota is distinct from old.nota then
+    insert into movimientos_plan (rut, vendedor, unidad, que, antes, despues)
+    values (new.rut, new.vendedor, new.unidad, 'nota', old.nota, new.nota);
+  end if;
+
+  new.actualizada := now();
+  return new;
+end;
+$function$;
+
+-- Se reemplaza en vez de borrar y volver a crear: el editor de Supabase
+-- pide confirmacion a mano cuando ve esa palabra y deja el SQL colgado.
+create or replace trigger al_mover_el_plan
+  before insert or update on plan_visitas
+  for each row execute function anotar_movimiento_plan();
+
+- - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+Tiene que decir  Success. No rows returned.
+
+
+COMPROBAR
+---------
+  select
+    (select count(*) from information_schema.columns
+      where table_name = 'plan_visitas')                     as columnas_plan,
+    (select count(*) from information_schema.columns
+      where table_name = 'movimientos_plan')                 as columnas_historia,
+    (select count(*) from pg_trigger
+      where tgname = 'al_mover_el_plan')                     as disparador;
+
+Tienen que salir  17, 8  y  1.
+
+
+LO QUE ESTO HABILITA MAS ADELANTE
+----------------------------------
+Comparar tres meses, que hoy es imposible:
+
+  select date_trunc('month', cuando) as mes,
+         count(*) filter (where que = 'estado' and despues = 'visitada') as visitadas,
+         count(*) filter (where que = 'alta')                           as agregadas
+    from movimientos_plan
+   where rut = 'EL-RUT'
+     and cuando > now() - interval '3 months'
+   group by 1 order by 1;
