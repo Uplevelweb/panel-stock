@@ -1,0 +1,174 @@
+========================================================================
+ EL ALTA AUTOMATICA
+ Que inscribirse en la landing cree tambien la cuenta y el usuario del
+ panel, con sus 14 dias de prueba contando desde ese momento.
+========================================================================
+
+QUE CAMBIA
+----------
+Hoy inscribirse solo agrega a la lista de correos. El cliente recibe sus
+alertas pero NO puede entrar al panel, porque nadie lo puso en `usuarios`.
+
+Con esto, el mismo acto de inscribirse:
+  1. lo agrega a la lista de correos          (ya pasaba)
+  2. crea la cuenta de su empresa, plan `piloto`, con fecha de termino
+  3. lo crea como `admin` de esa cuenta
+  4. avisa a GitHub para el correo de bienvenida   (ya pasaba)
+
+Todo cuelga del disparador que ya pegaste. No hay que tocar el formulario
+de la landing ni la funcion `inscribir_alerta`.
+
+SI NO DEJA RUT, NO SE CREA CUENTA
+---------------------------------
+El panel es de una empresa, y la empresa se identifica por su RUT. Quien
+se inscribe solo con palabras recibe sus correos igual, pero no tiene
+panel. Eso esta bien y ademas empuja en la direccion correcta: con el RUT
+las alertas son muchisimo mejores, porque los terminos salen de lo que ya
+le vendio al Estado.
+
+NUNCA PUEDE TUMBAR EL ALTA
+--------------------------
+Todo va dentro de un `exception when others`. Si algo falla creando la
+cuenta, la inscripcion entra igual y queda una advertencia en el registro.
+Una persona que no puede inscribirse es mucho peor que una cuenta que hay
+que crear a mano despues.
+
+
+------------------------------------------------------------------------
+ PASO 1 · LAS COLUMNAS DE LA PRUEBA
+------------------------------------------------------------------------
+Supabase ▸ SQL Editor ▸ pegar ▸ Run. Todas llevan `if not exists`, asi
+que se puede correr las veces que haga falta.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+alter table cuentas add column if not exists hasta date;
+alter table cuentas add column if not exists extensiones smallint not null default 0;
+alter table cuentas add column if not exists telefono text;
+alter table cuentas add column if not exists motivo_no_paga text;
+alter table cuentas add column if not exists modulos_extra text[] not null default '{}';
+
+-- La cuenta de Uplevel ve todo y no vence nunca.
+update cuentas set plan = 'soporte', hasta = null
+ where nombre ilike '%uplevel%';
+
+-- Emergenza conserva sus dos modulos propios, que no son de ningun plan.
+update cuentas set modulos_extra = '{mercado_publico,cotizador}'
+ where rut like '%77082051%' or nombre ilike '%emergenza%';
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+Para ver como quedaron:
+
+  select nombre, rut, plan, hasta, extensiones, modulos_extra from cuentas;
+
+
+------------------------------------------------------------------------
+ PASO 2 · EL ALTA, DENTRO DEL DISPARADOR QUE YA EXISTE
+------------------------------------------------------------------------
+Reemplaza la funcion del disparador por esta, que hace lo mismo de antes
+mas la creacion de la cuenta. El `create trigger` NO hay que repetirlo:
+sigue apuntando a la misma funcion.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+create or replace function avisar_alta_de_suscriptor()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  id_cuenta uuid;
+  rut_limpio text;
+  rut_digitos text;
+begin
+  -- ------------------------------------------------------------------
+  -- 1. La cuenta y el usuario del panel.
+  --    Solo si dejo RUT: el panel es de una empresa, y la empresa se
+  --    identifica por su RUT. Sin el, recibe correos y nada mas.
+  -- ------------------------------------------------------------------
+  begin
+    rut_limpio := nullif(trim(coalesce(new.rut_empresa, '')), '');
+
+    if rut_limpio is not null then
+      -- Por los DIGITOS, no por el texto: «77.711.959-1» y «777119591» son
+      -- el mismo RUT y comparados como texto no calzan. Comparar literal
+      -- duplicaba la cuenta (paso el 29-08-2026).
+      rut_digitos := upper(regexp_replace(rut_limpio, '[^0-9kK]', '', 'g'));
+      select id into id_cuenta from cuentas
+       where upper(regexp_replace(coalesce(rut, ''), '[^0-9kK]', '', 'g'))
+             = rut_digitos
+       limit 1;
+
+      -- Si su empresa ya existe (otro comercial se inscribio antes), NO se
+      -- crea de nuevo ni se le reinicia la prueba: se cuelga de la que hay.
+      if id_cuenta is null then
+        insert into cuentas (rut, nombre, plan, activa, hasta, extensiones)
+        values (rut_limpio,
+                coalesce(nullif(trim(coalesce(new.empresa, '')), ''), new.email),
+                'piloto', true, current_date + 14, 0)
+        returning id into id_cuenta;
+      end if;
+
+      -- `admin` porque es el dueño de su empresa: puede sumar comerciales.
+      -- Se comprueba a mano en vez de `on conflict` para no depender de que
+      -- exista un indice unico en el correo.
+      if not exists (select 1 from usuarios where email = new.email) then
+        insert into usuarios (cuenta_id, email, nombre, rol, activo)
+        values (id_cuenta, new.email,
+                nullif(trim(coalesce(new.nombre, '')), ''), 'admin', true);
+      end if;
+    end if;
+  exception when others then
+    -- NUNCA tumbar el alta. Si esto falla, el suscriptor entra igual y la
+    -- cuenta se crea a mano despues.
+    raise warning 'No se pudo crear la cuenta del panel: %', sqlerrm;
+  end;
+
+  -- ------------------------------------------------------------------
+  -- 2. Avisar a GitHub para que salga el correo de bienvenida.
+  -- ------------------------------------------------------------------
+  if new.activo and new.bienvenida_enviada is null then
+    begin
+      perform public.disparar_workflow('bienvenida.yml',
+                                       '{"ensayo":"false"}'::jsonb);
+    exception when others then
+      raise warning 'No se pudo avisar del alta: %', sqlerrm;
+    end;
+  end if;
+
+  return new;
+end;
+$function$;
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+
+------------------------------------------------------------------------
+ PASO 3 · PROBARLO
+------------------------------------------------------------------------
+Inscribirse en  inteligencia.uplevelweb.art  con:
+  - un correo que NO este en la lista
+  - un RUT cualquiera valido que NO sea el de una cuenta existente
+
+Y despues:
+
+  select c.nombre, c.rut, c.plan, c.hasta, u.email, u.rol
+    from cuentas c join usuarios u on u.cuenta_id = c.id
+   order by c.hasta desc nulls last;
+
+Tiene que aparecer la cuenta nueva con plan `piloto` y `hasta` a 14 dias,
+y su usuario con rol `admin`.
+
+Si NO aparece, el motivo esta en el registro de Postgres:
+Supabase ▸ Logs ▸ Postgres, buscando «No se pudo crear la cuenta».
+Ese mensaje dice exactamente que columna falto.
+
+
+------------------------------------------------------------------------
+ SI HAY QUE DESHACERLO
+------------------------------------------------------------------------
+Volver a pegar la version corta del disparador, la de
+`disparador-instantaneo-para-copiar.txt`. Las columnas nuevas pueden
+quedarse: no molestan a nadie.
