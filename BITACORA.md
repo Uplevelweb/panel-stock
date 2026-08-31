@@ -1,3 +1,43 @@
+## 30-08-2026 · El calculo de las tres metas entra al sistema
+
+`modulo_metas.py`. Hasta hoy esto vivia en scripts del scratchpad; ahora esta en
+el repositorio y sigue la misma disciplina de memoria de `resumen_de_ordenes`
+—mes a mes, filtrar, soltar—, porque el techo de 1.000 MB de Streamlit ya tumbo
+la app una vez.
+
+**Lo que encontro la prueba, y era un error de verdad:** filtrar por catalogo
+antes de mirar la relacion comercial convertia en NUEVO a diez unidades que en
+realidad eran RECOMPRA. Le habia vendido un producto que despues se
+deshabilito, y esa venta desaparecia. Hay **59 unidades** con ventas fuera del
+catalogo vigente. Ahora la relacion se mide con TODAS sus ventas y lo que hay
+por ganar solo con el catalogo vivo: son dos preguntas distintas.
+
+Contra el script suelto: CRECER 71 y NUEVO 1058 calzan exactos; RECOMPRA da 112
+y no 110, tambien a proposito —aquel restaba de «por ganar» ventas de productos
+que ya no ofrece, lo que achicaba la cifra y tiraba dos unidades bajo el piso.
+
+**El hallazgo comercial del dia, y contradice lo que ella creia:** Macro Food se
+queda con el **36%** de su propia marca en el mercado publico; el otro 64% lo
+mueven noventa distribuidores. Colun captura el 39% de Colun. Carozzi y
+Coca-Cola ni aparecen entre los tres primeros de su propia marca: Sidapt les
+vende mas que ellos mismos. **La pelea casi nunca es contra la marca.**
+
+De ahi salio `que_tan_ganable()`: ordenar por plata manda al vendedor a pelear
+donde no puede ganar. De $99.784 MM en juego, **$33.357 MM estan en «SERVICIO»**
+—ya vende ahi y nadie lo tiene cerrado— y son 3.454 lineas en vez de 58.543.
+
+Decisiones de diseño tomadas hoy porque despues cuestan:
+
+- **El enfoque es un dato.** `mercado_de()` recibe IDs y no pregunta de donde
+  salen. La mirada de marca —que seria otro producto— usaria la misma cuenta.
+- **La regla de exactitud es estructural.** Con ID y sin ID no se suman nunca.
+  Convenio Marco: 5% de la plata, 100% de la precision. Las seis vias sirven
+  para saber a que puerta golpear; solo CM sirve para armar la oferta.
+
+17 comprobaciones en `probar_metas.py`, contra la bodega de produccion.
+
+---
+
 ## 30-08-2026 · Paso 1 del IPT: el plan se guarda y la historia no se pisa
 
 `plan_visitas` y `movimientos_plan` creadas y probadas en produccion.
