@@ -2234,10 +2234,14 @@ def main():
         html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas,
                             quedan=prueba.get(suscriptor.get("email")),
                             puertas=puertas)
+        # La palabra concuerda con el numero: con una sola decia
+        # «1 oportunidades», y se vio en un correo real (31-08-2026).
+        cuantas = "oportunidad" if len(elegidas) == 1 else "oportunidades"
         if args.bienvenidas:
-            asunto = f"Tu cuenta quedó lista · {len(elegidas)} oportunidades para partir"
+            asunto = (f"Tu cuenta quedó lista · {len(elegidas)} "
+                      f"{cuantas} para partir")
         else:
-            asunto = f"{len(elegidas)} oportunidades de hoy · Uplevel"
+            asunto = f"{len(elegidas)} {cuantas} de hoy · Uplevel"
 
         if args.guardar:
             Path(args.guardar).write_text(html, encoding="utf-8")
