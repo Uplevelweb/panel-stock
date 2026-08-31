@@ -874,38 +874,51 @@ app.button(key="mp_consultar").click().run()
 Las tablas se buscan **por sus columnas, no por su posición** (`app.dataframe[-1]` se rompió al
 cambiar el orden de las pestañas).
 
-## Los tres trabajos automáticos
+## Los cuatro trabajos automáticos
 
 | Archivo | Cuándo | Qué hace |
 |---|---|---|
 | `bodega.yml` | 02:00 Chile | llena la bodega de Mercado Público |
 | `licitaciones.yml` | 07:00 Chile | llena la bodega de licitaciones |
-| `bienvenidas.yml` | cada 15 min | manda el **primer** correo a quien se acaba de inscribir |
+| `alertas.yml` | 8, 13 y 18 Chile | el correo diario, disparado por el reloj de Supabase |
+| `bienvenida.yml` | cada 5 min + al inscribirse | el **primer** correo |
 
-**El correo DIARIO sigue sin trabajo automático.** Se corre a mano con
-`python alertador.py --enviar`. Es lo próximo que falta.
+⚠️ **ESTA CARPETA SE DESACTUALIZA Y ENGAÑA.** El 31-08-2026 la copia local
+tenía solo `bodega.yml` y `licitaciones.yml`, así que un diagnóstico concluyó
+que «ningún trabajo automático manda correos» —falso: `alertas.yml` y
+`bienvenida.yml` llevaban semanas en el repositorio— y se subieron dos
+workflows duplicados que habrían mandado cada correo dos veces. Se borraron
+antes de que corrieran, pero por poco.
 
-### Por qué `bienvenidas.yml` tiene un portero
+**Regla: antes de afirmar que algo no existe, preguntarle al repositorio.**
 
-La bodega pesa 121 MB. Bajarla 96 veces al día para descubrir que no hay nadie
-esperando es un desperdicio, así que el primer paso pregunta a Supabase con un
-`curl` —sin bajar nada— si alguien tiene `bienvenida_enviada IS NULL`. Si no,
-la corrida termina en segundos y los demás pasos ni se ejecutan.
+```bash
+gh api repos/uplevelweb/panel-stock/contents/.github/workflows --jq '.[].name'
+```
 
-### La trampa que el portero también tapa
+### Cuánto demora la bienvenida, y por qué importa el timeout
 
-Si `SUPABASE_URL` o `SUPABASE_SECRET_KEY` faltan, `alertador.py` cae a su
-respaldo local `bienvenidas_enviadas.json`, que **no está en el repositorio**.
-Sin ese archivo creería que nadie ha recibido nada y le mandaría la bienvenida
-**a todos otra vez**. Por eso el portero falla ruidosamente cuando los
-secretos no están, en vez de dejar pasar la corrida.
+El 31-08-2026 la ventana de compras ágiles pasó de **3 días corridos a 7
+HÁBILES** (pedido de Serling: hay ágiles con más vigencia y con 3 se perdían) y
+el techo de páginas de 40 a 120. Eso es mucho más que pedirle a la API, así que
+el `timeout-minutes` del trabajo de envío subió de **30 a 60**. Con 30 el
+trabajo moría a medias y la persona se quedaba sin su primer correo.
 
-Y `concurrency: bienvenidas` impide que dos corridas se pisen: la segunda
-leería la lista antes de que la primera alcance a marcar, y saldrían dos
-correos a la misma persona.
+**Si hay que acortarlo, la palanca es `techo_paginas`, no la ventana.**
+
+### Ahora se descartan las oportunidades ya cerradas
+
+`compras_agiles_abiertas` tira las que tienen `fecha_cierre` anterior a hoy.
+Antes no había filtro y la única protección era `estado=publicada` de la API
+—por eso el 29-08-2026 la ventana se había achicado a 3 días—. Con el filtro,
+la ventana puede ser ancha sin riesgo de mostrar algo cerrado. Las que vienen
+**sin** fecha de cierre no se descartan: ante la duda, se muestran.
 
 ### La promesa de la página
 
 `inteligencia.uplevelweb.art` dice **«tu primera alerta sale en unos minutos»**.
-Hasta el 31-08-2026 eso era mentira: no había nada que lo disparara. Si algún
-día se apaga `bienvenidas.yml`, hay que cambiar también ese texto.
+El reloj de Supabase estuvo mudo entre el 29-08 03:15 y el 31-08 21:18 —dos
+días y medio— y en ese hueco nadie recibió su bienvenida. Lo despertó el
+disparador del alta de una inscripción nueva. **Vale la pena una alarma que
+avise cuando el reloj lleva más de una hora sin latir**; hoy no existe y el
+silencio no se nota hasta que alguien reclama.
