@@ -1733,7 +1733,7 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
       </td></tr>""")
 
     return f"""
-  <tr><td style="padding:18px 24px 4px;">
+  <tr><td style="padding:16px 14px 4px;">
     <table width="100%" cellpadding="0" cellspacing="0"
            style="background:#f7f9fb;border-radius:8px;padding:16px 18px;">
       <tr><td style="padding-bottom:6px;">
@@ -1886,29 +1886,40 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:{FONDO};">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:24px 12px;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 6px;">
 <tr><td align="center">
 <table width="600" cellpadding="0" cellspacing="0" border="0"
        style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;
               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
 
-  <!-- La cabecera va BLANCA a proposito. El logo tiene fondo blanco: sobre el
-       azul marino dejaria un recuadro y se veria pegoteado. Asi el logo se
-       integra solo, y el color de marca lo pone la franja naranja de abajo. -->
+  <!-- LA CABECERA VA MARINA, Y EL LOGO SOBRE UNA PLACA BLANCA.
+       Antes iba blanca porque el logo tiene fondo blanco y sobre el marino
+       dejaba un recuadro pegoteado. El problema fue otro: **Gmail en Android
+       oscurece los fondos claros**, y el logo terminaba siendo un cuadrito
+       negro ilegible (foto de Serling, 30-08-2026).
+
+       Gmail NO toca los fondos que ya son oscuros. Asi que la cabecera marina
+       se ve igual en claro y en oscuro, y el logo va dentro de una placa
+       blanca con esquinas redondeadas: su fondo blanco se funde con la placa
+       —deja de verse pegoteado— y queda legible en los dos modos.
+
+       Referencia de Serling: legible como PIAM, pero sin su tamaño. -->
   <tr>
-    <td style="background:#ffffff;padding:20px 30px 14px;">
+    <td style="background:{MARINO};padding:16px 18px;">
       <table cellpadding="0" cellspacing="0" border="0"><tr>
-        <td><img src="{LOGO}" alt="Uplevel" width="46" height="46"
-                 style="display:block;"></td>
-        <td style="padding-left:12px;color:{MARINO};font-size:17px;font-weight:700;
-                   letter-spacing:.01em;">Uplevel Inteligencia</td>
+        <td style="background:#ffffff;border-radius:8px;padding:7px;
+                   line-height:0;">
+          <img src="{LOGO}" alt="Uplevel" width="34" height="34"
+               style="display:block;border:0;"></td>
+        <td style="padding-left:12px;color:#ffffff;font-size:18px;
+                   font-weight:700;letter-spacing:.01em;">Uplevel Inteligencia</td>
       </tr></table>
     </td>
   </tr>
   <tr><td style="height:3px;background:{NARANJO};font-size:0;line-height:0;">&nbsp;</td></tr>
 
   <tr>
-    <td style="padding:26px 30px 6px;">
+    <td style="padding:22px 18px 6px;">
       <div style="color:{TEXTO};font-size:20px;font-weight:700;margin-bottom:4px;">
         {titulo}
       </div>
@@ -1922,7 +1933,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 {bloque_puertas}
 {tarjetas}
   <tr>
-    <td style="padding:22px 30px 26px;border-top:1px solid {BORDE};">
+    <td style="padding:20px 18px 24px;border-top:1px solid {BORDE};">
       <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
         Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
         actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
