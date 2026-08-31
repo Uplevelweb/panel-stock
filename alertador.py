@@ -1580,8 +1580,176 @@ def tarjeta(op: dict) -> str:
   </tr>"""
 
 
+# ==========================================================================
+#  LAS TRES PUERTAS DEL MES
+#  Diseño de Serling (30-08-2026): la meta son tres clientes al mes, uno de
+#  cada tipo. No es un CRM y no hay nada que llenar: el resultado se mide
+#  solo, porque el mes siguiente la bodega dice si esa unidad compro o no.
+# ==========================================================================
+
+ETIQUETA_PUERTA = {
+    "CRECER":   ("Crecer",   "Ya te compra, pero no todo"),
+    "RECOMPRA": ("Recompra", "Te compro y se enfrio"),
+    "NUEVO":    ("Nuevo",    "Compra lo tuyo y nunca te ha comprado"),
+}
+
+
+def direcciones_guardadas(unidades: set[str]) -> dict[str, str]:
+    """Donde queda cada unidad, de lo que se fue juntando en `fichas_licitacion`.
+
+    Muchas instituciones con varias unidades de compra no publican la direccion
+    de cada una, y sin eso no hay ruta posible. Se junta sola desde el detalle
+    de licitacion que este mismo correo ya pide cada mañana.
+
+    Falla abierto: sin direccion, la puerta igual sale con su comuna.
+    """
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave and unidades):
+        return {}
+    salida: dict[str, str] = {}
+    lista = list(unidades)
+    for i in range(0, len(lista), 100):
+        trozo = ",".join('"%s"' % str(c).replace('"', "") for c in lista[i:i + 100])
+        consulta = (f"{url}/rest/v1/fichas_licitacion?select=unidad,direccion"
+                    f"&unidad=in.({urllib.parse.quote(trozo)})"
+                    f"&direccion=neq.&order=guardada.desc")
+        peticion = urllib.request.Request(consulta, headers={
+            "apikey": clave, "Authorization": f"Bearer {clave}",
+            "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+                for fila in json.loads(respuesta.read().decode("utf-8")):
+                    # La primera que llega es la mas nueva.
+                    salida.setdefault(str(fila.get("unidad")),
+                                      str(fila.get("direccion") or ""))
+        except Exception as error:
+            print(f"   no se pudieron leer las direcciones: {type(error).__name__}")
+            return {}
+    return salida
+
+
+def tres_puertas(suscriptor: dict) -> list[dict]:
+    """Una puerta de cada tipo: la mejor CRECER, la mejor RECOMPRA, la mejor NUEVO.
+
+    Falla abierto en todo: si no hay RUT, si no hay bodega o si algo revienta,
+    devuelve una lista vacia y el correo sale igual que siempre.
+
+    OJO AL CRECER: se lee la bodega dos veces por suscriptor. Con dos esta bien;
+    pasando de diez clientes hay que juntar el calculo en una sola pasada para
+    todos.
+    """
+    try:
+        import modulo_metas
+    except Exception:
+        return []
+
+    rut = solo_digitos_rut(suscriptor.get("rut_proveedor") or "")
+    if not rut:
+        return []
+    try:
+        ids = modulo_metas.ids_vendidos(rut)
+        if not ids:
+            return []
+        mercado = modulo_metas.mercado_de(ids, rut_propio=rut)
+        metas = modulo_metas.tres_metas(mercado, rut)
+        if metas.empty:
+            return []
+        ganable = modulo_metas.que_tan_ganable(mercado, rut)
+        nombres = modulo_metas.nombres_de_unidades()
+    except Exception as error:
+        print(f"   no se pudieron calcular las puertas: {type(error).__name__}")
+        return []
+
+    # Cuanta de la plata de cada unidad es peleable POR SERVICIO. Contra la
+    # marca en su propio producto no se gana por precio; se gana donde ya
+    # tienes la puerta abierta.
+    servicio = {}
+    if not ganable.empty:
+        s = ganable[ganable["ganable"] == "SERVICIO"].groupby("unidad")["total_par"].sum()
+        servicio = s.to_dict()
+
+    elegidas = []
+    for tipo in ("CRECER", "RECOMPRA", "NUEVO"):
+        sub = metas[metas["tipo"] == tipo]
+        if sub.empty:
+            continue
+        f = sub.iloc[0]
+        elegidas.append({
+            "tipo": tipo,
+            "unidad": str(f["unidad"]),
+            "por_ganar": float(f["por_ganar"]),
+            "le_vendo": float(f["le_vendo"]),
+            "proveedores": int(f["proveedores"]),
+            "por_servicio": float(servicio.get(f["unidad"], 0.0)),
+        })
+
+    direcciones = direcciones_guardadas({p["unidad"] for p in elegidas})
+    for p in elegidas:
+        fila = None
+        if not nombres.empty and p["unidad"] in nombres.index:
+            fila = nombres.loc[p["unidad"]]
+        p["nombre"] = str(fila["nombre_organismo"]) if fila is not None else ""
+        p["unidad_nombre"] = str(fila["nombre_unidad"]) if fila is not None else ""
+        p["comuna"] = str(fila["comuna"]) if fila is not None else ""
+        p["direccion"] = direcciones.get(p["unidad"], "")
+    return elegidas
+
+
+def bloque_de_puertas(puertas: list[dict]) -> str:
+    """Las tres puertas, en el correo. Sin nada que llenar ni donde apretar."""
+    if not puertas:
+        return ""
+
+    tarjetas = []
+    for p in puertas:
+        titulo, explicacion = ETIQUETA_PUERTA[p["tipo"]]
+        donde = " · ".join(x for x in (p.get("unidad_nombre") or p.get("nombre"),
+                                       p.get("comuna")) if x)
+        direccion = (f'<div style="color:#5b6b7c;font-size:13px;margin-top:2px;">'
+                     f'{p["direccion"]}</div>') if p.get("direccion") else ""
+        # Solo se muestra si de verdad hay algo peleable por servicio.
+        servicio = ""
+        if p["por_servicio"] > 0:
+            servicio = (f'<div style="color:#1d7a5f;font-size:13px;margin-top:6px;">'
+                        f'{plata(p["por_servicio"])} peleables por servicio, '
+                        f'donde ya entras</div>')
+        ya = ""
+        if p["le_vendo"] > 0:
+            ya = (f'<div style="color:#5b6b7c;font-size:13px;">'
+                  f'Ya le vendes {plata(p["le_vendo"])}</div>')
+        tarjetas.append(f"""
+      <tr><td style="padding:10px 0;border-bottom:1px solid #e6ebf0;">
+        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+                    color:#e2650f;font-weight:700;">{titulo}</div>
+        <div style="font-size:12px;color:#8899a8;margin-bottom:4px;">{explicacion}</div>
+        <div style="font-weight:600;color:#12293f;">{p["nombre"] or p["unidad"]}</div>
+        <div style="color:#5b6b7c;font-size:13px;">{donde}</div>
+        {direccion}
+        <div style="margin-top:6px;color:#12293f;">
+          <strong>{plata(p["por_ganar"])}</strong> por ganar ·
+          {p["proveedores"]} proveedores se lo reparten</div>
+        {ya}{servicio}
+      </td></tr>""")
+
+    return f"""
+  <tr><td style="padding:18px 24px 4px;">
+    <table width="100%" cellpadding="0" cellspacing="0"
+           style="background:#f7f9fb;border-radius:8px;padding:16px 18px;">
+      <tr><td style="padding-bottom:6px;">
+        <div style="font-size:16px;font-weight:700;color:#12293f;">Tus 3 del mes</div>
+        <div style="color:#5b6b7c;font-size:13px;">
+          Una puerta de cada tipo. No hay que anotar nada: el proximo mes la
+          bodega dice sola si te compraron.</div>
+      </td></tr>
+      {''.join(tarjetas)}
+    </table>
+  </td></tr>"""
+
+
 def armar_correo(suscriptor: dict, oportunidades: list[dict],
-                 bienvenida: bool = False, quedan: int | None = None) -> str:
+                 bienvenida: bool = False, quedan: int | None = None,
+                 puertas: list[dict] | None = None) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
     n = len(oportunidades)
     saludo = f"Hola {suscriptor['nombre'].split()[0]}, " if suscriptor.get("nombre") else ""
@@ -1674,6 +1842,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     #
     # Aparece a falta de 3 dias, no antes: una cuenta atras de tres semanas se
     # convierte en ruido y se deja de leer justo cuando importa.
+    bloque_puertas = bloque_de_puertas(puertas or [])
     bloque_prueba = ""
     if not bienvenida and quedan is not None and quedan <= 3:
         if quedan >= 1:
@@ -1750,6 +1919,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   </tr>
 {bloque_panel}
 {bloque_prueba}
+{bloque_puertas}
 {tarjetas}
   <tr>
     <td style="padding:22px 30px 26px;border-top:1px solid {BORDE};">
@@ -2041,8 +2211,18 @@ def main():
             continue
         print(f"   {len(elegidas)} oportunidades · mejor nota {elegidas[0]['nota']} ({elegidas[0]['clase']})")
 
+        # Las tres puertas del mes. Falla abierto: si no se pueden calcular,
+        # el correo sale igual, solo que sin ese bloque.
+        marca_puertas = time.perf_counter()
+        puertas = tres_puertas(suscriptor)
+        if puertas:
+            print("   3 del mes: " + " · ".join(
+                f"{p['tipo']} {p.get('nombre') or p['unidad']}" for p in puertas))
+        print("[tiempo] puertas del mes: %.0f s" % (time.perf_counter() - marca_puertas))
+
         html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas,
-                            quedan=prueba.get(suscriptor.get("email")))
+                            quedan=prueba.get(suscriptor.get("email")),
+                            puertas=puertas)
         if args.bienvenidas:
             asunto = f"Tu cuenta quedó lista · {len(elegidas)} oportunidades para partir"
         else:
