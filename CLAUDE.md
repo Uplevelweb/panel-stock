@@ -399,6 +399,14 @@ Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
   - **Comprobar el largo contra el archivo antes de apretar Run**, y después
     comprobar el resultado **con un `select` contra la base**, no mirando la
     pantalla.
+  - ⚠️ **Ninguna consulta puede llevar la palabra DROP, ni en un comentario.**
+    El editor abre un diálogo de confirmación a mano y el SQL queda colgado sin
+    ningún error visible: parece que corrió y no corrió. Se usa `create or
+    replace trigger` en vez de borrar y volver a crear. Pasó el 30-08-2026.
+  - **La grilla de resultados no aparece en `innerText`.** Se lee del contenedor
+    (`[role="grid"]`), o con una captura de pantalla.
+  - **Probar contra producción sin ensuciarla:** `begin; ... rollback;` en la
+    misma consulta. Deja ver el resultado y no guarda nada.
 - **Los clics por coordenada se desvían** en Supabase y Auth0: el marco de la
   captura no calza con el de la página y terminan en el botón de al lado. En
   Supabase abrieron dos veces el panel «Connect» sin querer. Ahí conviene parar:
@@ -559,6 +567,33 @@ La urgencia **se calcula y depende del tipo**: una compra ágil que cierra en 20
 horas es normal —se contesta con un precio—, una licitación que cierra en 20
 horas ya no se alcanza a preparar. Avisar «cierra pronto» sin distinguirlas es
 mandar a alguien a perder la tarde.
+
+### El plan de visitas: el paso 1 del IPT operativo (30-08-2026)
+
+Dos tablas nuevas, `plan_visitas` y `movimientos_plan`, con el SQL en
+`supabase-plan-visitas-para-copiar.txt`. **Ya están creadas y probadas en
+producción.** Dos decisiones que después no se cambian sin migrar:
+
+- **La llave es el RUT de la empresa y el vendedor es una columna.** Cada
+  vendedor arma y mueve su propio plan con sus instituciones, pero el plan es de
+  la gestión de la empresa: la jefa lo ve entero. Mismo patrón que el embudo.
+- **Nunca se pisa, siempre se agrega una línea.** Lo escribe un DISPARADOR
+  (`al_mover_el_plan`), no la aplicación, para que ningún camino pueda cambiar el
+  plan sin dejar rastro. Probado: un alta más cuatro cambios dejan cinco líneas.
+
+**Por qué hizo falta:** `seguimiento` tiene `unique (rut, codigo)` y `visitas`
+tiene `primary key (rut, email)`. **Las dos guardan solo el presente**: cuando
+algo cambia, lo anterior desaparece. Por eso hoy no se puede comparar cómo venía
+el trabajo hace tres meses — la historia nunca se guardó. Y `visitas` además no
+es por institución, así que para el IPT no sirve.
+
+**Excluir no es borrar.** `incluida` es una casilla que se prende y se apaga; la
+institución se puede devolver al plan y el movimiento queda anotado.
+
+⚠️ **`current_date` de la base NO es hoy en Chile.** Medido el 30-08-2026 a las
+21:00 de Chile: la base decía 2026-08-31. Para agendar visitas hay que sacar la
+fecha de la hora de Chile, no de la base. Es la misma trampa del servidor de
+Streamlit en UTC, en otro lugar.
 
 ### Quién entra y qué ve (27-08-2026)
 
