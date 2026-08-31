@@ -1,3 +1,29 @@
+## 30-08-2026 · «Tus 3 del mes» sale en el correo
+
+El bloque esta escrito y conectado a la corrida de las 08:00. Una puerta de cada
+tipo, con direccion, cuantos proveedores se la reparten y cuanto es peleable por
+servicio. 19 comprobaciones en `probar_puertas.py`.
+
+**El workflow decidio el diseño.** `alertas.yml` instala solo `pandas` y
+`pyarrow`: sin `openpyxl` ni `streamlit` no hay forma de leer el catalogo del
+Drive desde GitHub Actions. En vez de engordar el workflow se partio la
+pregunta en dos, y quedo mejor de lo que estaba:
+
+    EL CORREO manda a golpear PUERTAS, con lo que ya vendio. Una puerta no se
+              echa a perder porque un producto se deshabilite.
+    EL PANEL  arma la OFERTA producto a producto, con el catalogo vigente,
+              que es donde deshabilitar un producto si importa.
+
+Falla abierto en todo: sin RUT, sin bodega o si algo revienta, el correo sale
+igual que siempre.
+
+⚠️ **Deuda anotada:** se lee la bodega dos veces por suscriptor. Con dos esta
+bien; pasando de diez clientes hay que juntar el calculo en una sola pasada.
+La corrida imprime `[tiempo] puertas del mes` para verlo venir antes de que
+moleste.
+
+---
+
 ## 30-08-2026 · El calculo de las tres metas entra al sistema
 
 `modulo_metas.py`. Hasta hoy esto vivia en scripts del scratchpad; ahora esta en
