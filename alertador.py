@@ -1163,6 +1163,11 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
             "descripcion": str(d.get("Descripcion") or ""),
             "visita": visita[:16].replace("T", " ") if visita else "",
             "direccion_visita": str(d.get("DireccionVisita") or "").strip(),
+            # LA DIRECCION DE LA UNIDAD COMPRADORA.
+            # No se usa en el correo: se guarda para el itinerario de visitas.
+            # Muchas instituciones con varias unidades no publican donde queda
+            # cada una, y esta viene gratis dentro del detalle que ya pedimos.
+            "direccion": str(comprador.get("DireccionUnidad") or "").strip(),
             # CodigoUnidad y el prefijo del codigo son lo mismo; se prefiere el
             # que viene declarado y se cae al prefijo si no vino.
             "unidad": str(comprador.get("CodigoUnidad") or unidad_del_codigo(codigo)),
@@ -1195,6 +1200,7 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
             "descripcion": str(ficha.get("descripcion") or ""),
             "visita": str(ficha.get("visita") or ""),
             "direccion_visita": str(ficha.get("direccion_visita") or ""),
+            "direccion": str(ficha.get("direccion") or ""),
             "mencion_visita": menciona_visita(nombre_lic, ficha.get("descripcion")),
             "cierre": str(_campo(fila, "FechaCierre", "fechaCierre") or
                           ficha.get("cierre") or "")[:10],
