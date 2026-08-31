@@ -92,6 +92,7 @@ no.
 | `alertas-workflow-para-copiar.txt` | El workflow de las 08:00 |
 | `bienvenida-workflow-para-copiar.txt` | El SQL de la columna + el workflow del primer correo |
 | `disparador-instantaneo-para-copiar.txt` | El trigger que avisa a GitHub en el momento del alta |
+| `modulo_metas.py` | Las tres puertas del mes: NUEVO, RECOMPRA y CRECER, y qué tan ganable es cada una |
 | `modulo_planes.py` | **Qué abre cada plan.** Una sola fuente de verdad; no hacer otra lista |
 | `alta-automatica-para-copiar.txt` | El SQL que crea la cuenta y el usuario al inscribirse |
 | `supabase-alertas-para-copiar.txt` | El SQL de las columnas nuevas |
@@ -567,6 +568,58 @@ La urgencia **se calcula y depende del tipo**: una compra ágil que cierra en 20
 horas es normal —se contesta con un precio—, una licitación que cierra en 20
 horas ya no se alcanza a preparar. Avisar «cierra pronto» sin distinguirlas es
 mandar a alguien a perder la tarde.
+
+### Las tres metas del mes (`modulo_metas.py`, 30-08-2026)
+
+**NUEVO** nunca te ha comprado · **RECOMPRA** te compró y se enfrió · **CRECER**
+te compra hoy pero no todo. Diseño de Serling: la meta son **tres clientes al
+mes, uno de cada tipo**, porque juegan en tiempos distintos —CRECER paga este
+mes y se acaba en 71 puertas, NUEVO paga el año que viene.
+
+**No es un CRM y no se va a convertir en uno.** El resultado se mide solo: si
+visitaste una unidad en septiembre, la bodega dice en octubre si te compró. Un
+embudo de seis etapas es el vendedor contando cómo cree que le va, y además es
+lo que nadie llena.
+
+⚠️ **LA REGLA DE EXACTITUD.** Los números con ID de producto y los sin ID **no
+se suman jamás**. Medido sobre 24 meses: Convenio Marco trae el ID en el 100% de
+sus líneas; licitación 0%, trato directo 0%, compra ágil 1%. Convenio Marco es
+el **5% de la plata** del mercado público y el **100% de su precisión**. De ahí
+las dos miradas, en columnas distintas:
+
+- **A qué puerta golpear** → las seis vías (`alertador.resumen_de_ordenes`).
+- **Qué ofrecerle** → solo Convenio Marco, producto a producto (`modulo_metas`).
+
+**El catálogo manda, no lo vendido.** Se baja del Drive con
+`app.cargar_catalogo_propio`, así que un producto deshabilitado desaparece solo.
+De los 22.628 productos del catálogo de Emergenza solo se han vendido 2.067:
+calcular con lo vendido dejaba fuera el 91% de lo que puede ofrecer. Pero el
+catálogo dice lo que PUEDE vender y no lo que SABE vender —salieron «viviendas
+de emergencia con instalación» por $1.790 MM—, por eso cada línea de la oferta
+lleva `probado`.
+
+⚠️ **La relación se mide con TODAS sus ventas; lo que hay por ganar, solo con el
+catálogo.** Si le vendió algo que después se deshabilitó, esa unidad ya lo
+conoce y **no es NUEVO**. Sin esa distinción salían diez unidades mal
+clasificadas; hay 59 con ventas fuera del catálogo vigente. Por eso
+`mercado_de()` recibe `rut_propio` y marca cada fila con `en_catalogo`.
+
+**Ordena lo GANABLE, no la plata.** Idea de Serling: contra la marca en su
+propio producto no se gana por precio, se gana por servicio. `que_tan_ganable()`
+mira cuánto domina el líder y en cuántas unidades del país vende ese mismo
+producto —vender lo mismo en 800 unidades es la marca; en tres, un distribuidor
+al que sí se le pelea—. De $99.784 MM en juego, **$33.357 MM están en
+«SERVICIO»**: unidades donde ya vende y nadie lo tiene cerrado.
+
+Dato que destapó ese cálculo: **Macro Food se queda con el 36% de su propia
+marca** en el mercado público; el otro 64% lo mueven noventa distribuidores.
+Colun captura el 39% de Colun. **La pelea casi nunca es contra la marca.**
+
+**El enfoque es un dato, no un supuesto.** `mercado_de()` recibe un conjunto de
+IDs y no pregunta de dónde salen: para un proveedor son los de su catálogo, para
+una marca serían los productos de esa marca. La cuenta es la misma. Se decidió
+así el 30-08 para no tener que rehacerlo si algún día se vende la mirada de
+marca, que es otro producto y no está construido.
 
 ### El plan de visitas: el paso 1 del IPT operativo (30-08-2026)
 
