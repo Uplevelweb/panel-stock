@@ -1,0 +1,78 @@
+========================================================================
+ LAS FICHAS DE LICITACION GUARDADAS
+ Para que el correo no vuelva a preguntar cada manana lo mismo
+========================================================================
+
+POR QUE
+-------
+El 96% del tiempo del correo se va pidiendole detalles a Mercado Publico,
+de a uno, con 2 segundos obligatorios de espera entre cada uno.
+
+Pero una licitacion sigue abierta una o dos semanas, y su ficha —quien
+compra, de que region, la descripcion, la visita a terreno— no cambia en
+todo ese tiempo. Se estaba pagando el mismo peaje cada manana por el
+mismo dato.
+
+Con esta tabla se pide una vez y se guarda 30 dias.
+
+Lo que SI cambia de un dia para otro —que la licitacion siga abierta y
+su fecha de cierre— NO sale de aca: sale del listado de activas, que se
+sigue pidiendo entero todas las mananas. Por eso una ficha guardada no
+puede quedar vieja sin que nadie se de cuenta.
+
+Si esta tabla no existe o Supabase no contesta, el correo sale igual:
+pide todas las fichas como antes. Falla abierto.
+
+
+PASO 1 · CREAR LA TABLA
+------------------------
+Supabase ▸ SQL Editor ▸ New query. Pegar esto y apretar RUN.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+create table if not exists fichas_licitacion (
+  codigo            text primary key,
+  descripcion       text,
+  visita            text,
+  direccion_visita  text,
+  unidad            text,
+  nombre_unidad     text,
+  organismo         text,
+  region            text,
+  comuna            text,
+  cierre            text,
+  guardada          timestamptz not null default now()
+);
+
+-- Se busca siempre por codigo y por cuan vieja es la ficha.
+create index if not exists fichas_licitacion_guardada
+  on fichas_licitacion (guardada);
+
+-- Nadie entra a esta tabla desde el navegador: solo la escribe el correo
+-- diario, con la clave secreta. Se deja cerrada igual que las demas.
+alter table fichas_licitacion enable row level security;
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+
+PASO 2 · COMPROBAR QUE QUEDO
+-----------------------------
+La primera manana despues de pegarlo, el registro de la corrida tiene que
+decir «0 ya estaban guardadas de otro dia» (todavia no hay nada).
+
+La SEGUNDA manana tiene que decir un numero grande. Ahi funciono.
+
+Para verlo a mano:
+
+  select count(*) as fichas,
+         min(guardada) as la_mas_vieja,
+         max(guardada) as la_mas_nueva
+    from fichas_licitacion;
+
+
+LIMPIEZA (opcional, cuando la tabla lleve meses)
+-------------------------------------------------
+Las fichas de mas de 30 dias ya no se leen, pero se quedan ocupando lugar.
+Para borrarlas:
+
+  delete from fichas_licitacion where guardada < now() - interval '60 days';
