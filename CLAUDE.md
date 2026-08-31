@@ -399,8 +399,16 @@ falla, esas oportunidades tienen que poder salir mañana.
 
 Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
 
-- **SÍ funciona:** apretar botones, marcar casillas, elegir de listas desplegables.
-  El formulario del token de GitHub se llenó entero así.
+- **SÍ funciona:** apretar botones, marcar casillas, elegir de listas desplegables
+  **en GitHub y en Supabase**. El formulario del token de GitHub se llenó entero así.
+- ⚠️ **EN AUTH0 NO FUNCIONA NADA, ni siquiera los clics** (comprobado el 31-08-2026
+  en Email Provider): el interruptor «Use my own email provider» y el radio de
+  Resend no se marcan ni con `.click()`, ni con `MouseEvent` sintético, ni sobre
+  su `<label>`. El texto tampoco: en Email Templates el asunto queda escrito en
+  pantalla pero **el botón Save no se habilita**, o sea que React nunca se entera.
+  **La única excepción es el editor del cuerpo del correo**, que es CodeMirror y
+  expone `nodo.CodeMirror.setValue()` — por ahí sí se pudo cargar la plantilla.
+  **Regla: en Auth0, todo lo hace ella.**
 - **NO funciona: escribir en campos de texto.** Ni tecleando por coordenada ni
   fijando el valor por elemento (`form_input` devuelve `Set text value to ""`).
   Falló en el nombre del token de GitHub y en los campos de Tenant Settings de
