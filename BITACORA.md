@@ -1,3 +1,51 @@
+## 30-08-2026 · Las fichas de licitación se guardan, y la prueba baja a 14 días
+
+**Convenio Marco resultó ser el 7% del mercado.** Medido sobre tres meses de la
+bodega de producción: $2,3 billones en total, de los cuales Convenio Marco son
+$168 mil millones. Y de los 36.623 proveedores que le venden al Estado, solo 861
+están en Convenio Marco. El panel nació mirando el 2,4% del mercado porque ese es
+el mundo de Emergenza.
+
+El `CLAUDE.md` decía que la bodega guardaba solo Convenio Marco. **Era falso desde
+el 27-08** y esa nota vieja me hizo dar un diagnóstico equivocado el 30-08: dije
+que había que ampliar la bodega cuando ya estaba ampliada. Se corrigió, junto con
+el tamaño (decía 1,29 millones de líneas; son 8,26 millones). **Moraleja: un dato
+en la documentación que nadie vuelve a medir se convierte en mentira sola.**
+
+**Las fichas de licitación ahora se guardan 30 días** (`fichas_licitacion`). El
+96% del tiempo del correo se iba pidiendo detalles de a uno con los 2 segundos
+obligatorios de espera, y una licitación sigue abierta una o dos semanas: se
+estaba pagando el mismo peaje cada mañana por el mismo dato.
+
+- Lo que cambia día a día —que siga abierta y su fecha de cierre— **no sale de la
+  ficha**: sale del listado de activas, que se sigue pidiendo entero. Por eso una
+  ficha guardada no envejece mal.
+- **El techo de 400 ahora cuenta solo las que hay que pedir.** Una ficha guardada
+  no gasta ticket ni espera; con la caché llena el correo mira más licitaciones
+  que antes, no menos.
+- Falla abierto: sin tabla, se piden todas como siempre.
+- 15 comprobaciones en `probar_fichas.py`, incluida la que importa: que una fecha
+  de cierre vieja guardada en la ficha **no pise** la del listado de hoy.
+
+**La prueba pasa de 20 a 14 días**, manteniendo las dos extensiones. 40 días de
+prueba le dicen al cliente que el producto no es urgente, y la urgencia es el
+argumento central del producto. Las extensiones se mantienen: hoy no hay ni un
+dato de por qué alguien no paga, y ese mecanismo es el único instrumento para
+averiguarlo. No es un descuento, es una entrevista.
+
+**El archivo del alta tenía todavía el bug del RUT.** El arreglo del 29-08 se
+pegó directo en Supabase y `alta-automatica-para-copiar.txt` se quedó comparando
+el RUT como texto. Quien lo hubiera vuelto a pegar reintroducía la duplicación de
+cuentas. Corregido: el archivo en disco ahora dice lo mismo que la base.
+
+**De lo que sugirió una IA externa revisando el sistema, dos de sus tres cambios
+ya estaban construidos:** quitar el filtro de Convenio Marco (hecho el 27-08) y
+cachear los detalles entre clientes (existe desde siempre — `main()` arma la
+unión de las bolsas de todos los suscriptores y pide los detalles una sola vez).
+Lo que sí faltaba era la caché **entre días**, que es lo que se hizo hoy.
+
+---
+
 # Bitácora — Panel Oportunidades
 
 Decisiones tomadas, con fecha y motivo. Lo que **no** está aquí es historia del código: eso
