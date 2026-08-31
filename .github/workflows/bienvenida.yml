@@ -88,7 +88,12 @@ jobs:
     needs: mirar
     if: needs.mirar.outputs.hay == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Subido de 30 a 60 el 31-08-2026. La ventana de compras agiles paso de 3
+    # dias corridos a 7 HABILES y el techo de paginas de 40 a 120: hay mucho
+    # mas que pedirle a la API. Con 30 el trabajo moria a medias y la persona
+    # se quedaba sin su primer correo, que es justo lo que se queria evitar.
+    # El guardia de `concurrency` sigue impidiendo que dos se encimen.
+    timeout-minutes: 60
 
     steps:
       - name: Bajar el repositorio
