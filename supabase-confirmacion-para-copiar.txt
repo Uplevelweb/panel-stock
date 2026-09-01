@@ -1,0 +1,323 @@
+========================================================================
+ LA CONFIRMACION POR CORREO  (doble opt-in)
+ Nadie recibe su resumen hasta que confirma que ese correo es suyo.
+========================================================================
+
+QUE CAMBIA
+----------
+Hoy: se inscribe  ->  le llega el resumen.
+Con esto:          se inscribe  ->  le llega UN correo con un boton
+                   ->  hace clic  ->  recien ahi le llega el resumen.
+
+POR QUE, y no es solo cortesia:
+  1. Si alguien escribe mal su correo, ese correo rebota. Los rebotes los
+     castiga Resend en el REMITENTE, no en quien se equivoco: unos pocos
+     y los correos de TODOS empiezan a caer en spam. Confirmando primero,
+     solo se le escribe a direcciones que existen.
+  2. Es la prueba del consentimiento. `origen_consentimiento` decia de
+     donde venia; ahora `confirmado_en` dice que la persona lo confirmo.
+  3. Lo pidio Serling el 31-08-2026: «una vez al confirmar, yo hago un
+     correo confiable que le puede enviar la informacion».
+
+LO QUE NO CAMBIA: la clave del panel sigue siendo un paso aparte y
+POSTERIOR. Nadie necesita contraseña para recibir su resumen.
+
+
+------------------------------------------------------------------------
+ ANTES DE PEGAR: LA LLAVE DE RESEND EN EL BAUL
+------------------------------------------------------------------------
+El correo de confirmacion lo manda la base de datos directamente, para
+que salga en el mismo segundo. Necesita la llave de Resend guardada en el
+baul, igual que la de GitHub.
+
+⚠️ ESTA LLAVE LA PEGA SERLING, NO CLAUDE. Es la misma que ya esta en los
+secretos de GitHub (`RESEND_API_KEY`), empieza con `re_`.
+
+New query, reemplazar el marcador, Run:
+
+  delete from vault.secrets where name = 'resend_api_key';
+
+  select vault.create_secret(
+    'PEGAR_AQUI_LA_LLAVE_DE_RESEND',
+    'resend_api_key',
+    'Para mandar el correo de confirmacion desde la base'
+  );
+
+Comprobar que quedo (tiene que decir un largo de ~36, no 30):
+
+  select length(decrypted_secret) from vault.decrypted_secrets
+   where name = 'resend_api_key';
+
+
+------------------------------------------------------------------------
+ PEGAR ESTO EN SUPABASE ▸ SQL EDITOR ▸ RUN
+------------------------------------------------------------------------
+Es un solo bloque. Se puede volver a pegar las veces que haga falta.
+
+⚠️ No lleva la palabra DROP a proposito: el editor de Supabase abre un
+dialogo de confirmacion cuando la ve y el SQL se queda colgado sin dar
+ningun error. Por eso los disparadores van con `create or replace`.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+-- 1 · LAS DOS COLUMNAS
+--     `confirmado_en` vacio = todavia no confirma = no recibe nada.
+--     El token es un uuid, imposible de adivinar, y nunca sale de la
+--     base: `suscriptores` no es legible con la clave publica.
+alter table public.suscriptores
+  add column if not exists confirmado_en timestamptz,
+  add column if not exists token_confirmacion uuid not null default gen_random_uuid();
+
+
+-- 2 · ⚠️ LOS QUE YA ESTABAN QUEDAN CONFIRMADOS
+--     Sin esto, todos los suscriptores actuales dejarian de recibir de
+--     golpe, esperando una confirmacion que nadie les pidio. Es la misma
+--     trampa que hubo al crear `bienvenida_enviada`.
+update public.suscriptores
+   set confirmado_en = now()
+ where confirmado_en is null;
+
+
+-- 3 · EL CORREO DE CONFIRMACION, mandado por la base con pg_net
+create or replace function public.enviar_confirmacion(p_email text)
+returns bigint
+language plpgsql
+security definer
+-- Los tres esquemas van a proposito: segun como se haya instalado pg_net,
+-- `http_post` vive en `net` o en `extensions`.
+set search_path = public, net, extensions, vault
+as $function$
+declare
+  llave  text;
+  fila   public.suscriptores%rowtype;
+  enlace text;
+  cuerpo text;
+begin
+  select * into fila from public.suscriptores
+   where email = lower(trim(p_email));
+  if not found then
+    raise exception 'no existe ese correo';
+  end if;
+
+  -- A quien ya confirmo no se le insiste nunca mas.
+  if fila.confirmado_en is not null then
+    return null;
+  end if;
+
+  select decrypted_secret into llave
+    from vault.decrypted_secrets where name = 'resend_api_key';
+  if llave is null then
+    raise exception 'No esta guardada la llave resend_api_key en el baul';
+  end if;
+
+  enlace := 'https://inteligencia.uplevelweb.art/confirmar/?t='
+            || fila.token_confirmacion::text;
+
+  -- Un correo corto y con UNA sola cosa que hacer. Todo en linea y en
+  -- tablas: los clientes de correo borran las hojas de estilo. El boton
+  -- es capsula (999px) y el marco 12px, la regla de formas de Uplevel.
+  cuerpo := format($html$
+<table width="100%%" cellpadding="0" cellspacing="0" border="0"
+       style="background:#f4f6fa;padding:26px 14px;">
+ <tr><td align="center">
+  <table width="600" cellpadding="0" cellspacing="0" border="0"
+         style="max-width:600px;background:#ffffff;border-radius:12px;">
+   <tr><td style="background:#ffffff;border-radius:12px 12px 0 0;padding:18px 22px 0;">
+     <div style="color:#0c2c57;font-size:18px;font-weight:700;font-family:
+                 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+       Uplevel Inteligencia</div>
+   </td></tr>
+   <tr><td style="height:3px;background:#f18c3f;font-size:0;line-height:0;">&nbsp;</td></tr>
+   <tr><td style="padding:24px 22px 26px;font-family:-apple-system,
+                  BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                  color:#1a2b3d;font-size:16.5px;line-height:1.55;">
+     <div style="font-size:20px;font-weight:700;color:#0c2c57;">
+       Un clic y empezamos</div>
+     <div style="padding-top:12px;">
+       Confirma que este correo es tuyo y te mando de inmediato las
+       licitaciones y compras &aacute;giles que calzan con lo que vendes.
+     </div>
+     <div style="padding-top:22px;">
+       <a href="%s" style="display:inline-block;background:#f18c3f;
+          color:#0c2c57;text-decoration:none;font-size:16px;font-weight:700;
+          padding:14px 30px;border-radius:999px;">S&iacute;, es mi correo</a>
+     </div>
+     <div style="padding-top:20px;font-size:13.5px;color:#6b7c8f;">
+       Hasta que no hagas clic no te escribimos nada m&aacute;s.
+       Si no fuiste t&uacute;, ignora este correo y no pasa nada.
+     </div>
+   </td></tr>
+  </table>
+ </td></tr>
+</table>$html$, enlace);
+
+  return http_post(
+    url := 'https://api.resend.com/emails',
+    body := jsonb_build_object(
+      'from', 'Uplevel Alertas <alertas@uplevelweb.art>',
+      'to', jsonb_build_array(fila.email),
+      'subject', 'Confirma tu correo y te mando tus oportunidades',
+      'html', cuerpo),
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || llave,
+      'Content-Type', 'application/json')
+  );
+end;
+$function$;
+
+
+-- 4 · LA CONFIRMACION. La llama la pagina /confirmar/ con la clave
+--     publica, igual que el formulario de inscripcion.
+create or replace function public.confirmar_alerta(p_token uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  fila public.suscriptores%rowtype;
+begin
+  update public.suscriptores
+     set confirmado_en = now()
+   where token_confirmacion = p_token
+     and confirmado_en is null
+  returning * into fila;
+
+  if found then
+    return jsonb_build_object('ok', true, 'primera_vez', true);
+  end if;
+
+  -- Ya estaba confirmado: hacer clic dos veces no puede parecer un error.
+  perform 1 from public.suscriptores where token_confirmacion = p_token;
+  if found then
+    return jsonb_build_object('ok', true, 'primera_vez', false);
+  end if;
+
+  -- Token que no existe. No se dice por que: contarle a un desconocido
+  -- cual token es valido y cual no es regalarle informacion.
+  return jsonb_build_object('ok', false);
+end;
+$function$;
+
+revoke all on function public.confirmar_alerta(uuid) from public, anon;
+grant execute on function public.confirmar_alerta(uuid) to anon;
+
+
+-- 5 · AL INSCRIBIRSE ya no se dispara la bienvenida: se manda la
+--     confirmacion. La bienvenida ahora la dispara el paso 6.
+create or replace function public.avisar_alta_de_suscriptor()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $function$
+begin
+  if new.activo and new.confirmado_en is null then
+    begin
+      perform public.enviar_confirmacion(new.email);
+    exception when others then
+      -- NUNCA dejar que esto tumbe el alta. Alguien que no se puede
+      -- inscribir es mucho peor que una confirmacion que hay que reenviar.
+      raise warning 'No se pudo mandar la confirmacion: %', sqlerrm;
+    end;
+  end if;
+  return new;
+end;
+$function$;
+
+create or replace trigger al_inscribirse
+  after insert on public.suscriptores
+  for each row
+  execute function public.avisar_alta_de_suscriptor();
+
+
+-- 6 · AL CONFIRMAR se dispara la bienvenida, en ese mismo segundo.
+create or replace function public.avisar_confirmacion()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $function$
+begin
+  -- Solo en el cruce de vacio a lleno. Sin esta condicion, cualquier
+  -- update sobre una fila ya confirmada dispararia otra corrida.
+  if old.confirmado_en is null and new.confirmado_en is not null
+     and new.activo and new.bienvenida_enviada is null then
+    begin
+      perform public.disparar_workflow('bienvenida.yml',
+                                       '{"ensayo":"false"}'::jsonb);
+    exception when others then
+      -- El reloj de cada 5 minutos queda de red de seguridad.
+      raise warning 'No se pudo avisar de la confirmacion: %', sqlerrm;
+    end;
+  end if;
+  return new;
+end;
+$function$;
+
+create or replace trigger al_confirmar
+  after update on public.suscriptores
+  for each row
+  execute function public.avisar_confirmacion();
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+
+------------------------------------------------------------------------
+ COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+-- Las dos columnas:
+  select column_name from information_schema.columns
+   where table_name = 'suscriptores'
+     and column_name in ('confirmado_en', 'token_confirmacion');
+  -- tienen que salir las dos
+
+-- Los dos disparadores encendidos (`tgenabled` en O, de «origin»):
+  select tgname, tgenabled from pg_trigger
+   where tgname in ('al_inscribirse', 'al_confirmar');
+
+-- Y que NADIE quedo sin confirmar por accidente:
+  select count(*) as sin_confirmar from suscriptores
+   where confirmado_en is null;
+  -- tiene que dar 0 justo despues de pegar esto
+
+
+------------------------------------------------------------------------
+ PROBARLO SIN ENSUCIAR NADA
+------------------------------------------------------------------------
+Se puede ver el correo que saldria sin mandarlo, y sin dejar rastro:
+
+  begin;
+    insert into suscriptores (email, origen_consentimiento, activo)
+    values ('prueba-borrar@uplevelweb.art', 'prueba', true);
+    select email, confirmado_en, token_confirmacion from suscriptores
+     where email = 'prueba-borrar@uplevelweb.art';
+  rollback;
+
+El `rollback` deshace todo. Ojo: el disparador SI alcanza a mandar el
+correo (pg_net sale de la transaccion), asi que usar una direccion propia.
+
+Para la prueba de verdad, de punta a punta, usar un correo NUEVO en
+inteligencia.uplevelweb.art y recorrer el camino entero como cliente.
+
+
+------------------------------------------------------------------------
+ REENVIAR UNA CONFIRMACION
+------------------------------------------------------------------------
+Si alguien dice que no le llego:
+
+  select public.enviar_confirmacion('sucorreo@empresa.cl');
+
+Devuelve un numero = salio. Devuelve vacio = esa persona YA confirmo, y
+por eso no se le manda de nuevo.
+
+
+------------------------------------------------------------------------
+ SI HAY QUE VOLVER ATRAS
+------------------------------------------------------------------------
+Para que todos vuelvan a recibir sin confirmar, sin borrar nada:
+
+  update suscriptores set confirmado_en = now() where confirmado_en is null;
+
+Y para que el alta vuelva a disparar la bienvenida directo, volver a
+pegar el bloque de `disparador-instantaneo-para-copiar.txt`.
