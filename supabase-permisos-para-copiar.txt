@@ -1,0 +1,117 @@
+========================================================================
+ LOS PERMISOS DE `service_role`
+ La causa de dos fallos que parecian distintos.
+========================================================================
+
+QUE PASO (31-08-2026)
+---------------------
+Dos sintomas sin relacion aparente:
+
+  1. El correo diario tardaba 24 minutos en vez de 5. En el registro:
+       no se pudieron leer las fichas guardadas: HTTP 403
+       no se pudieron guardar las fichas: HTTP 403
+     La cache de fichas de licitacion no se podia usar, asi que cada
+     corrida volvia a pedirle a la API las 4.365 licitaciones de a una,
+     con 2 segundos de espera obligatoria entre cada una: 1.141 s.
+
+  2. El panel decia «No pudimos comprobar tu cuenta» y no dejaba entrar
+     a nadie.
+
+Es LA MISMA CAUSA. El propio PostgREST la dijo, en cuanto se le hizo
+mostrar el error completo en vez de tragarselo:
+
+    {"code":"42501",
+     "hint":"Grant the required privileges to the current role with:
+             GRANT SELECT ON public.fichas_licitacion TO service_role;",
+     "message":"permission denied for table fichas_licitacion"}
+
+`service_role` es el rol de la clave secreta: el que usan el correo
+diario (GitHub Actions) y el panel (Streamlit). **No es la clave y no es
+la tabla: son los permisos de la tabla.**
+
+POR QUE PASA
+------------
+`enable row level security` NO da permisos, los quita. Supabase suele
+darle los permisos a `service_role` por defecto al crear una tabla, pero
+esa concesion no siempre se aplica —depende de con que rol se creo y de
+las «default privileges» del esquema en ese momento—. Las tablas creadas
+sin ella quedan invisibles para la clave secreta, y el sintoma llega
+DIAS DESPUES y disfrazado de otra cosa.
+
+⚠️ **Esto no abre nada al navegador.** `anon` —la clave publica que va en
+la pagina— sigue sin tocar nada. `service_role` es el rol de servidor;
+su clave es secreta y ya la tienen GitHub y Streamlit.
+
+
+------------------------------------------------------------------------
+ PASO 1 · VER QUE TABLAS ESTAN ROTAS  (no cambia nada)
+------------------------------------------------------------------------
+New query, pegar, Run:
+
+  select t.tablename as tabla,
+         case when has_table_privilege('service_role',
+                   'public.' || t.tablename, 'SELECT')
+              then 'OK' else 'LE FALTA' end as service_role
+    from pg_tables t
+   where t.schemaname = 'public'
+   order by 2 desc, 1;
+
+Todo lo que diga LE FALTA es una bomba de tiempo.
+
+
+------------------------------------------------------------------------
+ PASO 2 · EL ARREGLO
+------------------------------------------------------------------------
+Pegar entero y Run. Se puede repetir las veces que haga falta.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+-- 1 · Las tablas y secuencias que YA existen.
+grant usage on schema public to service_role;
+grant select, insert, update, delete
+  on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
+grant execute on all functions in schema public to service_role;
+
+-- 2 · Y las que se creen DESPUES, para no repetir esto nunca mas.
+--     Sin esta parte, la proxima tabla vuelve a nacer invisible y el
+--     sintoma aparece dias despues, disfrazado de otra cosa.
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to service_role;
+alter default privileges in schema public
+  grant usage, select on sequences to service_role;
+alter default privileges in schema public
+  grant execute on functions to service_role;
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+
+------------------------------------------------------------------------
+ PASO 3 · COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+Volver a correr la consulta del PASO 1. **Ninguna fila puede decir
+LE FALTA.**
+
+Y despues, las dos pruebas de verdad:
+
+  a) El panel: entrar en panel-stock-uplevel.streamlit.app. Ya no puede
+     salir «No pudimos comprobar tu cuenta».
+
+  b) El correo diario: en GitHub, Actions ▸ «Correo diario de
+     oportunidades» ▸ Run workflow, con `ensayo` en true (no manda nada).
+     En el registro, el tramo `[tiempo] licitaciones` tiene que bajar de
+     ~1.140 s a una fraccion, porque ahora si puede usar la cache.
+
+
+------------------------------------------------------------------------
+ LA LECCION, QUE ES LO QUE MAS VALE
+------------------------------------------------------------------------
+Esto llevaba dias roto y era invisible porque el codigo se tragaba el
+error: los tres avisos decian «HTTPError» y nada mas. La causa estaba
+escrita en la respuesta del servidor todo el tiempo, con el comando de
+arreglo incluido, y nadie la leia.
+
+**Un `except` que no dice QUE paso convierte un arreglo de una linea en
+dias de sintomas raros.** Se corrigieron los cuatro sitios donde pasaba
+(`alertador.py` x3, `modulo_cuentas.py`). No volver a escribir
+`except Exception: return None` sin guardar el motivo.
