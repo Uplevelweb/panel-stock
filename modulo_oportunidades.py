@@ -605,15 +605,26 @@ def seccion_oportunidades() -> None:
         "Que llegue solo": "Que esto te llegue por correo cada mañana",
     }
 
+    # El recado que dejan los botones que llevan a otra sección («Ver los ID»).
+    # Se aplica ACÁ, antes de crear el selector: después ya no se puede.
+    destino = st.session_state.pop("op_ir_a", None)
+    if destino in SECCIONES:
+        st.session_state["op_seccion"] = destino
+
     # La cinta se dibuja ANTES del selector, así que el paso se lee del valor
     # que el selector ya tiene guardado. No hay adivinanza: es el mismo que va
     # a devolver dos líneas más abajo.
     elegida = st.session_state.get("op_seccion") or "A quién venderle"
     _cinta_de_pasos(PASO_DE.get(elegida, "Diagnóstico"))
 
+    # El `default` solo la primera vez. Si ya hay sección elegida —o si un
+    # botón acaba de dejar el recado de saltar a otra— pasarlo además hace que
+    # Streamlit avise en el registro y lo descarte. Mismo caso que `op_situacion`.
+    arranque = ({} if "op_seccion" in st.session_state
+                else {"default": "A quién venderle"})
     seccion = st.segmented_control(
         "Qué quieres ver", options=list(SECCIONES), key="op_seccion",
-        default="A quién venderle", label_visibility="collapsed")
+        label_visibility="collapsed", **arranque)
     # `segmented_control` devuelve None si se vuelve a apretar lo ya elegido.
     # Sin esto la pantalla queda en blanco y parece que se rompió.
     seccion = seccion or "A quién venderle"
@@ -883,6 +894,8 @@ def seccion_oportunidades() -> None:
             cuantas, aviso = cartera.agregar(st.session_state.get("yo", {}), marcadas)
             (st.success if cuantas else st.warning)(aviso)
 
+    _resumen_de_los_id(vista, mis_ids, cuerpo, sello, bool(resumen.get("por_ids")))
+
 
 COLUMNAS_PRODUCTOS = ["id_producto", "producto", "compran", "te_compraron",
                       "unidades", "proveedores"]
@@ -1010,6 +1023,75 @@ def _vista_filtrada(tabla: pd.DataFrame) -> pd.DataFrame:
     return vista
 
 
+def _resumen_de_los_id(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
+                       sello: str, por_ids: bool) -> None:
+    """El corte de los ID, ahí mismo, mientras se filtra.
+
+    POR QUE VA ACA Y NO SOLO EN SU SECCION. «Qué venderles» existe desde hace
+    un rato, pero hay que acordarse de ir. Serling lo dijo el 02-09-2026:
+    faltaba «la vista de ID según el filtro que se viene detallando». Y tiene
+    razón: el momento en que sirve saber qué compran es JUSTO cuando uno acaba
+    de acotar el filtro, no dos clics después.
+
+    Acá va el titular —cuánto de lo que compran tienes y cuánto no— y el botón
+    que lleva al detalle. El detalle sigue viviendo en su sección: meter dos
+    tablas de miles de filas debajo de esta haría la pantalla imposible.
+
+    SOLO SE CALCULA CON EL FILTRO YA ACOTADO. Sobre `TECHO_UNIDADES` no se
+    hace: leer la bodega para el mercado entero en cada cambio de filtro es
+    caro y además el número no diría nada.
+    """
+    codigos = _codigos_de(vista)
+    if not codigos or len(codigos) > TECHO_UNIDADES:
+        return
+
+    productos = productos_de_las_unidades(sello, tuple(sorted(codigos)), cuerpo)
+    if productos.empty:
+        return
+
+    referencia = mis_ids if por_ids else ids_que_ya_vende(sello, cuerpo)
+    total = float(productos["compran"].sum()) or 1.0
+    tengo = productos[productos["id_producto"].isin(referencia)]
+    hay = float(tengo["compran"].sum())
+    parte = hay / total * 100
+
+    st.divider()
+    izquierda, derecha = st.columns([3, 1])
+    with izquierda:
+        st.markdown(
+            f"**Qué compran estas {len(codigos)} unidades** · "
+            f"{len(productos):,}".replace(",", ".") + " productos distintos, "
+            f"{plata(total)} en 24 meses.")
+        if referencia:
+            st.caption(
+                ("Tienes publicado el " if por_ids else "Ya vendes el ") +
+                f"**{parte:.0f}%**".replace(".", ",") +
+                f" ({plata(hay)}). El resto, **{plata(total - hay)}**, " +
+                ("no lo puedes cotizar hoy." if por_ids
+                 else "nunca se lo has vendido a nadie."))
+        else:
+            st.caption("Carga tu catálogo arriba para separar lo que tienes de "
+                       "lo que no.")
+    with derecha:
+        st.write("")
+        if st.button("Ver los ID", key="op_ver_ids", width="stretch"):
+            # NO se toca `op_seccion` acá: Streamlit prohíbe cambiar la llave
+            # de un widget después de crearlo, y el selector se dibujó más
+            # arriba en esta misma corrida. Se deja un recado y se vuelve a
+            # correr; el recado se aplica al principio, antes del selector.
+            st.session_state["op_ir_a"] = "Qué venderles"
+            st.rerun()
+
+
+def _codigos_de(vista: pd.DataFrame) -> list[str]:
+    """Los códigos de unidad de la tabla filtrada, mire donde mire."""
+    for columna in ("codigo_unidad", "unidad"):
+        if columna in vista.columns:
+            return [c for c in
+                    (str(x).strip() for x in vista[columna].dropna().unique()) if c]
+    return []
+
+
 def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
                             sello: str, por_ids: bool) -> None:
     """Qué productos compran las unidades filtradas, partidos en dos.
@@ -1042,12 +1124,7 @@ def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
             "según **lo que ya has vendido**: los que ya te compran a ti en "
             "alguna parte y los que nunca.")
 
-    codigos = []
-    for columna in ("codigo_unidad", "unidad"):
-        if columna in vista.columns:
-            codigos = [str(x).strip() for x in vista[columna].dropna().unique()]
-            break
-    codigos = [c for c in codigos if c]
+    codigos = _codigos_de(vista)
 
     if not codigos:
         st.info("Primero filtra unidades en **A quién venderle**.")
