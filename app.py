@@ -2127,6 +2127,79 @@ def aplicar_estilos() -> None:
         .subtitulo-panel {{
             color: #5A7089; font-size: 12.5px; margin-top: 2px;
         }}
+        /* ---------- LA FORMA VISUAL DEL BOCETO (02-09-2026) ----------
+           Serling mando un boceto y de el se tomaron primero las ideas —el
+           hilo de tres pasos y los dos caminos— pero con la pinta estandar de
+           Streamlit. Lo hizo notar: faltaba la forma. Esto es la forma.
+
+           Se respeta la regla de Uplevel: rectangulo suave (12px) para lo que
+           CONTIENE, capsula (999px) para lo que se PULSA. Las tarjetas de
+           numeros contienen; los dos caminos se pulsan y por eso el boton va
+           en capsula, no la tarjeta entera. */
+
+        /* La cinta de pasos: una banda, no una linea de texto suelta. */
+        .cinta-pasos {{
+            display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0;
+            background: {COLOR['tarjeta']};
+            border: 1px solid {COLOR['borde']};
+            border-radius: 12px;
+            padding: 11px 16px;
+            margin: 4px 0 14px;
+        }}
+        .cinta-pasos .paso {{ font-size: 15px; white-space: nowrap; }}
+        .cinta-pasos .flecha {{ color: #3f5a7d; padding: 0 12px; }}
+        .cinta-pasos .que-es {{
+            color: {COLOR['texto_suave']}; font-size: 13px;
+            margin-left: auto; padding-left: 14px;
+        }}
+
+        /* Las tres cifras del diagnostico, como tarjetas de color. */
+        .cifras-diag {{ display: flex; flex-wrap: wrap; gap: 12px; margin: 2px 0 16px; }}
+        .cifra {{
+            flex: 1 1 190px; border-radius: 12px; padding: 14px 16px;
+            border: 1px solid {COLOR['borde']}; background: {COLOR['tarjeta']};
+        }}
+        .cifra .rotulo {{
+            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
+            color: {COLOR['texto_suave']}; font-weight: 600;
+        }}
+        .cifra .valor {{
+            font-size: 27px; font-weight: 700; color: {COLOR['texto']};
+            margin-top: 4px; line-height: 1.1;
+        }}
+        .cifra .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+        /* La tercera es la que importa: lo que hay por ganar. Va en verde
+           porque es lo unico de la fila que es una oportunidad y no un hecho. */
+        .cifra.ganar {{ background: #10432f; border-color: #1c6b4a; }}
+        .cifra.ganar .valor {{ color: #7ee0ab; }}
+        .cifra.ganar .rotulo {{ color: #9fd9bd; }}
+
+        /* Los dos caminos. La letra A/B es del boceto y sirve: nombra la
+           decision para poder hablar de ella («vamos por la A»). */
+        .camino {{
+            border-radius: 12px; padding: 15px 17px 13px;
+            border: 1px solid transparent; height: 100%;
+            /* El boton va justo debajo y es parte de la misma tarjeta: sin
+               esto Streamlit mete su separacion y el boton queda suelto, como
+               si mandara a otra cosa. */
+            margin-bottom: -6px;
+        }}
+        .camino.a {{ background: #7a3d0e; border-color: #b8641f; }}
+        .camino.b {{ background: #123a6e; border-color: #2f6bb0; }}
+        .camino .letra {{
+            float: right; font-size: 12px; font-weight: 700;
+            color: rgba(255,255,255,.55);
+            border: 1px solid rgba(255,255,255,.35);
+            border-radius: 6px; padding: 1px 7px;
+        }}
+        .camino .titulo {{
+            font-size: 19px; font-weight: 700; color: #fff; line-height: 1.15;
+        }}
+        .camino .cuanto {{ font-size: 32px; font-weight: 800; color: #fff; line-height: 1.05; }}
+        .camino .bajada {{
+            font-size: 13px; color: rgba(255,255,255,.86); margin-top: 6px;
+        }}
+
         /* ---------- LA BARRA DE STREAMLIT NO ES NUESTRA ----------
            Arriba a la derecha, Streamlit pone «Fork» y el icono de GitHub, que
            llevan al repositorio —que es publico—. En una demo el cliente puede

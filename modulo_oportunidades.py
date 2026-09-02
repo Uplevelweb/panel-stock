@@ -645,12 +645,25 @@ def seccion_oportunidades() -> None:
         _pantalla_alertas()
         return
 
-    a, b, c, d = st.columns(4)
-    a.metric("Mercado de tus productos" if resumen["por_ids"]
-             else "Mercado de sus rubros", plata(resumen["mercado"]))
-    b.metric("Lo que él vendió", plata(resumen["vendido"]))
-    c.metric("Su parte", f"{resumen['parte']:.1f}%".replace(".", ","))
-    d.metric("Unidades que compran", f"{resumen['unidades']:,}".replace(",", "."))
+    # Las cifras del diagnóstico, como tarjetas. La tercera —lo que hay por
+    # ganar— va en verde y aparte: es la única de la fila que es una
+    # oportunidad y no un hecho consumado, y es el número que mueve a actuar.
+    por_ganar = resumen["mercado"] - resumen["vendido"]
+    unidades_txt = f"{resumen['unidades']:,}".replace(",", ".")
+    parte_txt = f"{resumen['parte']:.1f}%".replace(".", ",")
+    st.markdown(
+        '<div class="cifras-diag">'
+        f'<div class="cifra"><div class="rotulo">'
+        f'{"Mercado de tus productos" if resumen["por_ids"] else "Mercado de sus rubros"}'
+        f'</div><div class="valor">{plata(resumen["mercado"])}</div>'
+        f'<div class="pie">{unidades_txt} unidades compran</div></div>'
+        f'<div class="cifra"><div class="rotulo">Ventas actuales</div>'
+        f'<div class="valor">{plata(resumen["vendido"])}</div>'
+        f'<div class="pie">Su parte: {parte_txt}</div></div>'
+        f'<div class="cifra ganar"><div class="rotulo">Potencial por ganar</div>'
+        f'<div class="valor">{plata(por_ganar)}</div>'
+        f'<div class="pie">Lo que compran y no te compran</div></div>'
+        '</div>', unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
     #  Los dos caminos
@@ -677,27 +690,31 @@ def seccion_oportunidades() -> None:
 
     camino_a, camino_b = st.columns(2, gap="medium")
     with camino_a:
-        with st.container(border=True):
-            st.markdown(f"#### Conquistar · {len(nunca):,}".replace(",", "."))
-            st.caption(
-                f"Compran {plata(nunca['gasto'].sum())} de lo tuyo y **nunca "
-                "te han comprado**. Es donde está la plata que hoy se lleva otro.")
-            if st.button("Ver solo estas", key="op_camino_a", type="primary",
-                         width="stretch", disabled=puesto == ["Nunca le has vendido"]):
-                st.session_state["op_situacion"] = ["Nunca le has vendido"]
-                st.rerun()
+        st.markdown(
+            '<div class="camino a"><span class="letra">A</span>'
+            '<div class="titulo">Conquistar</div>'
+            f'<div class="cuanto">{len(nunca):,}'.replace(",", ".") + '</div>'
+            f'<div class="bajada">Compran {plata(nunca["gasto"].sum())} de lo '
+            'tuyo y <b>nunca te han comprado</b>. Ahí está la plata que hoy se '
+            'lleva otro.</div></div>', unsafe_allow_html=True)
+        if st.button("Ver solo estas", key="op_camino_a", type="primary",
+                     width="stretch", disabled=puesto == ["Nunca le has vendido"]):
+            st.session_state["op_situacion"] = ["Nunca le has vendido"]
+            st.rerun()
 
     with camino_b:
-        with st.container(border=True):
-            st.markdown(f"#### Profundizar · {len(poco):,}".replace(",", "."))
-            st.caption(
-                f"Ya te compran, pero poco: {plata(poco['vendido'].sum())} de "
-                f"{plata(poco['gasto'].sum())}. Acá no hay que abrir la puerta, "
-                "ya está abierta.")
-            if st.button("Ver solo estas", key="op_camino_b", width="stretch",
-                         disabled=puesto == ["Estás adentro con poco"]):
-                st.session_state["op_situacion"] = ["Estás adentro con poco"]
-                st.rerun()
+        st.markdown(
+            '<div class="camino b"><span class="letra">B</span>'
+            '<div class="titulo">Profundizar</div>'
+            f'<div class="cuanto">{len(poco):,}'.replace(",", ".") + '</div>'
+            f'<div class="bajada">Ya te compran, pero poco: '
+            f'{plata(poco["vendido"].sum())} de {plata(poco["gasto"].sum())}. '
+            'Acá no hay que abrir la puerta, ya está abierta.</div></div>',
+            unsafe_allow_html=True)
+        if st.button("Ver solo estas", key="op_camino_b", width="stretch",
+                     disabled=puesto == ["Estás adentro con poco"]):
+            st.session_state["op_situacion"] = ["Estás adentro con poco"]
+            st.rerun()
 
     izquierda, derecha = st.columns([3, 1])
     with izquierda:
@@ -934,17 +951,14 @@ def _cinta_de_pasos(actual: str) -> None:
         marca = "●" if es_actual else ("✓" if hecho else "○")
         peso = "700" if es_actual else "500"
         piezas.append(
-            f'<span style="color:{color};font-weight:{peso};white-space:nowrap">'
+            f'<span class="paso" style="color:{color};font-weight:{peso}">'
             f'{marca}&nbsp;{paso}</span>')
         if i < len(PASOS) - 1:
-            piezas.append('<span style="color:#3f5a7d">&nbsp;&nbsp;→&nbsp;&nbsp;</span>')
+            piezas.append('<span class="flecha">→</span>')
 
     st.markdown(
-        '<div style="display:flex;flex-wrap:wrap;align-items:center;'
-        'font-size:0.95em;letter-spacing:.02em;margin:2px 0 10px">'
-        + "".join(piezas) +
-        f'<span style="color:#8fa6c2;margin-left:14px;font-size:.88em">'
-        f'· {QUE_ES_CADA_PASO[actual]}</span></div>',
+        '<div class="cinta-pasos">' + "".join(piezas) +
+        f'<span class="que-es">{QUE_ES_CADA_PASO[actual]}</span></div>',
         unsafe_allow_html=True)
 
 
