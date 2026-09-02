@@ -1,3 +1,61 @@
+## 02-09-2026 · Oportunidades se rearma: pasos, caminos, cartera y catálogo
+
+La pestaña era un solo rollo de seis mil píxeles con cuatro trabajos apilados.
+Ahora tiene seis secciones que se eligen arriba, con la cinta
+**Identificación → Diagnóstico → Acción** diciendo por dónde va la cosa.
+
+**Se usa `segmented_control`, NO `st.tabs`.** `st.tabs` dibuja todas las
+pestañas en cada corrida aunque nadie las abra: es exactamente lo que reventó
+la memoria el 27-08. Con el selector se dibuja una sola.
+
+**Los dos caminos.** «Nunca le has vendido: 1.708» y «Estás adentro con poco:
+174» eran números muertos. Ahora son dos bloques —Conquistar (A) y Profundizar
+(B)— que filtran la tabla de un click.
+
+**«Qué venderles»**, la sección nueva: toma las unidades que quedaron con el
+filtro puesto, lee qué compraron en 24 meses y lo parte en los ID que el
+cliente tiene y los que no. Los que NO tiene van primero: es la plata que se le
+está yendo sin que lo sepa. El titular del corte aparece además debajo de la
+tabla, mientras se filtra, porque ese es el momento en que sirve.
+
+**La cartera** (`cartera.py`) es el puente que faltaba entre el panel y el
+envío del catálogo: se marcan unidades y quedan en Supabase, que es lo único
+que los dos lados pueden leer. Decidido ese mismo día: datos unidos, envío en
+Gmail. Ver la sección 10.1 de `emergenza-mailer\PROY_PANEL_EMERGENZA.md`.
+
+**El catálogo se lee solo del Drive** (`mis_productos.py`), del archivo
+«CATALOGO CONVENIO MARCO». Ya no hay que subir nada.
+
+⚠️ **UN ID DE CONVENIO MARCO TIENE EXACTAMENTE 7 DÍGITOS.** El lector pedía «5
+o más» y con el catálogo de verdad colaba 1.835 números de 5 dígitos y 272 de 6
+—cantidades, códigos internos— que ninguno calzaba con la bodega: decía 24.763
+productos cuando eran 22.656. Medido sobre la bodega entera: 1.216.263 líneas,
+125.874 ID distintos, **el 100% de 7 dígitos**. Si algún día cambia, la línea es
+`mis_productos.LARGO_ID`.
+
+⚠️ **STREAMLIT BORRA EL ESTADO DE UN WIDGET QUE DEJA DE DIBUJARSE**, y con las
+secciones eso se volvió un defecto real: se filtraba Valparaíso + Conquistar
+(191 filas), se miraba otra sección y al volver la tabla estaba en 1.882. Los
+seis filtros se copian ahora a `op_filtros_guardados`, que no es llave de
+ningún widget, y se reponen al entrar. **Por lo mismo, un botón no puede
+cambiar `op_seccion` después de que el selector se creó**: deja el recado en
+`op_ir_a` y se aplica al principio de la corrida siguiente.
+
+**Decidido dejar el enlace del Drive en el código.** El repositorio es público,
+así que el enlace al catálogo queda a la vista. Serling lo decidió sabiéndolo:
+*«no está bien, si no afecta nada por ahora que estamos en modo de prueba,
+déjalo»*. Ya había precedente (`URL_OFERTAS_POR_DEFECTO`) y es información que
+de todos modos se publica en Mercado Público.
+
+⚠️ **Revisar esto al salir de modo de prueba**, o sea cuando entre el primer
+cliente que no sea Emergenza: ahí el enlace se muda a los secretos de
+Streamlit, que son privados. Son diez minutos y no cambia nada más.
+
+**Cuatro SQL quedaron pendientes de correr**, y ninguno rompe nada mientras no
+se corra —cada pantalla avisa «para esta sesión»—:
+`cartera-para-copiar.txt`, `vistas-para-copiar.txt`,
+`mis-productos-para-copiar.txt` y `alertas-filtro-fino-para-copiar.txt`.
+
 ## 30-08-2026 · «Tus 3 del mes» sale en el correo
 
 El bloque esta escrito y conectado a la corrida de las 08:00. Una puerta de cada

@@ -84,7 +84,17 @@ no.
 | `modulo_mercado.py` | Los cuatro gráficos de barras del mercado, dentro de esa misma pestaña. Miran las **seis vías**, no solo Convenio Marco |
 | `modulo_visitas.py` | El IPT: el itinerario de visitas y **la línea donde se deja de visitar y se empieza a llamar** |
 | `modulo_cuentas.py` | Cuentas, roles y territorios (pestaña «Mi equipo»). Quién entró y qué le toca ver |
+| `mis_productos.py` | El catálogo del cliente. **Se lee solo del Drive**, del archivo «CATALOGO CONVENIO MARCO». Un ID de Convenio Marco tiene **exactamente 7 dígitos** (`LARGO_ID`) |
+| `cartera.py` | Las unidades que se decidió trabajar. El puente entre el panel y el envío del catálogo: se elige acá y lo lee el otro lado |
+| `vistas.py` | El filtro guardado de cada vendedor. Es de la PERSONA, no de la cuenta. La marcada «de entrada» se aplica sola al abrir |
+| `modulo_envios.py` | Pestaña «Envíos de Ofertas, Catálogo y Mailing»: la puerta única a los dos paneles de Apps Script. No manda correo, los abre |
+| `exportar.py` | El mismo botón de bajar a Excel en todos los módulos. Baja lo que está **filtrado en pantalla**, no la tabla entera |
+| `cartera-para-copiar.txt` | El SQL de la tabla `cartera` |
+| `vistas-para-copiar.txt` | El SQL de la tabla `vistas` |
+| `mis-productos-para-copiar.txt` | El SQL de `cuentas.ids_publicados` |
+| `alertas-filtro-fino-para-copiar.txt` | El SQL de `filtros.instituciones` y `filtros.unidades` |
 | `supabase-cuentas-para-copiar.txt` | El SQL de las tablas `cuentas` y `usuarios`. **Hay que pegarlo una vez** para que los roles empiecen a mandar |
+| ⚠️ *Los cuatro `-para-copiar.txt` del 02-09-2026* | *Sin correr al cierre de esa sesión. Nada se rompe: cada pantalla avisa «para esta sesión» y sigue andando* |
 | `supabase-soporte-para-copiar.txt` | El SQL del rol `superadmin` y la `bitacora_soporte`. Se pega **después** del anterior |
 | `modulo_seguimiento.py` | El embudo: en qué quedó cada oportunidad que avisó el correo (pestaña «Seguimiento») |
 | `supabase-seguimiento-para-copiar.txt` | El SQL de la tabla `seguimiento`, las `visitas` y la foto que `envios` guarda de cada oportunidad |
