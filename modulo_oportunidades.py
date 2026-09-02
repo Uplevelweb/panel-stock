@@ -489,10 +489,11 @@ def seccion_oportunidades() -> None:
     # Y ademas la primera pantalla dejaba de estar vacia. Antes decia solo
     # «Escribe un RUT para empezar» y nada mas: en una demo hay que escribir
     # para que aparezca algo. Serling lo reporto el 01-09-2026.
-    mis_ids = mis_productos.seccion_mis_productos(usuario_actual)
+    # El catálogo se lee del Drive y no se dibuja nada: no es una decisión que
+    # ella tome cada vez que entra. Solo avisa si falla. Ver `mis_productos`.
+    mis_ids = mis_productos.ids_vigentes(usuario_actual)
 
-    # El tercer filtro: la vista guardada. Va junto al catálogo porque los dos
-    # son configuración del vendedor, no resultado de una consulta.
+    # La vista guardada sí se muestra: esa sí es una decisión suya.
     vistas.barra_de_vistas(usuario_actual)
 
     if not escrito:
@@ -574,6 +575,13 @@ def seccion_oportunidades() -> None:
                 "Convenios marco de tu rubro", key="op_convenios",
                 options=convenios_de(compras["convenio_marco"]))
             return
+
+        # Todos los convenios en los que ese RUT vende: son las opciones del
+        # filtro de más abajo. Se calcula acá, con la tabla ya hecha, y no de
+        # `resumen["convenios"]` —que es el resultado de la selección—.
+        convenios_del_rut = convenios_de(
+            compras.loc[compras["rut"].str.startswith(cuerpo, na=False),
+                        "convenio_marco"])
 
         if resumen["nombre"]:
             st.success(f"**{resumen['nombre']}** · {len(resumen['convenios'])} convenios marco")
@@ -750,6 +758,23 @@ def seccion_oportunidades() -> None:
     #
     # Serling lo pidió el 01-09-2026: hasta esa fecha solo se podía filtrar por
     # situación y región, y no se podía SACAR nada de la lista.
+    # El CONVENIO va primero porque no filtra la tabla: define el mercado que
+    # se mide. Los otros cuatro recortan el resultado; este cambia la cuenta.
+    #
+    # Su valor se lee de `session_state` ARRIBA, antes de calcular
+    # (`mapa_del_rut` lo recibe), y el selector se dibuja acá para que los
+    # cinco filtros estén juntos. No hay desfase: cuando ella cambia el
+    # selector, Streamlit vuelve a correr y arriba ya está el valor nuevo.
+    #
+    # Las opciones NO salen de `resumen["convenios"]`, que es el resultado de
+    # la selección: si se eligiera uno solo, la lista se reduciría a ese y no
+    # habría cómo volver. Salen de todos los que ese RUT ha vendido.
+    if not resumen["por_ids"]:
+        st.multiselect(
+            "Convenio marco", key="op_convenios", options=convenios_del_rut,
+            placeholder="Todos los tuyos",
+            help="Deja vacío para mirar todos los convenios en los que vendes.")
+
     filtro_situacion, filtro_region = st.columns([2, 2])
     with filtro_situacion:
         # El `default` se pasa SOLO si la vista guardada no puso ya un valor.

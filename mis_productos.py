@@ -13,25 +13,25 @@ SEGÚN LO VENDIDO   los rubros salen solos del RUT: se miran los convenios por
                    configuración, sirve desde el primer minuto. Es lo que ve
                    alguien que acaba de escanear el QR en la feria.
 
-CONTRA MIS ID      el cliente carga su catálogo de Convenio Marco y se cruza
-                   línea por línea: de lo que esa unidad compró, cuánto es de
-                   productos que él TIENE PUBLICADOS. Es mucho más fino —el
-                   convenio es un saco grande, el ID es el producto exacto—
-                   pero necesita que alguien suba el archivo.
+CONTRA MIS ID      se cruza línea por línea contra el catálogo: de lo que esa
+                   unidad compró, cuánto es de productos que él TIENE
+                   PUBLICADOS. Es mucho más fino —el convenio es un saco
+                   grande, el ID es el producto exacto—. El catálogo se lee
+                   SOLO, del Drive: no hay nada que subir.
 
 Lo primero contesta «¿a quién le podría vender?». Lo segundo, «¿qué de lo que
 compran lo tengo yo publicado hoy?». Un vendedor necesita las dos.
 
-DÓNDE SE GUARDAN
-----------------
-En la cuenta de la empresa, no en la sesión del navegador: si se guardaran en
-la sesión, cada persona del equipo tendría que volver a subir el mismo archivo
-y se perderían al recargar. Van en la columna `ids_publicados` de `cuentas`,
-que la crea `mis-productos-para-copiar.txt`.
+DE DONDE SALE
+-------------
+Del Drive de ella, del archivo «CATALOGO CONVENIO MARCO», y de ningún otro
+lado. Serling lo pidió así el 02-09-2026: «elimina la opción de subir el
+catálogo». El catálogo no es una decisión que se tome al entrar, es un hecho.
 
-MIENTRAS ESA COLUMNA NO EXISTA, ESTO SIGUE FUNCIONANDO. Se guarda en la sesión
-y se avisa en pantalla que dura hasta que se cierre. Un módulo nuevo no puede
-dejar el panel esperando a que alguien corra un SQL.
+`leer`/`guardar` siguen existiendo como red: si el Drive no contesta, se usa lo
+último que hubiera quedado en la cuenta (`cuentas.ids_publicados`, que crea
+`mis-productos-para-copiar.txt`) y se avisa en pantalla. Solo entonces se
+dibuja algo.
 """
 from __future__ import annotations
 
@@ -85,8 +85,8 @@ def ids_del_archivo(archivo) -> tuple[set[str], str]:
     en cada versión («ID», «ID REGIÓN CM», «ID CONVENIO REGIÓN», «ID producto»).
     Preguntar por la columna es garantizar que alguien la elija mal.
 
-    Se leen TODAS las celdas y se toma lo que parece un ID: solo dígitos y al
-    menos cinco. Con eso da igual dónde esté la columna y cómo se llame.
+    Se leen TODAS las celdas y se toma lo que parece un ID: solo dígitos y
+    exactamente 7. Con eso da igual dónde esté la columna y cómo se llame.
     """
     nombre = getattr(archivo, "name", "") or "archivo"
     try:
@@ -223,74 +223,28 @@ def borrar(usuario: dict) -> None:
 # --------------------------------------------------------------------------
 #  La pantalla
 # --------------------------------------------------------------------------
-def seccion_mis_productos(usuario: dict) -> set[str]:
-    """El catálogo del cliente. Devuelve los ID vigentes.
+def ids_vigentes(usuario: dict) -> set[str]:
+    """El catálogo del cliente. Devuelve los ID y NO dibuja nada si todo va bien.
 
-    SE LEE SOLO DEL DRIVE. Antes había que subir el archivo a mano cada vez, y
-    Serling lo corrigió el 02-09-2026: el catálogo vive en su Drive y siempre va
-    a vivir ahí, así que el panel lo va a buscar. La carga a mano queda como
-    salida de emergencia —para probar otro archivo, o si el Drive falla—, no
-    como el camino normal.
+    SE LEE SOLO DEL DRIVE, Y EN SILENCIO. Serling lo pidió así el 02-09-2026:
+    «elimina la opción de subir el catálogo, no debería aparecer el link de mis
+    productos publicados». Y tiene razón: el catálogo no es una decisión que
+    ella tome cada vez que entra, es un hecho. Un panel que se abre pidiendo
+    algo que ya está resuelto le hace perder tiempo a todo el mundo.
+
+    Solo se dibuja algo cuando FALLA, que es cuando hace falta enterarse.
     """
     del_drive, aviso_drive = ids_del_drive()
-    ids = del_drive or leer(usuario)
-    de_donde = "del Drive" if del_drive else "cargados a mano"
+    if del_drive:
+        return del_drive
 
-    titulo = ("Mis productos publicados — " +
-              (f"{len(ids):,}".replace(",", ".") + f" {de_donde}" if ids
-               else "no se pudo leer el catálogo"))
-    with st.expander(titulo, expanded=not ids):
-        if del_drive:
-            st.success(
-                f"Leídos **{len(del_drive):,}".replace(",", ".") + "** productos "
-                f"de **{CATALOGO_NOMBRE}**, en tu Drive. No hay que subir nada: "
-                "cuando actualices ese archivo, el panel lo toma solo.")
-            if st.button("Volver a leerlo ahora", key="mp_releer",
-                         help="Por si acabas de actualizar el archivo."):
-                ids_del_drive.clear()
-                st.rerun()
-        else:
-            st.error(f"No se pudo leer **{CATALOGO_NOMBRE}** del Drive. {aviso_drive}")
-            st.caption(
-                "Mientras tanto puedes subir el archivo a mano acá abajo, o "
-                "seguir con «Según lo que ya has vendido», que no lo necesita.")
-
-        st.caption(
-            f"Se buscan los números de {LARGO_ID} dígitos en todas las pestañas: "
-            "así da igual cómo se llame la columna del ID —«ID REGIÓN CM», «ID "
-            "CONVENIO REGIÓN»— y dónde esté.")
-
-        archivo = st.file_uploader(
-            "Subir otro archivo (opcional)", type=["xlsx", "xls", "csv"],
-            key="mp_archivo",
-            help="Solo si quieres probar un catálogo distinto al del Drive.")
-
-        if archivo is not None:
-            leidos, explicacion = ids_del_archivo(archivo)
-            if not leidos:
-                st.error(explicacion)
-            else:
-                st.success(explicacion)
-                izquierda, derecha = st.columns(2)
-                with izquierda:
-                    if st.button("Usar estos productos", type="primary",
-                                 width="stretch", key="mp_usar"):
-                        bien, aviso = guardar(usuario, leidos)
-                        (st.success if bien else st.error)(aviso)
-                        st.rerun()
-                with derecha:
-                    if ids and st.button("Sumarlos a los que ya tengo",
-                                         width="stretch", key="mp_sumar"):
-                        bien, aviso = guardar(usuario, ids | leidos)
-                        (st.success if bien else st.error)(aviso)
-                        st.rerun()
-
-        # «Quitarlos todos» solo tiene sentido para lo cargado a mano: lo del
-        # Drive se vuelve a leer solo en la corrida siguiente, así que el botón
-        # no haría nada y quedaría como un botón roto.
-        if ids and not del_drive:
-            if st.button("Quitarlos todos", key="mp_borrar"):
-                borrar(usuario)
-                st.rerun()
-
-    return ids
+    # Solo si el Drive fallo se dice algo, y se dice donde se esta mirando.
+    guardados = leer(usuario)
+    st.warning(
+        f"No se pudo leer **{CATALOGO_NOMBRE}** del Drive. {aviso_drive}"
+        + (f" Se usan los {len(guardados):,}".replace(",", ".") +
+           " productos que quedaron de antes."
+           if guardados else
+           " Mientras tanto, «Contra mis ID publicados» no puede calcularse: "
+           "usa «Segun lo que ya has vendido», que no necesita catalogo."))
+    return guardados
