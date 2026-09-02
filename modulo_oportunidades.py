@@ -496,6 +496,8 @@ def seccion_oportunidades() -> None:
     vistas.barra_de_vistas(usuario_actual)
 
     if not escrito:
+        # Todavía en el primer paso: no hay de quién hablar.
+        _cinta_de_pasos("Identificación")
         st.info("Escribe un RUT para empezar.")
         return
     if not (buscar or st.session_state.get("op_visto") == escrito):
@@ -592,14 +594,23 @@ def seccion_oportunidades() -> None:
     #
     # Y la cápsula es la forma correcta según la regla de Uplevel: lo que se
     # elige va en cápsula, lo que contiene va en rectángulo suave.
+    # El orden es el de los pasos: primero las tres de Diagnóstico, después las
+    # tres de Acción. Ver `PASO_DE`.
     SECCIONES = {
         "A quién venderle": "Las unidades que compran lo tuyo, para filtrar y elegir",
         "Qué venderles": "Los ID que compran esas instituciones: los que tienes y los que no",
-        "Mi cartera": "Las que ya elegiste trabajar — de acá sale el envío del catálogo",
         "Su mercado": "Quién compra, por qué vía y contra quién se compite",
+        "Mi cartera": "Las que ya elegiste trabajar — de acá sale el envío del catálogo",
         "A quién visitar": "El itinerario, ordenado por lo que hay para ganar",
         "Que llegue solo": "Que esto te llegue por correo cada mañana",
     }
+
+    # La cinta se dibuja ANTES del selector, así que el paso se lee del valor
+    # que el selector ya tiene guardado. No hay adivinanza: es el mismo que va
+    # a devolver dos líneas más abajo.
+    elegida = st.session_state.get("op_seccion") or "A quién venderle"
+    _cinta_de_pasos(PASO_DE.get(elegida, "Diagnóstico"))
+
     seccion = st.segmented_control(
         "Qué quieres ver", options=list(SECCIONES), key="op_seccion",
         default="A quién venderle", label_visibility="collapsed")
@@ -881,6 +892,60 @@ FILTROS = (
     ("op_sin_unidad", "nombre_unidad", True),
 )
 COPIA_FILTROS = "op_filtros_guardados"
+
+
+# A qué paso pertenece cada sección. El orden del diccionario es el orden en
+# que se dibujan, y por eso las tres de un paso van juntas: si se intercalaran,
+# la cinta de arriba iría y volvería sin sentido.
+PASO_DE = {
+    "A quién venderle": "Diagnóstico",
+    "Qué venderles": "Diagnóstico",
+    "Su mercado": "Diagnóstico",
+    "Mi cartera": "Acción",
+    "A quién visitar": "Acción",
+    "Que llegue solo": "Acción",
+}
+PASOS = ("Identificación", "Diagnóstico", "Acción")
+QUE_ES_CADA_PASO = {
+    "Identificación": "de quién estamos hablando",
+    "Diagnóstico": "qué está pasando en su mercado",
+    "Acción": "qué hago con eso",
+}
+
+
+def _cinta_de_pasos(actual: str) -> None:
+    """La cinta Identificación → Diagnóstico → Acción, con el paso actual.
+
+    POR QUE HACIA FALTA. Las seis secciones se veían todas iguales entre sí y
+    no decían por dónde empezar: alguien que entra por primera vez tiene seis
+    puertas del mismo tamaño y ninguna pista. La idea es del boceto que mandó
+    Serling, y es correcta: el trabajo tiene un orden —saber de quién hablamos,
+    entender su mercado, hacer algo— y la pantalla se lo puede decir gratis.
+
+    NO SON BOTONES Y NO TIENEN QUE PARECERLO. Por eso no llevan cápsula: la
+    regla de formas de Uplevel dice que la cápsula es lo que se pulsa o se
+    elige, y esto solo informa. Lo que se elige es el selector de abajo.
+    """
+    piezas = []
+    for i, paso in enumerate(PASOS):
+        hecho = PASOS.index(actual) > i
+        es_actual = paso == actual
+        color = "#f18c3f" if es_actual else ("#8fa6c2" if hecho else "#5f7591")
+        marca = "●" if es_actual else ("✓" if hecho else "○")
+        peso = "700" if es_actual else "500"
+        piezas.append(
+            f'<span style="color:{color};font-weight:{peso};white-space:nowrap">'
+            f'{marca}&nbsp;{paso}</span>')
+        if i < len(PASOS) - 1:
+            piezas.append('<span style="color:#3f5a7d">&nbsp;&nbsp;→&nbsp;&nbsp;</span>')
+
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;align-items:center;'
+        'font-size:0.95em;letter-spacing:.02em;margin:2px 0 10px">'
+        + "".join(piezas) +
+        f'<span style="color:#8fa6c2;margin-left:14px;font-size:.88em">'
+        f'· {QUE_ES_CADA_PASO[actual]}</span></div>',
+        unsafe_allow_html=True)
 
 
 def _recordar_filtros() -> None:
