@@ -540,14 +540,14 @@ def seccion_oportunidades() -> None:
         options=["Según lo que ya has vendido", "Contra mis ID publicados"],
         captions=["Los rubros salen solos del RUT. No hay que cargar nada.",
                   (f"Producto por producto, contra los {len(mis_ids):,}".replace(",", ".") +
-                   " que subiste.") if mis_ids
-                  else "Producto por producto. Necesita tu catálogo, arriba."])
+                   " de tu catálogo.") if mis_ids
+                  else "Producto por producto. No se pudo leer tu catálogo."])
 
     if forma == "Contra mis ID publicados" and not mis_ids:
         st.info(
-            "Para comparar contra tus ID falta cargar el catálogo: ábrelo arriba "
-            "en **«Mis productos publicados»** y sube el mismo `.xlsx` que usas "
-            "para cotizar. Mientras tanto se muestra lo de siempre.")
+            "Para comparar contra tus ID hace falta tu catálogo, y no se pudo "
+            "leer del Drive. Abre **«Mis productos publicados»** arriba para "
+            "ver por qué. Mientras tanto se muestra lo de siempre.")
         forma = "Según lo que ya has vendido"
 
     if forma == "Contra mis ID publicados":
@@ -1070,8 +1070,8 @@ def _resumen_de_los_id(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
                 ("no lo puedes cotizar hoy." if por_ids
                  else "nunca se lo has vendido a nadie."))
         else:
-            st.caption("Carga tu catálogo arriba para separar lo que tienes de "
-                       "lo que no.")
+            st.caption("No se pudo leer tu catálogo del Drive: mira "
+                       "«Mis productos publicados», arriba.")
     with derecha:
         st.write("")
         if st.button("Ver los ID", key="op_ver_ids", width="stretch"):
@@ -1149,10 +1149,10 @@ def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
 
     if not referencia:
         st.warning(
-            "Todavía no cargaste tu catálogo, así que no se puede separar lo "
-            "que tienes de lo que no: abajo va **todo lo que compran**. Sube "
-            "tu catálogo en **«Mis productos publicados»**, arriba, y esta "
-            "misma pantalla se parte en dos."
+            "No se pudo leer tu catálogo del Drive, así que no se puede "
+            "separar lo que tienes de lo que no: abajo va **todo lo que "
+            "compran**. Abre **«Mis productos publicados»**, arriba, para ver "
+            "por qué."
             if por_ids else
             "Ese RUT no registra ventas en la bodega, así que no hay con qué "
             "comparar: abajo va **todo lo que compran**.")

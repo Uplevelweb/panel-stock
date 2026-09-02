@@ -43,11 +43,34 @@ import streamlit as st
 
 import modulo_cuentas
 
-# Un ID de Convenio Marco es un número de varios dígitos («4194137»). El piso
-# de 5 descarta cantidades, años y números de fila, que es lo que ensucia
-# cuando se lee una planilla entera sin saber qué columna mirar.
-LARGO_MINIMO_ID = 5
+# UN ID DE CONVENIO MARCO TIENE EXACTAMENTE 7 DIGITOS. No es una suposición:
+# medido el 02-09-2026 sobre la bodega entera —1.216.263 líneas, 125.874 ID
+# distintos— y **el 100% tiene 7**. No hay ninguno de 6 ni de 8.
+#
+# Empezó siendo «5 o más» y eso metía basura: en el catálogo de verdad colaba
+# 1.835 números de 5 dígitos y 272 de 6 —cantidades, códigos internos— que
+# ninguno calzaba con la bodega. No producían falsos «sí lo tengo», pero sí
+# inflaban la cuenta en pantalla: decía 24.763 productos cuando eran 22.656.
+#
+# Si algún día ChileCompra emite ID más largos, esta es la línea que se toca.
+LARGO_ID = 7
 CLAVE_SESION = "mis_ids"
+
+# EL CATALOGO VIVE EN EL DRIVE DE ELLA Y SIEMPRE VA A VIVIR AHI. Lo dijo
+# Serling el 02-09-2026: «ubícalo en el Drive, un archivo llamado CATALOGO
+# CONVENIO MARCO, siempre reposará allí».
+#
+# Se baja sin credenciales por la vía de exportación de Google, la misma que ya
+# usa `app.py` para la hoja de compras. El archivo está compartido por enlace;
+# si algún día se deja de compartir, esto avisa y queda la carga a mano.
+#
+# La dirección va en el código y no en los secretos porque el repositorio ya
+# lleva la carpeta de ofertas de la misma forma (`URL_OFERTAS_POR_DEFECTO`), y
+# porque es el catálogo publicado en Mercado Público: es información que ella
+# ya hace pública al publicarla. Si algún día quiere que no se vea, se muda a
+# los secretos de Streamlit y se lee de ahí.
+CATALOGO_DRIVE = "1_Z5tXDII93ovkNk-eBNFu6XIiRcbMOtb"
+CATALOGO_NOMBRE = "CATALOGO CONVENIO MARCO"
 
 
 # --------------------------------------------------------------------------
@@ -99,15 +122,54 @@ def ids_del_archivo(archivo) -> tuple[set[str], str]:
             valores = grilla[columna].dropna().astype(str).str.strip()
             # `.str.replace` saca los puntos de miles que Excel a veces deja.
             valores = valores.str.replace(".", "", regex=False)
-            buenos = valores[valores.str.fullmatch(r"\d{%d,}" % LARGO_MINIMO_ID)]
+            buenos = valores[valores.str.fullmatch(r"\d{%d}" % LARGO_ID)]
             encontrados.update(buenos.tolist())
 
     if not encontrados:
         return set(), ("No encontré ningún ID en ese archivo. Tienen que ser "
-                       "números de al menos 5 dígitos, en cualquier columna.")
+                       f"números de {LARGO_ID} dígitos, en cualquier columna.")
     return encontrados, (f"{len(encontrados):,}".replace(",", ".") +
                          f" productos leídos de «{nombre}»" +
                          (f", {len(hojas)} pestañas" if len(hojas) > 1 else ""))
+
+
+# --------------------------------------------------------------------------
+#  El catálogo del Drive
+# --------------------------------------------------------------------------
+@st.cache_data(ttl=600, show_spinner="Leyendo tu catálogo del Drive…")
+def ids_del_drive() -> tuple[set, str]:
+    """Baja «CATALOGO CONVENIO MARCO» del Drive y saca sus ID.
+
+    Diez minutos de cache: es el mismo plazo que usa `app.cargar_catalogo_propio`
+    para el otro catálogo. Suficiente para que ella actualice el archivo y lo
+    vea reflejado en la siguiente vuelta, sin bajarlo en cada clic.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = (f"https://docs.google.com/spreadsheets/d/{CATALOGO_DRIVE}"
+           "/export?format=xlsx")
+    try:
+        peticion = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(peticion, timeout=90) as respuesta:
+            datos = respuesta.read()
+    except urllib.error.HTTPError as error:
+        return set(), (f"El Drive respondió {error.code}. Puede que el archivo "
+                       "haya dejado de estar compartido por enlace.")
+    except Exception as error:
+        return set(), f"No se pudo bajar del Drive: {type(error).__name__}."
+
+    # Si Google devuelve una página en vez del archivo, no es un xlsx: pasa
+    # cuando el enlace dejó de ser público y contesta con el formulario de
+    # acceso. Sin esta comprobación, el lector de más abajo diría «no encontré
+    # ningún ID», que manda a buscar el problema al lado equivocado.
+    if datos[:4] != b"PK\x03\x04":
+        return set(), ("El Drive devolvió una página en vez del archivo: "
+                       "seguramente dejó de estar compartido por enlace.")
+
+    envoltorio = io.BytesIO(datos)
+    envoltorio.name = f"{CATALOGO_NOMBRE}.xlsx"
+    return ids_del_archivo(envoltorio)
 
 
 # --------------------------------------------------------------------------
@@ -162,22 +224,46 @@ def borrar(usuario: dict) -> None:
 #  La pantalla
 # --------------------------------------------------------------------------
 def seccion_mis_productos(usuario: dict) -> set[str]:
-    """El panel donde el cliente carga su catálogo. Devuelve los ID vigentes."""
-    ids = leer(usuario)
+    """El catálogo del cliente. Devuelve los ID vigentes.
+
+    SE LEE SOLO DEL DRIVE. Antes había que subir el archivo a mano cada vez, y
+    Serling lo corrigió el 02-09-2026: el catálogo vive en su Drive y siempre va
+    a vivir ahí, así que el panel lo va a buscar. La carga a mano queda como
+    salida de emergencia —para probar otro archivo, o si el Drive falla—, no
+    como el camino normal.
+    """
+    del_drive, aviso_drive = ids_del_drive()
+    ids = del_drive or leer(usuario)
+    de_donde = "del Drive" if del_drive else "cargados a mano"
 
     titulo = ("Mis productos publicados — " +
-              (f"{len(ids):,}".replace(",", ".") + " cargados" if ids
-               else "todavía sin cargar"))
+              (f"{len(ids):,}".replace(",", ".") + f" {de_donde}" if ids
+               else "no se pudo leer el catálogo"))
     with st.expander(titulo, expanded=not ids):
+        if del_drive:
+            st.success(
+                f"Leídos **{len(del_drive):,}".replace(",", ".") + "** productos "
+                f"de **{CATALOGO_NOMBRE}**, en tu Drive. No hay que subir nada: "
+                "cuando actualices ese archivo, el panel lo toma solo.")
+            if st.button("Volver a leerlo ahora", key="mp_releer",
+                         help="Por si acabas de actualizar el archivo."):
+                ids_del_drive.clear()
+                st.rerun()
+        else:
+            st.error(f"No se pudo leer **{CATALOGO_NOMBRE}** del Drive. {aviso_drive}")
+            st.caption(
+                "Mientras tanto puedes subir el archivo a mano acá abajo, o "
+                "seguir con «Según lo que ya has vendido», que no lo necesita.")
+
         st.caption(
-            "Sube tu catálogo de Convenio Marco —el mismo archivo que usas para "
-            "cotizar— y el panel cruza cada compra contra tus ID. No hace falta "
-            "que digas qué columna es: se buscan los números de 5 dígitos o más "
-            "en todas las pestañas.")
+            f"Se buscan los números de {LARGO_ID} dígitos en todas las pestañas: "
+            "así da igual cómo se llame la columna del ID —«ID REGIÓN CM», «ID "
+            "CONVENIO REGIÓN»— y dónde esté.")
 
         archivo = st.file_uploader(
-            "Tu catálogo", type=["xlsx", "xls", "csv"], key="mp_archivo",
-            help="Vale el catálogo completo, con una pestaña por rubro.")
+            "Subir otro archivo (opcional)", type=["xlsx", "xls", "csv"],
+            key="mp_archivo",
+            help="Solo si quieres probar un catálogo distinto al del Drive.")
 
         if archivo is not None:
             leidos, explicacion = ids_del_archivo(archivo)
@@ -199,9 +285,10 @@ def seccion_mis_productos(usuario: dict) -> set[str]:
                         (st.success if bien else st.error)(aviso)
                         st.rerun()
 
-        if ids:
-            st.caption(f"Hoy hay **{len(ids):,}".replace(",", ".") +
-                       "** productos cargados.")
+        # «Quitarlos todos» solo tiene sentido para lo cargado a mano: lo del
+        # Drive se vuelve a leer solo en la corrida siguiente, así que el botón
+        # no haría nada y quedaría como un botón roto.
+        if ids and not del_drive:
             if st.button("Quitarlos todos", key="mp_borrar"):
                 borrar(usuario)
                 st.rerun()
