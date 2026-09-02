@@ -273,6 +273,76 @@ def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
     return tabla.sort_values("gasto", ascending=False), resumen
 
 
+@st.cache_data(show_spinner="Leyendo qué compran esas instituciones…")
+def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
+                              meses: int = 24) -> pd.DataFrame:
+    """Qué productos compran esas unidades, y cuánto de eso se lo llevó él.
+
+    ES EL PASO SIGUIENTE DE OPORTUNIDADES, pedido por Serling el 01-09-2026:
+    «luego de este paso, deben mostrar los ID que compran esas instituciones
+    según el filtro seleccionado: ID que no tengo / ID que sí tengo».
+
+    La tabla de arriba contesta A QUIEN venderle. Esta contesta QUE venderle,
+    que es la pregunta con la que uno llega a la reunión.
+
+    SE LEE MES A MES Y SE FILTRA AL LEER. Aquí sí hace falta la columna
+    `producto`, que es la cara: 570 MB sobre la bodega entera. Pero se filtra
+    por unidad apenas se lee cada mes y se suelta, así que el peor momento son
+    los ~9,5 MB de un mes. Medido con las 12 unidades de Gendarmería de
+    Valparaíso: 0,4 segundos y 23.536 líneas.
+    """
+    import alertador as _al
+
+    if not codigos or not _al.BODEGA_OC.exists():
+        return pd.DataFrame()
+
+    from datetime import date, timedelta
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    buscadas = set(codigos)
+    trozos = []
+    for archivo in sorted(_al.BODEGA_OC.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            mes = pd.read_parquet(archivo, columns=["unidad", "id_producto",
+                                                    "producto", "total",
+                                                    "rut_proveedor"])
+        except Exception:
+            continue
+        mes = mes[mes["unidad"].astype(str).str.strip().isin(buscadas)]
+        if mes.empty:
+            del mes
+            continue
+        mes["id_producto"] = mes["id_producto"].astype(str).str.strip()
+        mes["mio"] = (mes["rut_proveedor"].astype(str)
+                      .str.replace(".", "", regex=False)
+                      .str.replace("-", "", regex=False)
+                      .str.startswith(cuerpo, na=False))
+        mes["tuyo"] = mes["total"].where(mes["mio"], 0.0)
+        trozos.append(mes.groupby(["id_producto", "producto"], observed=True)
+                      .agg(compran=("total", "sum"),
+                           te_compraron=("tuyo", "sum"),
+                           unidades=("unidad", "nunique"),
+                           proveedores=("rut_proveedor", "nunique"))
+                      .reset_index())
+        del mes
+
+    if not trozos:
+        return pd.DataFrame()
+
+    # Un mismo producto aparece en varios meses: se vuelve a juntar. `unidades`
+    # y `proveedores` se suman por mes y por eso quedan altos; se usa el maximo,
+    # que es el numero honesto («hasta N unidades lo compraron»).
+    junto = pd.concat(trozos, ignore_index=True)
+    return (junto.groupby(["id_producto", "producto"], observed=True)
+            .agg(compran=("compran", "sum"),
+                 te_compraron=("te_compraron", "sum"),
+                 unidades=("unidades", "max"),
+                 proveedores=("proveedores", "max"))
+            .reset_index()
+            .sort_values("compran", ascending=False))
+
+
 def _ponerle_nombre(tabla: pd.DataFrame, unidades: pd.DataFrame) -> pd.DataFrame:
     """Le pega nombre, organismo, región y comuna a cada código de unidad."""
     if not unidades.empty:
@@ -477,6 +547,7 @@ def seccion_oportunidades() -> None:
     # elige va en cápsula, lo que contiene va en rectángulo suave.
     SECCIONES = {
         "A quién venderle": "Las unidades que compran lo tuyo, para filtrar y elegir",
+        "Qué venderles": "Los ID que compran esas instituciones: los que tienes y los que no",
         "Mi cartera": "Las que ya elegiste trabajar — de acá sale el envío del catálogo",
         "Su mercado": "Quién compra, por qué vía y contra quién se compite",
         "A quién visitar": "El itinerario, ordenado por lo que hay para ganar",
@@ -490,8 +561,12 @@ def seccion_oportunidades() -> None:
     seccion = seccion or "A quién venderle"
     st.caption(SECCIONES[seccion])
 
+    if seccion == "Qué venderles":
+        _pantalla_que_venderles(_vista_filtrada(tabla), mis_ids, cuerpo, sello)
+        return
+
     if seccion == "Mi cartera":
-        cartera.seccion_cartera(st.session_state.get("yo", {}))
+        cartera.seccion_cartera(usuario_actual)
         return
 
     if seccion == "Su mercado":
@@ -675,6 +750,149 @@ def seccion_oportunidades() -> None:
                      disabled=marcadas.empty):
             cuantas, aviso = cartera.agregar(st.session_state.get("yo", {}), marcadas)
             (st.success if cuantas else st.warning)(aviso)
+
+
+COLUMNAS_PRODUCTOS = ["id_producto", "producto", "compran", "te_compraron",
+                      "unidades", "proveedores"]
+TITULOS_PRODUCTOS = {
+    "id_producto": "ID CONVENIO MARCO", "producto": "PRODUCTO",
+    "compran": "COMPRAN", "te_compraron": "TE COMPRARON",
+    "unidades": "UNIDADES", "proveedores": "PROVEEDORES",
+}
+
+# Sobre esto la tabla de productos deja de ser util y solo pesa. Con el filtro
+# puesto en una institucion nunca se llega; sin filtro, si.
+TECHO_UNIDADES = 400
+
+
+def _vista_filtrada(tabla: pd.DataFrame) -> pd.DataFrame:
+    """La tabla con los filtros que están puestos, SIN volver a dibujarlos.
+
+    Los selectores se dibujan una sola vez, en «A quién venderle». Esta sección
+    usa lo mismo leyéndolo de `session_state`: si dibujara su propio juego de
+    filtros habría dos sitios donde filtrar lo mismo, que es la forma más
+    segura de que digan cosas distintas.
+    """
+    vista = tabla
+    for clave, columna, fuera in (
+            ("op_situacion", "situacion", False),
+            ("op_region", "region", False),
+            ("op_organismo", "nombre_organismo", False),
+            ("op_unidad", "nombre_unidad", False),
+            ("op_sin_organismo", "nombre_organismo", True),
+            ("op_sin_unidad", "nombre_unidad", True)):
+        elegidos = st.session_state.get(clave) or []
+        if not elegidos or columna not in vista.columns:
+            continue
+        dentro = vista[columna].isin(elegidos)
+        vista = vista[~dentro] if fuera else vista[dentro]
+    return vista
+
+
+def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
+                            sello: str) -> None:
+    """Qué productos compran las unidades filtradas, partidos en tengo / no tengo.
+
+    LA PREGUNTA CON LA QUE SE LLEGA A LA REUNION. «A quién venderle» da la
+    lista de compradores; esto dice qué ponerle sobre la mesa a cada uno, y
+    sobre todo qué de lo que compran **no** está publicado todavía.
+    """
+    st.caption(
+        "Los productos que compran las unidades que tienes filtradas arriba, "
+        "partidos en los que **sí** tienes publicados y los que **no**.")
+
+    codigos = []
+    for columna in ("codigo_unidad", "unidad"):
+        if columna in vista.columns:
+            codigos = [str(x).strip() for x in vista[columna].dropna().unique()]
+            break
+    codigos = [c for c in codigos if c]
+
+    if not codigos:
+        st.info("Primero filtra unidades en **A quién venderle**.")
+        return
+    if len(codigos) > TECHO_UNIDADES:
+        st.warning(
+            f"Tienes **{len(codigos):,}".replace(",", ".") + "** unidades "
+            "filtradas: eso es casi el mercado entero y la lista de productos "
+            "saldría inmanejable. Filtra por institución o por región arriba "
+            f"—hasta {TECHO_UNIDADES}— y vuelve.")
+        return
+
+    st.caption(f"Sobre las **{len(codigos)}** unidades que tienes filtradas.")
+    productos = productos_de_las_unidades(sello, tuple(sorted(codigos)), cuerpo)
+    if productos.empty:
+        st.info("Esas unidades no registran compras en los últimos 24 meses.")
+        return
+
+    productos["lo_tengo"] = productos["id_producto"].isin(mis_ids)
+    tengo = productos[productos["lo_tengo"]]
+    no_tengo = productos[~productos["lo_tengo"]]
+
+    if not mis_ids:
+        st.warning(
+            "Todavía no cargaste tu catálogo, así que no se puede separar lo "
+            "que tienes de lo que no: abajo va **todo lo que compran**. Sube "
+            "tu catálogo en **«Mis productos publicados»**, arriba, y esta "
+            "misma pantalla se parte en dos.")
+    else:
+        total = float(productos["compran"].sum()) or 1.0
+        a, b, c = st.columns(3)
+        a.metric("Compran en total", plata(total),
+                 help="Todo lo que compraron esas unidades en 24 meses")
+        b.metric("De eso, lo tienes publicado", plata(tengo["compran"].sum()),
+                 delta=f"{tengo['compran'].sum() / total * 100:.0f}% del total"
+                       .replace(".", ","), delta_color="off")
+        c.metric("No lo tienes", plata(no_tengo["compran"].sum()),
+                 help="Lo que compran y hoy no puedes ni cotizar")
+
+    st.divider()
+
+    def tabla_de(datos: pd.DataFrame, clave: str, nombre: str) -> None:
+        if datos.empty:
+            st.caption("No hay ninguno en este grupo.")
+            return
+        cuenta, bajar = st.columns([3, 1])
+        with cuenta:
+            st.caption(f"{len(datos):,}".replace(",", ".") +
+                       " productos · " + plata(datos["compran"].sum()))
+        with bajar:
+            exportar.boton_excel(
+                datos[COLUMNAS_PRODUCTOS].rename(columns=TITULOS_PRODUCTOS),
+                nombre=nombre, clave=clave, hoja="Productos", ancho="stretch")
+        st.dataframe(
+            datos[COLUMNAS_PRODUCTOS], width="stretch", hide_index=True, height=420,
+            column_config={
+                "id_producto": st.column_config.TextColumn("ID", width="small"),
+                "producto": st.column_config.TextColumn("Producto", width="large"),
+                "compran": st.column_config.NumberColumn("Compran", format="localized",
+                                                         width="small"),
+                "te_compraron": st.column_config.NumberColumn(
+                    "Te compraron", format="localized", width="small",
+                    help="De eso, cuánto te lo llevaste tú"),
+                "unidades": st.column_config.NumberColumn("Unidades", width="small",
+                                                          help="Cuántas lo compran"),
+                "proveedores": st.column_config.NumberColumn("Prov.", width="small",
+                                                             help="Contra cuántos compites"),
+            })
+
+    if not mis_ids:
+        tabla_de(productos, "prod_todo", f"Productos-{cuerpo}")
+        return
+
+    sin, con = st.tabs([f"ID que NO tengo ({len(no_tengo)})",
+                        f"ID que SÍ tengo ({len(tengo)})"])
+    # Los que NO tiene van PRIMERO y por defecto: son los que no puede cotizar
+    # hoy, o sea la plata que se le está yendo sin que lo sepa. Lo que ya tiene
+    # publicado se lo sabe; lo que le falta, no.
+    with sin:
+        st.caption("Lo que compran y **no tienes publicado**. Cada uno es una "
+                   "venta que hoy no puedes ni cotizar.")
+        tabla_de(no_tengo, "prod_sin", f"ID-que-no-tengo-{cuerpo}")
+    with con:
+        st.caption("Lo que compran y **sí tienes publicado**. Esto se cotiza "
+                   "mañana; lleva estos ID a la reunión.")
+        tabla_de(tengo, "prod_con", f"ID-que-si-tengo-{cuerpo}")
 
 
 def _pantalla_alertas() -> None:
