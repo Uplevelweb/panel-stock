@@ -1,0 +1,102 @@
+========================================================================
+ VISTAS GUARDADAS
+ Para que el filtro de vista de cada vendedor no se pierda al cerrar
+ el panel.
+========================================================================
+
+QUE ES ESTO
+-----------
+Es el tercer filtro de Oportunidades, y es de otra clase que los otros
+dos. Institucion y unidad acotan UNA consulta. La vista guarda TODO el
+conjunto -el RUT, con que comparas, la situacion, la region, las
+instituciones, las unidades y lo que sacaste de la lista- con un nombre,
+para volver manana a lo mismo sin rearmarlo.
+
+La que marques como "de entrada" se aplica sola al abrir la pestana. Eso
+ademas arregla la pantalla vacia: antes decia "Escribe un RUT para
+empezar" y nada mas.
+
+POR QUE ES DEL VENDEDOR Y NO DE LA EMPRESA
+-------------------------------------------
+Al reves que la cartera. Una vista es la forma de trabajar de UNA
+persona: "mis hospitales de Valparaiso", "las municipalidades que nunca
+me han comprado". Si fueran de la cuenta, dos comerciales se pisarian
+los nombres y cada uno veria los recortes del otro.
+
+SIN ESTO EL PANEL FUNCIONA IGUAL
+--------------------------------
+Las vistas se guardan en la sesion y lo dice en pantalla. Se pierden al
+recargar, pero no falla nada.
+
+
+------------------------------------------------------------------------
+ PASO 1 - LA TABLA
+------------------------------------------------------------------------
+Supabase, arriba a la izquierda: SQL Editor. Pegar todo y Run.
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+create table if not exists public.vistas (
+  email             text        not null,
+  nombre            text        not null,
+  de_entrada        boolean     default false,
+  op_rut            text,
+  op_forma          text,
+  op_situacion      jsonb       default '[]'::jsonb,
+  op_region         jsonb       default '[]'::jsonb,
+  op_organismo      jsonb       default '[]'::jsonb,
+  op_unidad         jsonb       default '[]'::jsonb,
+  op_sin_organismo  jsonb       default '[]'::jsonb,
+  op_sin_unidad     jsonb       default '[]'::jsonb,
+  guardada_en       timestamptz default now(),
+  primary key (email, nombre)
+);
+
+-- Para encontrar rapido la vista de entrada de quien acaba de abrir.
+create index if not exists vistas_por_correo
+  on public.vistas (email);
+
+comment on table public.vistas is
+  'Filtros guardados de Oportunidades. Son de la PERSONA (email), no de
+   la cuenta: es su forma de trabajar. La marcada de_entrada se aplica
+   sola al abrir la pestana.';
+
+-- Misma regla que el resto: se prende RLS y no se crean politicas.
+-- El panel entra con la clave secreta, del lado del servidor.
+alter table public.vistas enable row level security;
+
+------------------------------ HASTA AQUI -------------------------------
+
+
+------------------------------------------------------------------------
+ PASO 2 - COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+Pegar esto y Run:
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public'
+   and table_name = 'vistas'
+ order by ordinal_position;
+
+------------------------------ HASTA AQUI -------------------------------
+
+Tiene que devolver DOCE filas, empezando por email y nombre.
+
+
+------------------------------------------------------------------------
+ PASO 3 - PROBARLO EN EL PANEL
+------------------------------------------------------------------------
+1. Oportunidades, escribe tu RUT y aprieta "Ver oportunidades".
+2. Filtra algo: por ejemplo Region de Valparaiso y una institucion.
+3. Abre "Mis vistas guardadas".
+4. Escribe un nombre -"Valparaiso mio"-, marca "De entrada" y aprieta
+   Guardar. Tiene que decir Vista guardada. Si dice "para esta sesion",
+   el Paso 1 no quedo.
+5. Recarga con F5 y vuelve a Oportunidades. Arriba tiene que decir
+   "Abriste con tu vista Valparaiso mio", y la tabla tiene que salir
+   sola, con los filtros ya puestos y SIN que aprietes nada.
+
+Ese paso 5 es la prueba de verdad: si la tabla sale sola, quedo.

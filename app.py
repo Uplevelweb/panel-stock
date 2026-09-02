@@ -2151,6 +2151,27 @@ def aplicar_estilos() -> None:
             .cabecera img {{ width: 54px; }}
             .titulo-panel {{ font-size: 21px; letter-spacing: -0.2px; }}
             .subtitulo-panel {{ font-size: 11px; }}
+
+            /* ---------- LAS TABLAS EN EL TELEFONO ----------
+               Serling lo pidio el 01-09-2026: «para las vistas moviles hasta 10
+               filas; en el PC mostrar todo lo posible».
+
+               Las tablas se piden con alturas de 380 a 520 px pensadas para una
+               pantalla de escritorio. En un telefono eso es casi todo el alto
+               util: se ve la tabla y nada mas, y para llegar al boton de abajo
+               hay que cruzarla entera —y al arrastrar el dedo encima se
+               desplaza la tabla, no la pagina—.
+
+               400 px son ~10 filas mas el encabezado. La tabla sigue teniendo
+               todas sus filas: se desplaza por dentro. Lo que cambia es cuanto
+               ocupa en pantalla.
+
+               Se hace con CSS y no en Python porque Streamlit no sabe el ancho
+               del navegador del lado del servidor: preguntarlo obligaria a una
+               corrida extra en cada carga. */
+            [data-testid="stDataFrame"] {{ max-height: 400px; }}
+            /* Y las columnas de metricas dejan de apretujarse de a cuatro. */
+            [data-testid="stMetricValue"] {{ font-size: 1.35rem; }}
         }}
         </style>
         """,

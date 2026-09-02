@@ -33,6 +33,7 @@ import cartera
 import exportar
 import mis_productos
 import modulo_mercado
+import vistas
 
 CARPETA = Path(__file__).parent
 RUTA_BODEGA = CARPETA / "bodega"
@@ -343,6 +344,15 @@ def seccion_oportunidades() -> None:
         "Marco en sus rubros y qué parte se llevó él. Todo de datos públicos: "
         "no consume consultas del ticket.")
 
+    # LA VISTA DE ENTRADA SE APLICA ANTES QUE NADA, y tiene que ser aquí: para
+    # que Streamlit dibuje un widget ya puesto, su valor tiene que estar en
+    # `session_state` ANTES de crearlo. Un botón «aplicar» que corriera después
+    # no alcanzaría a mover los filtros de esta misma corrida.
+    usuario_actual = st.session_state.get("yo", {})
+    de_entrada = vistas.aplicar_la_de_entrada(usuario_actual)
+    if de_entrada:
+        st.caption(f"Abriste con tu vista **«{de_entrada}»**.")
+
     columna_rut, columna_boton = st.columns([3, 1])
     with columna_rut:
         escrito = st.text_input(
@@ -362,7 +372,11 @@ def seccion_oportunidades() -> None:
     # Y ademas la primera pantalla dejaba de estar vacia. Antes decia solo
     # «Escribe un RUT para empezar» y nada mas: en una demo hay que escribir
     # para que aparezca algo. Serling lo reporto el 01-09-2026.
-    mis_ids = mis_productos.seccion_mis_productos(st.session_state.get("yo", {}))
+    mis_ids = mis_productos.seccion_mis_productos(usuario_actual)
+
+    # El tercer filtro: la vista guardada. Va junto al catálogo porque los dos
+    # son configuración del vendedor, no resultado de una consulta.
+    vistas.barra_de_vistas(usuario_actual)
 
     if not escrito:
         st.info("Escribe un RUT para empezar.")
@@ -525,11 +539,17 @@ def seccion_oportunidades() -> None:
     # situación y región, y no se podía SACAR nada de la lista.
     filtro_situacion, filtro_region = st.columns([2, 2])
     with filtro_situacion:
+        # El `default` se pasa SOLO si la vista guardada no puso ya un valor.
+        # Streamlit avisa —«se creó con default y además se fijó por Session
+        # State»— y descarta el default; funciona igual, pero deja un warning en
+        # el registro en cada carga y es la clase de ruido que después tapa un
+        # aviso de verdad.
+        por_defecto = ({} if "op_situacion" in st.session_state
+                       else {"default": ["Nunca le has vendido", "Estás adentro con poco"]})
         situaciones = st.multiselect(
             "Situación", key="op_situacion",
             options=["Nunca le has vendido", "Estás adentro con poco", "Cliente firme"],
-            default=["Nunca le has vendido", "Estás adentro con poco"],
-            placeholder="Todas")
+            placeholder="Todas", **por_defecto)
     with filtro_region:
         # El `placeholder` va escrito aunque parezca de mas: sin el, Streamlit
         # pone «Choose options» en ingles y queda un cartel en otro idioma en
