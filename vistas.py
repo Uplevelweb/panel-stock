@@ -131,6 +131,12 @@ def aplicar(vista: dict) -> None:
     for campo, defecto in CAMPOS.items():
         if campo in vista and vista[campo] is not None:
             st.session_state[campo] = vista[campo]
+    # La copia que sobrevive al cambio de sección también se pone al día, o la
+    # vista recién aplicada duraría hasta que se mirara otra sección.
+    # Ver `modulo_oportunidades._recordar_filtros`.
+    from modulo_oportunidades import COPIA_FILTROS, FILTROS
+    st.session_state[COPIA_FILTROS] = {
+        clave: list(vista.get(clave) or []) for clave, _, _ in FILTROS}
     # Para que la consulta se lance sola, sin tener que apretar el botón.
     if vista.get("op_rut"):
         st.session_state["op_visto"] = vista["op_rut"]

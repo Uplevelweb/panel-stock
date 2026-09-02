@@ -466,6 +466,10 @@ def seccion_oportunidades() -> None:
     if de_entrada:
         st.caption(f"Abriste con tu vista **«{de_entrada}»**.")
 
+    # Y antes de dibujar un solo selector, se reponen los filtros que Streamlit
+    # borró al cambiar de sección. Ver `_recordar_filtros`.
+    _restaurar_filtros()
+
     columna_rut, columna_boton = st.columns([3, 1])
     with columna_rut:
         escrito = st.text_input(
@@ -637,15 +641,63 @@ def seccion_oportunidades() -> None:
     c.metric("Su parte", f"{resumen['parte']:.1f}%".replace(".", ","))
     d.metric("Unidades que compran", f"{resumen['unidades']:,}".replace(",", "."))
 
+    # ----------------------------------------------------------------------
+    #  Los dos caminos
+    # ----------------------------------------------------------------------
+    # ANTES ESTO ERAN TRES NUMEROS Y NADA MAS. «Nunca le has vendido: 1.718» se
+    # leia y no llevaba a ninguna parte: para trabajar esas 1.718 habia que
+    # bajar hasta los filtros, entender que «Situacion» era el que servia, y
+    # desmarcar la otra opcion a mano. Tres pasos para lo que se hace siempre.
+    #
+    # Ahora son dos botones que dejan la tabla filtrada de un click. La idea es
+    # del boceto que mando Serling el 01-09-2026, y es buena: son los dos
+    # caminos que de verdad se toman —conquistar o profundizar— y merecen ser
+    # la decision visible de la pantalla, no una nota al pie.
+    #
+    # SE ESCRIBE `op_situacion` Y SE VUELVE A CORRER. Escribirlo basta para que
+    # la tabla salga filtrada —el multiselect se dibuja mas abajo y nace con el
+    # valor puesto—, pero el boton ya se dibujo con el estado viejo y quedaba
+    # encendido aunque uno ya estuviera en ese camino. Un boton que se puede
+    # apretar y no hace nada es peor que no tenerlo. Con `rerun` los dos leen
+    # lo mismo. La corrida extra es barata: la bodega esta cacheada.
     nunca = tabla[tabla["situacion"] == "Nunca le has vendido"]
     poco = tabla[tabla["situacion"] == "Estás adentro con poco"]
-    e, f, g = st.columns(3)
-    e.metric("Nunca le has vendido", f"{len(nunca):,}".replace(",", "."),
-             help=f"{plata(nunca['gasto'].sum())} que hoy se lleva otro")
-    f.metric("Estás adentro con poco", f"{len(poco):,}".replace(",", "."),
-            help=f"Compran {plata(poco['gasto'].sum())}, tiene {plata(poco['vendido'].sum())}")
-    g.metric("Por ganar", plata(tabla["por_ganar"].sum()),
-             help="Todo lo que compran estas unidades y no le compran a él")
+    puesto = st.session_state.get("op_situacion") or []
+
+    camino_a, camino_b = st.columns(2, gap="medium")
+    with camino_a:
+        with st.container(border=True):
+            st.markdown(f"#### Conquistar · {len(nunca):,}".replace(",", "."))
+            st.caption(
+                f"Compran {plata(nunca['gasto'].sum())} de lo tuyo y **nunca "
+                "te han comprado**. Es donde está la plata que hoy se lleva otro.")
+            if st.button("Ver solo estas", key="op_camino_a", type="primary",
+                         width="stretch", disabled=puesto == ["Nunca le has vendido"]):
+                st.session_state["op_situacion"] = ["Nunca le has vendido"]
+                st.rerun()
+
+    with camino_b:
+        with st.container(border=True):
+            st.markdown(f"#### Profundizar · {len(poco):,}".replace(",", "."))
+            st.caption(
+                f"Ya te compran, pero poco: {plata(poco['vendido'].sum())} de "
+                f"{plata(poco['gasto'].sum())}. Acá no hay que abrir la puerta, "
+                "ya está abierta.")
+            if st.button("Ver solo estas", key="op_camino_b", width="stretch",
+                         disabled=puesto == ["Estás adentro con poco"]):
+                st.session_state["op_situacion"] = ["Estás adentro con poco"]
+                st.rerun()
+
+    izquierda, derecha = st.columns([3, 1])
+    with izquierda:
+        st.caption(f"En total hay **{plata(tabla['por_ganar'].sum())}** por ganar: "
+                   "lo que compran estas unidades y hoy no te compran a ti.")
+    with derecha:
+        if puesto and len(puesto) < 3:
+            if st.button("Ver las dos", key="op_camino_todo", width="stretch"):
+                st.session_state["op_situacion"] = [
+                    "Nunca le has vendido", "Estás adentro con poco"]
+                st.rerun()
 
     st.divider()
 
@@ -726,6 +778,11 @@ def seccion_oportunidades() -> None:
         vista = vista[~vista["nombre_organismo"].isin(fuera_organismos)]
     if fuera_unidades:
         vista = vista[~vista["nombre_unidad"].isin(fuera_unidades)]
+
+    # Con los seis selectores ya dibujados y leídos, se guarda la copia. Tiene
+    # que ser ACÁ y no antes: antes de dibujarlos, `session_state` todavía
+    # tiene los valores de la corrida pasada.
+    _recordar_filtros()
 
     # ----------------------------------------------------------------------
     #  La tabla
@@ -812,23 +869,61 @@ TITULOS_PRODUCTOS = {
 TECHO_UNIDADES = 400
 
 
+# Los seis filtros de la tabla: la llave del widget, la columna que miran y si
+# suman o restan. En un solo lugar para que dibujarlos, guardarlos y aplicarlos
+# no puedan desalinearse.
+FILTROS = (
+    ("op_situacion", "situacion", False),
+    ("op_region", "region", False),
+    ("op_organismo", "nombre_organismo", False),
+    ("op_unidad", "nombre_unidad", False),
+    ("op_sin_organismo", "nombre_organismo", True),
+    ("op_sin_unidad", "nombre_unidad", True),
+)
+COPIA_FILTROS = "op_filtros_guardados"
+
+
+def _recordar_filtros() -> None:
+    """Guarda una copia de los filtros FUERA de los widgets.
+
+    STREAMLIT BORRA EL ESTADO DE UN WIDGET QUE DEJA DE DIBUJARSE, y las cinco
+    secciones de esta pestaña se dibujan de a una: apenas se sale de «A quién
+    venderle», los seis selectores desaparecen y con ellos su valor.
+
+    Comprobado el 02-09-2026: se filtraba Valparaíso + Conquistar (191 filas),
+    se miraba «Qué venderles» y al volver la tabla estaba otra vez en 1.882.
+    Se perdía el trabajo con solo mirar otra sección.
+
+    La copia va en una llave que NO es de ningún widget, así que Streamlit no
+    la toca nunca.
+    """
+    st.session_state[COPIA_FILTROS] = {
+        clave: list(st.session_state.get(clave) or []) for clave, _, _ in FILTROS}
+
+
+def _restaurar_filtros() -> None:
+    """Devuelve los filtros a sus widgets si Streamlit los borró.
+
+    Va al principio de la pestaña, antes de dibujar nada: un widget solo nace
+    con un valor puesto si ese valor ya estaba en `session_state`.
+    """
+    for clave, valor in (st.session_state.get(COPIA_FILTROS) or {}).items():
+        if clave not in st.session_state:
+            st.session_state[clave] = valor
+
+
 def _vista_filtrada(tabla: pd.DataFrame) -> pd.DataFrame:
     """La tabla con los filtros que están puestos, SIN volver a dibujarlos.
 
-    Los selectores se dibujan una sola vez, en «A quién venderle». Esta sección
-    usa lo mismo leyéndolo de `session_state`: si dibujara su propio juego de
-    filtros habría dos sitios donde filtrar lo mismo, que es la forma más
-    segura de que digan cosas distintas.
+    Los selectores se dibujan una sola vez, en «A quién venderle». Las demás
+    secciones usan lo mismo leyendo la copia: si cada una dibujara su propio
+    juego de filtros habría varios sitios donde filtrar lo mismo, que es la
+    forma más segura de que digan cosas distintas.
     """
+    guardado = st.session_state.get(COPIA_FILTROS) or {}
     vista = tabla
-    for clave, columna, fuera in (
-            ("op_situacion", "situacion", False),
-            ("op_region", "region", False),
-            ("op_organismo", "nombre_organismo", False),
-            ("op_unidad", "nombre_unidad", False),
-            ("op_sin_organismo", "nombre_organismo", True),
-            ("op_sin_unidad", "nombre_unidad", True)):
-        elegidos = st.session_state.get(clave) or []
+    for clave, columna, fuera in FILTROS:
+        elegidos = st.session_state.get(clave) or guardado.get(clave) or []
         if not elegidos or columna not in vista.columns:
             continue
         dentro = vista[columna].isin(elegidos)
