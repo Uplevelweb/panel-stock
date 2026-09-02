@@ -393,16 +393,28 @@ def seccion_oportunidades() -> None:
     # ----------------------------------------------------------------------
     # Serling lo pidio el 01-09-2026. No compiten: contestan preguntas
     # distintas y un vendedor necesita las dos. Ver `mis_productos.py`.
-    # El selector solo aparece si hay catalogo cargado: sin el, la segunda
-    # opcion no tendria nada que cruzar y seria un boton que frustra.
-    if mis_ids:
-        forma = st.radio(
-            "Con qué comparar", horizontal=True, key="op_forma",
-            options=["Según lo que ya has vendido", "Contra mis ID publicados"],
-            captions=["Los rubros salen solos del RUT. No hay que cargar nada.",
-                      f"Producto por producto, contra los {len(mis_ids):,}".replace(",", ".") +
-                      " que subiste."])
-    else:
+    # EL SELECTOR SE DIBUJA SIEMPRE, haya catalogo o no.
+    #
+    # Antes solo aparecia si ya habia ID cargados, y eso lo dejaba escondido
+    # justo para quien todavia no sabe que existe: para llegar a el habia que
+    # adivinar que primero hay que subir un archivo. Serling pidio que la
+    # eleccion fuera «con un click», y un selector que aparece a veces no lo es.
+    #
+    # Sin catalogo la segunda opcion se puede elegir igual, y lo que sale es la
+    # explicacion de que le falta, no un error ni una pantalla vacia.
+    forma = st.radio(
+        "Con qué comparar", horizontal=True, key="op_forma",
+        options=["Según lo que ya has vendido", "Contra mis ID publicados"],
+        captions=["Los rubros salen solos del RUT. No hay que cargar nada.",
+                  (f"Producto por producto, contra los {len(mis_ids):,}".replace(",", ".") +
+                   " que subiste.") if mis_ids
+                  else "Producto por producto. Necesita tu catálogo, arriba."])
+
+    if forma == "Contra mis ID publicados" and not mis_ids:
+        st.info(
+            "Para comparar contra tus ID falta cargar el catálogo: ábrelo arriba "
+            "en **«Mis productos publicados»** y sube el mismo `.xlsx` que usas "
+            "para cotizar. Mientras tanto se muestra lo de siempre.")
         forma = "Según lo que ya has vendido"
 
     if forma == "Contra mis ID publicados":
