@@ -273,6 +273,49 @@ def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
     return tabla.sort_values("gasto", ascending=False), resumen
 
 
+@st.cache_data(show_spinner=False)
+def ids_que_ya_vende(sello: str, cuerpo: str, meses: int = 24) -> set[str]:
+    """Los ID de producto que ese RUT ya vendió, en cualquier institución.
+
+    ES LA OTRA VARA CON QUE MEDIR. La sección «Qué venderles» parte los
+    productos en dos, y contra qué se parten depende del selector de arriba:
+
+      Según lo que ya has vendido   la vara es ESTA: lo que el RUT ya vendió.
+                                    No hay que cargar nada, sale de la bodega.
+      Contra mis ID publicados      la vara es el catálogo que subió el cliente.
+
+    Son dos preguntas distintas y las dos sirven. «Ya lo vendo» dice dónde
+    tienes historia; «lo tengo publicado» dice dónde puedes cotizar mañana. Un
+    producto puede estar publicado y no haberse vendido nunca, y al revés
+    —vendido por otra vía y hoy fuera de catálogo—.
+
+    No se pide la columna `producto`: solo hacen falta los ID, así que esto son
+    los mismos 0,5 segundos que el resto de las lecturas livianas.
+    """
+    import alertador as _al
+
+    if not cuerpo or not _al.BODEGA_OC.exists():
+        return set()
+
+    from datetime import date, timedelta
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    suyos: set[str] = set()
+    for archivo in sorted(_al.BODEGA_OC.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            mes = pd.read_parquet(archivo, columns=["id_producto", "rut_proveedor"])
+        except Exception:
+            continue
+        mios = (mes["rut_proveedor"].astype(str)
+                .str.replace(".", "", regex=False)
+                .str.replace("-", "", regex=False)
+                .str.startswith(cuerpo, na=False))
+        suyos.update(mes.loc[mios, "id_producto"].astype(str).str.strip())
+        del mes
+    return suyos
+
+
 @st.cache_data(show_spinner="Leyendo qué compran esas instituciones…")
 def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
                               meses: int = 24) -> pd.DataFrame:
@@ -562,7 +605,11 @@ def seccion_oportunidades() -> None:
     st.caption(SECCIONES[seccion])
 
     if seccion == "Qué venderles":
-        _pantalla_que_venderles(_vista_filtrada(tabla), mis_ids, cuerpo, sello)
+        # `resumen["por_ids"]` dice con qué vara se calculó todo lo de arriba.
+        # Esta sección usa la misma, para que no haya dos criterios distintos
+        # en la misma pestaña.
+        _pantalla_que_venderles(_vista_filtrada(tabla), mis_ids, cuerpo, sello,
+                                bool(resumen.get("por_ids")))
         return
 
     if seccion == "Mi cartera":
@@ -790,16 +837,36 @@ def _vista_filtrada(tabla: pd.DataFrame) -> pd.DataFrame:
 
 
 def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
-                            sello: str) -> None:
-    """Qué productos compran las unidades filtradas, partidos en tengo / no tengo.
+                            sello: str, por_ids: bool) -> None:
+    """Qué productos compran las unidades filtradas, partidos en dos.
 
     LA PREGUNTA CON LA QUE SE LLEGA A LA REUNION. «A quién venderle» da la
     lista de compradores; esto dice qué ponerle sobre la mesa a cada uno, y
-    sobre todo qué de lo que compran **no** está publicado todavía.
+    sobre todo qué de lo que compran se le está escapando.
+
+    CONTRA QUE SE PARTE LO DECIDE EL SELECTOR DE ARRIBA, el mismo «Con qué
+    comparar» que manda en el resto de la pestaña. Serling lo pidió el
+    01-09-2026 y tiene razón: dos varas distintas en la misma pantalla, una
+    arriba y otra acá, es la forma más segura de que los números no cuadren.
+
+      Contra mis ID publicados      la vara es el catálogo que subió.
+      Según lo que ya has vendido   la vara es lo que el RUT ya vendió, que
+                                    sale solo de la bodega y no necesita
+                                    cargar nada. Así esta pantalla sirve
+                                    desde el primer minuto.
     """
-    st.caption(
-        "Los productos que compran las unidades que tienes filtradas arriba, "
-        "partidos en los que **sí** tienes publicados y los que **no**.")
+    if por_ids:
+        referencia, etiqueta_si, etiqueta_no = mis_ids, "SÍ tengo", "NO tengo"
+        st.caption(
+            "Los productos que compran las unidades filtradas arriba, partidos "
+            "según **tu catálogo**: los que tienes publicados y los que no.")
+    else:
+        referencia = ids_que_ya_vende(sello, cuerpo)
+        etiqueta_si, etiqueta_no = "ya vendo", "nunca he vendido"
+        st.caption(
+            "Los productos que compran las unidades filtradas arriba, partidos "
+            "según **lo que ya has vendido**: los que ya te compran a ti en "
+            "alguna parte y los que nunca.")
 
     codigos = []
     for columna in ("codigo_unidad", "unidad"):
@@ -825,26 +892,32 @@ def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
         st.info("Esas unidades no registran compras en los últimos 24 meses.")
         return
 
-    productos["lo_tengo"] = productos["id_producto"].isin(mis_ids)
+    productos["lo_tengo"] = productos["id_producto"].isin(referencia)
     tengo = productos[productos["lo_tengo"]]
     no_tengo = productos[~productos["lo_tengo"]]
 
-    if not mis_ids:
+    if not referencia:
         st.warning(
             "Todavía no cargaste tu catálogo, así que no se puede separar lo "
             "que tienes de lo que no: abajo va **todo lo que compran**. Sube "
             "tu catálogo en **«Mis productos publicados»**, arriba, y esta "
-            "misma pantalla se parte en dos.")
+            "misma pantalla se parte en dos."
+            if por_ids else
+            "Ese RUT no registra ventas en la bodega, así que no hay con qué "
+            "comparar: abajo va **todo lo que compran**.")
     else:
         total = float(productos["compran"].sum()) or 1.0
         a, b, c = st.columns(3)
         a.metric("Compran en total", plata(total),
                  help="Todo lo que compraron esas unidades en 24 meses")
-        b.metric("De eso, lo tienes publicado", plata(tengo["compran"].sum()),
+        b.metric("De eso, lo tienes publicado" if por_ids else "De eso, ya lo vendes",
+                 plata(tengo["compran"].sum()),
                  delta=f"{tengo['compran'].sum() / total * 100:.0f}% del total"
                        .replace(".", ","), delta_color="off")
-        c.metric("No lo tienes", plata(no_tengo["compran"].sum()),
-                 help="Lo que compran y hoy no puedes ni cotizar")
+        c.metric("No lo tienes" if por_ids else "Nunca lo has vendido",
+                 plata(no_tengo["compran"].sum()),
+                 help="Lo que compran y hoy no puedes ni cotizar" if por_ids
+                      else "Lo que compran y tú nunca le has vendido a nadie")
 
     st.divider()
 
@@ -876,22 +949,28 @@ def _pantalla_que_venderles(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
                                                              help="Contra cuántos compites"),
             })
 
-    if not mis_ids:
+    if not referencia:
         tabla_de(productos, "prod_todo", f"Productos-{cuerpo}")
         return
 
-    sin, con = st.tabs([f"ID que NO tengo ({len(no_tengo)})",
-                        f"ID que SÍ tengo ({len(tengo)})"])
+    sin, con = st.tabs([f"ID que {etiqueta_no} ({len(no_tengo)})",
+                        f"ID que {etiqueta_si} ({len(tengo)})"])
     # Los que NO tiene van PRIMERO y por defecto: son los que no puede cotizar
     # hoy, o sea la plata que se le está yendo sin que lo sepa. Lo que ya tiene
     # publicado se lo sabe; lo que le falta, no.
     with sin:
-        st.caption("Lo que compran y **no tienes publicado**. Cada uno es una "
-                   "venta que hoy no puedes ni cotizar.")
+        st.caption(
+            "Lo que compran y **no tienes publicado**. Cada uno es una venta "
+            "que hoy no puedes ni cotizar." if por_ids else
+            "Lo que compran y **nunca le has vendido a nadie**. Es mercado "
+            "nuevo: hay que ver si lo puedes ofrecer.")
         tabla_de(no_tengo, "prod_sin", f"ID-que-no-tengo-{cuerpo}")
     with con:
-        st.caption("Lo que compran y **sí tienes publicado**. Esto se cotiza "
-                   "mañana; lleva estos ID a la reunión.")
+        st.caption(
+            "Lo que compran y **sí tienes publicado**. Esto se cotiza mañana; "
+            "lleva estos ID a la reunión." if por_ids else
+            "Lo que compran y **ya vendes** en alguna parte. Acá no hay que "
+            "convencer de nada: ya lo haces, solo que a otros.")
         tabla_de(tengo, "prod_con", f"ID-que-si-tengo-{cuerpo}")
 
 
