@@ -168,7 +168,8 @@ def guardar_en_supabase(config: dict) -> tuple[bool, str]:
 
         # El filtro se reemplaza entero: es mas simple y no deja restos.
         llamar(f"filtros?suscriptor_id=eq.{suscriptor_id}", [], metodo="DELETE")
-        llamar("filtros", [{
+
+        filtro = {
             "suscriptor_id": suscriptor_id,
             "rut_proveedor": config.get("rut_proveedor") or None,
             "correos_envio": config.get("correos_envio") or [],
@@ -176,18 +177,39 @@ def guardar_en_supabase(config: dict) -> tuple[bool, str]:
             "rubros": config.get("rubros") or [],
             "palabras_clave": config.get("palabras_clave") or [],
             "regiones": config.get("regiones") or [],
-            # Las dos columnas nuevas del 01-09-2026. Las crea
-            # `alertas-filtro-fino-para-copiar.txt`; mientras no existan,
-            # Supabase responde 400 y se avisa en pantalla sin perder el resto.
-            "instituciones": config.get("instituciones") or [],
-            "unidades": config.get("unidades") or [],
             "monto_minimo": int(config.get("monto_minimo") or 0),
             "frecuencia": "diaria",
             "incluye_licitaciones": bool(config.get("incluye_licitaciones", True)),
             "incluye_compras_agiles": bool(config.get("incluye_compras_agiles", True)),
-        }])
+        }
+
+        # LAS DOS COLUMNAS NUEVAS DEL 01-09-2026 SE MANDAN APARTE Y SE PUEDEN
+        # CAER SOLAS. Las crea `alertas-filtro-fino-para-copiar.txt`, y hasta
+        # que ese SQL no se corra la columna no existe: PostgREST contesta 400 y
+        # se perdia el guardado ENTERO. O sea, una funcion nueva dejaba de
+        # funcionar la que ya andaba, que es lo peor que puede pasar.
+        #
+        # Asi que se intenta con ellas y, si Supabase las rechaza, se guarda sin
+        # ellas y se avisa. El filtro grueso —rubros, region, monto— queda igual.
+        finos = {"instituciones": config.get("instituciones") or [],
+                 "unidades": config.get("unidades") or []}
+        aviso_extra = ""
+        try:
+            llamar("filtros", [dict(filtro, **finos)])
+        except urllib.error.HTTPError as error:
+            detalle = error.read().decode("utf-8", "replace")
+            if error.code == 400 and ("instituciones" in detalle or "unidades" in detalle):
+                llamar("filtros", [filtro])
+                if any(finos.values()):
+                    aviso_extra = (" **Ojo:** el filtro por institución y unidad "
+                                   "no quedó guardado — falta correr "
+                                   "`alertas-filtro-fino-para-copiar.txt` en Supabase.")
+            else:
+                raise
+
         hora = int(config.get("hora_envio") or 8)
-        return True, f"Guardado. El correo sale de lunes a viernes a las {hora}:00."
+        return True, (f"Guardado. El correo sale de lunes a viernes a las "
+                      f"{hora}:00.{aviso_extra}")
     except urllib.error.HTTPError as error:
         return False, f"Supabase respondió {error.code}: {error.read().decode('utf-8')[:200]}"
     except Exception as error:
