@@ -1,0 +1,123 @@
+========================================================================
+ LA CARTERA
+ La tabla que une las dos mitades del sistema: se elige en el panel de
+ Oportunidades y la lee el panel de envio del catalogo.
+========================================================================
+
+QUE ES ESTO
+-----------
+Hasta ahora el negocio estaba cortado en dos y las dos mitades no se
+hablaban:
+
+  Oportunidades   te mostraba 235 unidades que compran lo que vendes y
+                  nunca te compraron. Y ahi terminaba.
+  Panel de envio  le mandaba el catalogo a una lista fija de 224
+                  contactos escrita a mano en la planilla.
+
+Las dos listas nunca se cruzaron: el panel decia a quien venderle y el
+envio le escribia a otra gente.
+
+La cartera es lo que las une. Marcas unidades en Oportunidades, quedan
+guardadas aca, y de aca las saca el envio.
+
+Decidido contigo el 01-09-2026: datos unidos en Supabase, envio en Gmail.
+
+SIN ESTO EL PANEL FUNCIONA IGUAL
+--------------------------------
+Si no corres esto, la cartera se arma pero vive solo mientras tengas el
+panel abierto, y lo dice en pantalla («para esta sesion»). No aparece
+ningun error rojo.
+
+
+------------------------------------------------------------------------
+ PASO 1 - LA TABLA
+------------------------------------------------------------------------
+Supabase, arriba a la izquierda: SQL Editor. Pegar todo esto y Run.
+
+Lleva "if not exists": se puede correr dos veces sin miedo.
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+create table if not exists public.cartera (
+  cuenta_id         uuid        not null,
+  codigo_unidad     text        not null,
+  nombre_unidad     text,
+  nombre_organismo  text,
+  region            text,
+  comuna            text,
+  gasto             numeric,
+  por_ganar         numeric,
+  situacion         text,
+  nota              text,
+  agregada_por      text,
+  agregada_en       timestamptz default now(),
+  primary key (cuenta_id, codigo_unidad)
+);
+
+-- Para que el panel de envio pueda pedir "la cartera de esta empresa"
+-- sin recorrer la tabla entera.
+create index if not exists cartera_por_cuenta
+  on public.cartera (cuenta_id);
+
+comment on table public.cartera is
+  'Unidades compradoras que una empresa decidio trabajar. Se eligen en el
+   panel de Oportunidades (Streamlit) y las lee el panel de envio del
+   catalogo (Apps Script). Es el unico lugar que los dos lados comparten.';
+
+comment on column public.cartera.gasto is
+  'Foto del dia en que se agrego, no el numero de hoy. Apps Script no
+   puede recalcularlo, y ademas sirve para comparar despues.';
+
+-- Misma regla que cuentas y usuarios: se prende RLS y NO se crean
+-- politicas. Nadie entra con la clave publica. Los dos paneles entran con
+-- la clave secreta, del lado del servidor, que se salta RLS.
+alter table public.cartera enable row level security;
+
+------------------------------ HASTA AQUI -------------------------------
+
+
+------------------------------------------------------------------------
+ PASO 2 - COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+En el mismo SQL Editor, pegar esto y Run:
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public'
+   and table_name = 'cartera'
+ order by ordinal_position;
+
+------------------------------ HASTA AQUI -------------------------------
+
+Tiene que devolver DOCE filas, empezando por cuenta_id (uuid) y
+codigo_unidad (text). Si devuelve cero, el Paso 1 no corrio.
+
+
+------------------------------------------------------------------------
+ PASO 3 - PROBARLO EN EL PANEL
+------------------------------------------------------------------------
+1. Abre el panel, pestana Oportunidades, escribe tu RUT y aprieta
+   "Ver oportunidades".
+2. En "A quien venderle", marca tres o cuatro filas de la tabla (hay una
+   casilla al principio de cada fila).
+3. Abajo aparece "3 marcadas - compran $X - por ganar $Y". Aprieta
+   "Agregar a mi cartera".
+4. Tiene que decir "quedaron en tu cartera". Si dice "para esta sesion",
+   el Paso 1 no quedo.
+5. Anda a la seccion "Mi cartera": ahi estan.
+6. Recarga con F5 y vuelve a entrar. Tienen que seguir ahi. Esa es la
+   prueba de verdad.
+
+
+------------------------------------------------------------------------
+ LO QUE VIENE DESPUES, Y QUE TODAVIA NO ESTA
+------------------------------------------------------------------------
+Esta es la mitad de Streamlit. Falta que el panel de envio del catalogo
+LEA esta tabla, para que la lista de destinatarios salga de tu cartera en
+vez de la planilla.
+
+Eso es un cambio en Apps Script y necesita una cosa tuya que yo no puedo
+hacer: guardar la clave secreta de Supabase en las Propiedades del
+Script. Cuando lleguemos ahi te paso los pasos numerados.

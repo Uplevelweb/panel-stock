@@ -411,8 +411,12 @@ def pendientes_de_bienvenida(suscriptores: list[dict]) -> list[dict]:
     clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
 
     if url and clave:
+        # `confirmado_en=not.is.null` es el doble opt-in (31-08-2026): nadie
+        # recibe su resumen hasta que hace clic en el correo de confirmacion.
+        # Sin esta condicion, la confirmacion no sirve de nada.
         consulta = (f"{url}/rest/v1/suscriptores?select=id"
-                    "&activo=eq.true&bienvenida_enviada=is.null")
+                    "&activo=eq.true&bienvenida_enviada=is.null"
+                    "&confirmado_en=not.is.null")
         peticion = urllib.request.Request(consulta, headers={
             "apikey": clave, "Authorization": f"Bearer {clave}",
             "Accept": "application/json"})
@@ -1435,6 +1439,32 @@ def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
     if regiones:
         suya = sin_tildes(oportunidad.get("region") or "")
         if suya and not any(sin_tildes(r) in suya or suya in sin_tildes(r) for r in regiones):
+            return 0
+
+    # INSTITUCION Y UNIDAD. Agregados el 01-09-2026 a pedido de Serling: la
+    # region sola es demasiado ancha para alguien que atiende a Gendarmeria en
+    # todo Chile, o a tres hospitales de una region.
+    #
+    # LOS DOS FILTROS SON OPCIONALES Y SE CAEN ABIERTOS: si la clave no viene
+    # —que es como llegan todos los suscriptores de antes de esta fecha— no
+    # filtran nada. Un filtro nuevo no puede dejar a nadie sin su correo.
+    #
+    # La institucion se compara por TEXTO y «contiene», igual que la region: el
+    # nombre del organismo viene escrito de varias formas segun de que API
+    # salga. La unidad se compara por CODIGO y exacto, porque el codigo si es
+    # el mismo en todas partes y los nombres se repiten —hay decenas de
+    # «Adquisiciones» de organismos distintos—.
+    instituciones = suscriptor.get("instituciones") or []
+    if instituciones:
+        suya = sin_tildes(oportunidad.get("organismo") or "")
+        if suya and not any(sin_tildes(i) in suya or suya in sin_tildes(i)
+                            for i in instituciones):
+            return 0
+
+    unidades = suscriptor.get("unidades") or []
+    if unidades:
+        suya = str(oportunidad.get("unidad") or "").strip()
+        if suya and suya not in {str(u).strip() for u in unidades}:
             return 0
 
     minimo = suscriptor.get("monto_minimo") or 0

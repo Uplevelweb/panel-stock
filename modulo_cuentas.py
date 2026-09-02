@@ -461,10 +461,22 @@ def _guardar_usuario(cuenta_id: str, email: str, nombre: str, rol: str,
     if rol not in ROLES:
         return False, "Rol desconocido."
 
+    # NOMBRE Y APELLIDO, OBLIGATORIO. Hasta el 01-09-2026 el nombre era
+    # opcional y se guardaba vacio. Una tabla de equipo con correos sueltos y
+    # sin nombre no sirve para repartir una cartera: hay que saber quien es
+    # cada uno. Lo pidio Serling.
+    #
+    # Se piden dos palabras, no solo texto: «Juan» no identifica a nadie en una
+    # empresa. Se aceptan apellidos compuestos y particulas («de la Fuente»)
+    # porque la regla es «al menos dos», no «exactamente dos».
+    nombre = " ".join(str(nombre or "").split())
+    if len(nombre.split()) < 2:
+        return False, "Falta el nombre y el apellido de esa persona."
+
     filas = _pedir("usuarios?on_conflict=email", "POST", [{
         "cuenta_id": cuenta_id,
         "email": email,
-        "nombre": (nombre or "").strip() or None,
+        "nombre": nombre,
         "rol": rol,
         "regiones": regiones or [],
         "comunas": comunas or [],
@@ -474,6 +486,27 @@ def _guardar_usuario(cuenta_id: str, email: str, nombre: str, rol: str,
     if filas is None:
         return False, "No se pudo guardar. Revisa las credenciales de Supabase."
     return True, f"{email} quedó como {rol}."
+
+
+# Los correos gratuitos mas usados en Chile. La lista se queda corta a
+# proposito: es para AVISAR, no para bloquear.
+CORREOS_PERSONALES = {
+    "gmail.com", "hotmail.com", "hotmail.cl", "outlook.com", "outlook.cl",
+    "live.cl", "live.com", "yahoo.com", "yahoo.es", "icloud.com", "me.com",
+}
+
+
+def es_correo_personal(email: str) -> bool:
+    """¿Es un correo gratuito y no el de la empresa?
+
+    SE AVISA, NO SE IMPIDE. Serling pidió que la gente entre con su correo
+    laboral, y tiene razón: el correo es la identidad de la cuenta y un Gmail
+    personal se lo lleva la persona cuando se va. Pero hay empresas chicas que
+    de verdad trabajan con Gmail —se va a topar con eso en la feria— y dejar
+    fuera a un cliente que quiere pagar es peor que el desorden que evita.
+    """
+    email = str(email or "").strip().lower()
+    return email.split("@")[-1] in CORREOS_PERSONALES if "@" in email else False
 
 
 def _cambiar_estado(email: str, activo: bool) -> bool:
@@ -509,9 +542,17 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
         st.caption(f"Motivo exacto: {usuario.get('motivo')}.")
         return
 
-    if usuario.get("rol") != "admin":
+    # EL SOPORTE DE UPLEVEL TAMBIEN ADMINISTRA. Hasta el 01-09-2026 esta puerta
+    # pedia `rol == "admin"` a secas, y dejaba afuera a `superadmin` —que es el
+    # rol de Uplevel y ve TODAS las cuentas—. O sea: quien puede entrar a
+    # cualquier empresa no podia editar el equipo de ninguna.
+    #
+    # Y el mensaje mentia dos veces: decia «entras como comercial» con el rol
+    # escrito a mano, fuera cual fuera el de verdad. Serling lo vio en pantalla
+    # entrando como superadmin.
+    if usuario.get("rol") not in ("admin", "superadmin"):
         st.warning("Esta pantalla es solo para el administrador de la cuenta.")
-        st.caption(f"Tú entras como **comercial** y ves: "
+        st.caption(f"Tú entras como **{usuario.get('rol') or 'sin rol'}** y ves: "
                    f"{resumen_de_territorio(usuario)}.")
         return
 
@@ -550,9 +591,13 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
     with st.form("equipo_alta", clear_on_submit=False):
         arriba_izq, arriba_der = st.columns(2)
         with arriba_izq:
-            correo = st.text_input("Correo", placeholder="vendedor@empresa.cl")
+            correo = st.text_input(
+                "Correo laboral", placeholder="vendedor@empresa.cl",
+                help="El de la empresa. Un correo personal se lo lleva la "
+                     "persona el día que se va, y con él se va su cartera.")
         with arriba_der:
-            nombre = st.text_input("Nombre", placeholder="Nombre y apellido")
+            nombre = st.text_input("Nombre y apellido",
+                                   placeholder="Nombre y apellido")
 
         rol = st.radio("Rol", ROLES, horizontal=True,
                        help="El admin ve toda la empresa y puede administrar "
@@ -572,8 +617,18 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
                 elegidas_regiones, elegidas_comunas, usuario["email"])
             if bien:
                 _buscar_usuario.clear()
-                st.success(aviso)
-                st.rerun()
+                if es_correo_personal(correo):
+                    # Se avisa y se guarda igual. No se corta la sesion con un
+                    # `rerun` para que el aviso alcance a leerse.
+                    st.success(aviso)
+                    st.warning(
+                        f"Ojo: **{correo.strip().lower()}** es un correo "
+                        "personal, no de la empresa. Queda guardado igual, "
+                        "pero conviene cambiarlo por el laboral: el correo es "
+                        "la llave de la cuenta.")
+                else:
+                    st.success(aviso)
+                    st.rerun()
             else:
                 st.error(aviso)
 
@@ -607,11 +662,22 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
                         st.error("No se pudo cambiar el estado.")
 
     st.divider()
-    st.caption(
-        "⚠️ **Esto decide qué ve cada uno adentro, no quién puede entrar.** "
-        "Quién puede abrir el panel lo sigue decidiendo la lista de Streamlit "
-        "(*Manage app ▸ Settings ▸ Sharing*), así que a cada persona nueva hay "
-        "que agregarla en los dos lugares.")
+    # Este aviso quedo viejo y decia lo contrario de lo que pasa. Corregido el
+    # 01-09-2026: desde que existe el bloque `[auth]`, la puerta es `puerta()`
+    # y no la lista de Streamlit. Seguir diciendo «agregala en los dos lugares»
+    # mandaba a hacer un tramite que ya no existe, y peor: hacia creer que dar
+    # de alta a alguien aca no bastaba.
+    if hay_login():
+        st.caption(
+            "Quien esté en esta lista entra con su propio correo: no hay que "
+            "agregarlo en ninguna otra parte, y **no se usa contraseña** — se "
+            "entra con Google o con un código que llega al correo.")
+    else:
+        st.caption(
+            "⚠️ **Esto decide qué ve cada uno adentro, no quién puede entrar.** "
+            "Mientras no estén las credenciales de Auth0 en los secretos, quién "
+            "puede abrir el panel lo sigue decidiendo la lista de Streamlit "
+            "(*Manage app ▸ Settings ▸ Sharing*).")
 
 
 # --------------------------------------------------------------------------

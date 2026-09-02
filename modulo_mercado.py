@@ -209,31 +209,24 @@ def _acortar(texto: str, largo: int = 58) -> str:
     return limpio if len(limpio) <= largo else limpio[:largo - 1] + "…"
 
 
-def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
-    """El bloque de gráficos, para pegar debajo de la tabla de Oportunidades.
+def _datos_o_boton(rut: str, sello: str, etiqueta: str) -> dict | None:
+    """Los datos del mercado, o el botón para pedirlos. `None` si aún no están.
 
-    `rut` tiene que venir COMPLETO, con dígito verificador: los productos del
-    proveedor se buscan por el RUT tal como está escrito en la bodega
-    («77.082.051-0»), y con el cuerpo solo no encuentra ni una línea.
+    LO COMPARTEN LOS GRAFICOS Y EL ITINERARIO, y por eso vive aparte desde el
+    01-09-2026. Antes el itinerario colgaba del final de los graficos: para ver
+    a quien visitar habia que pasar por los cuatro graficos si o si. Ahora son
+    dos secciones que se eligen arriba, y las dos necesitan lo mismo.
 
-    `sello` es el mismo que usa el resto de la pestaña, para que la cache se
-    suelte cuando el bodeguero deja datos nuevos.
+    Pedirlo dos veces no cuesta nada: `panorama_del_mercado` esta cacheada, asi
+    que la segunda seccion lo encuentra hecho.
     """
-    st.divider()
-    st.markdown("#### El mercado en cuatro gráficos")
-    st.caption(
-        "Lo de arriba dice a quién venderle. Esto dice **cómo es el mercado**: "
-        "quién compra, por qué vía y contra quién se compite. Mira las seis "
-        "vías de compra, no solo Convenio Marco.")
-
     izquierda, derecha = st.columns([2, 3])
     with izquierda:
         meses = st.selectbox("Cuánto mirar hacia atrás", [6, 12, 24], index=1,
                              format_func=lambda m: f"{m} meses", key="me_meses")
     with derecha:
         st.write("")
-        pedir = st.button("Ver el mercado en gráficos", key="me_ver",
-                          type="secondary", width="stretch")
+        pedir = st.button(etiqueta, key="me_ver", type="secondary", width="stretch")
 
     if not (pedir or st.session_state.get("me_listo") == f"{rut}|{meses}"):
         # Medido: ~5,5 segundos por mes de bodega, casi todo en mirar el texto
@@ -242,7 +235,7 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
                    f"{'medio minuto' if meses <= 6 else ('un minuto' if meses <= 12 else 'dos minutos')} "
                    "la primera vez, porque hay que leer el texto de cada producto "
                    "de la bodega. Después queda guardado y es instantáneo.")
-        return
+        return None
     st.session_state["me_listo"] = f"{rut}|{meses}"
 
     with st.spinner("Leyendo la bodega y separando lo de tu rubro…"):
@@ -250,11 +243,51 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
 
     if not datos["bolsa"]:
         st.warning("Ese RUT no registra ventas en la bodega, así que no se puede "
-                   "deducir su rubro. Los gráficos necesitan saber qué vende.")
-        return
+                   "deducir su rubro. Esto necesita saber qué vende.")
+        return None
     if not datos["lineas"]:
         st.warning("No se encontraron compras del Estado en ese rubro en el "
                    "período elegido. Prueba con más meses.")
+        return None
+    return datos
+
+
+def seccion_visitas_sola(rut: str, unidades: pd.DataFrame, sello: str) -> None:
+    """Solo el itinerario, sin los gráficos delante."""
+    st.caption(
+        "A quién ir a ver y a quién llamar, ordenado por lo que hay para ganar "
+        "y agrupado por comuna para no pagar dos veces el mismo viaje.")
+    datos = _datos_o_boton(rut, sello, "Armar el itinerario")
+    if datos is None:
+        return
+
+    from modulo_planes import puede, candado
+    if puede(st.session_state.get("yo", {}), "ipt"):
+        modulo_visitas.seccion_visitas(datos, unidades)
+    else:
+        candado("ipt")
+
+
+def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str,
+                    con_visitas: bool = True) -> None:
+    """El bloque de gráficos, para pegar debajo de la tabla de Oportunidades.
+
+    `rut` tiene que venir COMPLETO, con dígito verificador: los productos del
+    proveedor se buscan por el RUT tal como está escrito en la bodega
+    («77.082.051-0»), y con el cuerpo solo no encuentra ni una línea.
+
+    `sello` es el mismo que usa el resto de la pestaña, para que la cache se
+    suelte cuando el bodeguero deja datos nuevos.
+
+    `con_visitas` en False deja el itinerario fuera: lo usa la navegación nueva
+    de Oportunidades, donde el itinerario es su propia sección.
+    """
+    st.caption(
+        "Cómo es el mercado: quién compra, por qué vía y contra quién se "
+        "compite. Mira las seis vías de compra, no solo Convenio Marco.")
+
+    datos = _datos_o_boton(rut, sello, "Ver el mercado en gráficos")
+    if datos is None:
         return
 
     a, b, c = st.columns(3)
@@ -327,6 +360,13 @@ def seccion_mercado(rut: str, unidades: pd.DataFrame, sello: str) -> None:
     # de `session_state` y no se pasa por parametro: esta funcion la llama
     # `modulo_oportunidades`, que a su vez la llama `app`, y arrastrar el
     # usuario por tres firmas para una comprobacion es peor que leerlo aca.
+    #
+    # Con la navegacion nueva esto llega en False: el itinerario es su propia
+    # seccion. Se conserva el camino viejo porque `seccion_mercado` se puede
+    # seguir llamando sola, y porque asi este cambio no rompe nada.
+    if not con_visitas:
+        return
+
     from modulo_planes import puede, candado
     if puede(st.session_state.get("yo", {}), "ipt"):
         modulo_visitas.seccion_visitas(datos, unidades)

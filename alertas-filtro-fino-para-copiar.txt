@@ -1,0 +1,112 @@
+========================================================================
+ FILTRO FINO DE ALERTAS
+ Para poder avisar solo de instituciones o de unidades de compra
+ concretas, y no de una region entera.
+========================================================================
+
+QUE CAMBIA
+----------
+Hasta ahora la alerta diaria se podia acotar por REGION y por MONTO
+MINIMO, y nada mas. Eso es demasiado ancho para dos casos que son los
+mas comunes:
+
+  - Alguien que atiende a Gendarmeria en TODO Chile. Con el filtro de
+    region tenia que elegir las 16 y le llegaba todo lo demas tambien.
+  - Alguien que sigue a tres hospitales de una region. Le llegaba la
+    region completa.
+
+Con esto se agregan dos filtros mas en la pestana Alertas:
+INSTITUCIONES y UNIDADES DE COMPRA.
+
+Lo pediste el 01-09-2026, junto con los mismos filtros en Oportunidades.
+
+COMO SE COMPARAN, QUE NO ES IGUAL EN LOS DOS
+--------------------------------------------
+  INSTITUCION  por texto y "contiene". El nombre del organismo viene
+               escrito de varias formas segun de que API salga, y una
+               igualdad estricta dejaria fuera avisos que si sirven.
+  UNIDAD       por CODIGO y exacto. Hay decenas de unidades llamadas
+               "Adquisiciones" o "Bienes y Servicios" de organismos
+               distintos: por nombre se mezclarian compradores que no
+               tienen nada que ver.
+
+NO LE QUITA EL CORREO A NADIE
+-----------------------------
+Los dos filtros son opcionales y se caen abiertos: si un suscriptor no
+los tiene -que es como estan TODOS los de antes de esta fecha- no
+filtran nada y su correo sigue llegando igual que siempre.
+
+
+------------------------------------------------------------------------
+ PASO 1 - LAS DOS COLUMNAS
+------------------------------------------------------------------------
+Supabase, arriba a la izquierda: SQL Editor. Pegar y Run.
+
+Llevan "if not exists": se puede correr dos veces sin miedo.
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+alter table public.filtros
+  add column if not exists instituciones jsonb default '[]'::jsonb;
+
+alter table public.filtros
+  add column if not exists unidades jsonb default '[]'::jsonb;
+
+comment on column public.filtros.instituciones is
+  'Nombres de organismo a los que se acota el aviso. Vacio = todos. Se
+   compara por texto y "contiene", igual que la region.';
+
+comment on column public.filtros.unidades is
+  'Codigos de unidad compradora a los que se acota el aviso. Vacio =
+   todas. Se compara por codigo exacto, nunca por nombre: hay decenas de
+   "Adquisiciones" de organismos distintos.';
+
+------------------------------ HASTA AQUI -------------------------------
+
+
+------------------------------------------------------------------------
+ PASO 2 - COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+Pegar esto y Run:
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+select column_name, data_type
+  from information_schema.columns
+ where table_schema = 'public'
+   and table_name = 'filtros'
+   and column_name in ('instituciones', 'unidades');
+
+------------------------------ HASTA AQUI -------------------------------
+
+Tiene que devolver DOS filas, las dos de tipo jsonb. Si devuelve cero,
+el Paso 1 no corrio.
+
+
+------------------------------------------------------------------------
+ PASO 3 - PROBARLO EN EL PANEL
+------------------------------------------------------------------------
+1. Pestana Alertas.
+2. Escribe tu RUT arriba.
+3. En "Donde y desde cuanto" ahora hay tres selectores: Regiones,
+   Instituciones y Unidades de compra.
+4. Elige una region. Fijate que la lista de Instituciones se achica sola
+   a las de esa region, y la de Unidades a las de esa institucion.
+5. Elige una institucion. A la derecha, "Que habria llegado" tiene que
+   bajar: son menos avisos porque el filtro es mas angosto.
+6. Aprieta "Activar la alerta y mandarme la primera ahora".
+
+Si al guardar dice que Supabase respondio 400 y nombra "instituciones"
+o "unidades", el Paso 1 no quedo.
+
+
+------------------------------------------------------------------------
+ SI TE LLEGA MENOS DE LO QUE ESPERABAS
+------------------------------------------------------------------------
+Es el filtro haciendo su trabajo. Los tres se suman: region Y
+institucion Y unidad tienen que calzar. Si pusiste una unidad de
+Valparaiso y ademas dejaste marcada solo la region Metropolitana, no va
+a calzar nunca nada.
+
+La vista previa de la derecha usa exactamente las mismas reglas que el
+correo de manana: si ahi sale vacio, manana tampoco llega nada.

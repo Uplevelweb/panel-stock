@@ -29,10 +29,25 @@ import pandas as pd
 import streamlit as st
 
 import alertador
+import cartera
+import exportar
+import mis_productos
 import modulo_mercado
 
 CARPETA = Path(__file__).parent
 RUTA_BODEGA = CARPETA / "bodega"
+
+# Las columnas que se muestran, en orden, y como se llaman en el Excel. Van
+# juntas y en un solo lugar para que la tabla de pantalla y el archivo que se
+# baja nunca se separen: si se agrega una columna, aparece en las dos.
+COLUMNAS_VISIBLES = ["nombre_unidad", "nombre_organismo", "region", "comuna",
+                     "gasto", "vendido", "parte", "proveedores", "situacion"]
+TITULOS_COLUMNAS = {
+    "nombre_unidad": "UNIDAD COMPRADORA", "nombre_organismo": "ORGANISMO",
+    "region": "REGIÓN", "comuna": "COMUNA", "gasto": "COMPRA",
+    "vendido": "LE VENDIÓ", "parte": "SU PARTE %", "proveedores": "PROVEEDORES",
+    "situacion": "SITUACIÓN",
+}
 
 # Debajo de esto una unidad no vale la pena mirarla: son compras sueltas.
 PISO_GASTO = 10_000_000
@@ -143,29 +158,14 @@ def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
     tabla["parte"] = (tabla["vendido"] / tabla["gasto"] * 100).round(1)
     tabla = tabla[tabla["gasto"] >= PISO_GASTO]
 
-    if not unidades.empty:
-        tabla = tabla.merge(unidades, left_on="unidad", right_on="codigo_unidad", how="left")
-    for columna, defecto in (("nombre_unidad", "(sin catalogar)"),
-                             ("nombre_organismo", ""), ("region", "Sin región"),
-                             ("comuna", "")):
-        if columna not in tabla:
-            tabla[columna] = defecto
-        tabla[columna] = tabla[columna].replace("", defecto).fillna(defecto)
-
-    # Se clasifica por lo VENDIDO, no por el porcentaje. Con el porcentaje,
-    # una venta chica contra una compra enorme redondea a 0,0% y la unidad
-    # salia como «nunca le has vendido» siendo que si le vendio. Mandar a
-    # alguien a llamar en frio a un cliente suyo es peor que no decirle nada.
-    def clasificar(fila):
-        if fila["vendido"] <= 0:
-            return "Nunca le has vendido"
-        return "Estás adentro con poco" if fila["parte"] < TECHO_CLIENTE else "Cliente firme"
-
-    tabla["situacion"] = tabla.apply(clasificar, axis=1)
-    tabla["por_ganar"] = tabla["gasto"] - tabla["vendido"]
+    # Ponerle nombre y clasificar es lo mismo para las dos formas de comparar
+    # —por convenio y por ID—, asi que vive en un solo lugar. Ver `mapa_por_ids`.
+    tabla = _ponerle_nombre(tabla, unidades)
+    tabla = _clasificar(tabla)
 
     resumen = {
         "sin_ventas": False,
+        "por_ids": False,
         "convenios": convenios,
         "mercado": float(mercado["total"].sum()),
         "vendido": float(mercado.loc[mercado["mio"], "total"].sum()),
@@ -175,6 +175,134 @@ def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
     resumen["parte"] = (resumen["vendido"] / resumen["mercado"] * 100
                         if resumen["mercado"] else 0)
     return tabla.sort_values("gasto", ascending=False), resumen
+
+
+@st.cache_data(show_spinner="Cruzando tus productos con lo que compró el Estado…")
+def compras_de_mis_ids(sello: str, ids: tuple[str, ...], cuerpo: str,
+                       meses: int = 24) -> pd.DataFrame:
+    """Por unidad compradora: cuánto compró de MIS productos, y cuánto fue mío.
+
+    LA SEGUNDA FORMA DE COMPARAR, la que pidió Serling el 01-09-2026. La otra
+    —`mapa_del_rut`— mira convenios marco completos; esta mira el ID exacto del
+    producto, que es lo que de verdad se compra.
+
+    SE LEE MES A MES Y SOLO CUATRO COLUMNAS. La bodega tiene 1,2 millones de
+    líneas y la columna `producto` pesa 570 MB ella sola: pedirla acá dejaría
+    la app al borde del techo de Streamlit, que es el error que la tumbó el
+    27-08-2026. Con estas cuatro columnas, los 25 meses se leen en medio
+    segundo y ocupan 2 MB por mes. Medido.
+
+    `ids` va como tupla y no como set porque `st.cache_data` necesita poder
+    calcular una llave, y un set no le sirve.
+    """
+    import alertador as _al
+
+    if not ids:
+        return pd.DataFrame()
+
+    carpeta = _al.BODEGA_OC
+    if not carpeta.exists():
+        return pd.DataFrame()
+
+    from datetime import date, timedelta
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    mios = set(ids)
+    trozos = []
+    for archivo in sorted(carpeta.glob("*.parquet")):
+        if archivo.stem < corte:
+            continue
+        try:
+            mes = pd.read_parquet(archivo, columns=["unidad", "id_producto",
+                                                    "total", "rut_proveedor"])
+        except Exception:
+            # Un mes con una columna de menos no puede dejar sin datos al resto.
+            continue
+        mes["id_producto"] = mes["id_producto"].astype(str).str.strip()
+        mes = mes[mes["id_producto"].isin(mios)]
+        if mes.empty:
+            continue
+        mes["mio"] = (mes["rut_proveedor"].astype(str)
+                      .str.replace(".", "", regex=False)
+                      .str.replace("-", "", regex=False)
+                      .str.startswith(cuerpo, na=False))
+        trozos.append(mes.groupby(["unidad", "rut_proveedor", "mio"],
+                                  observed=True)["total"].sum().reset_index())
+        del mes
+
+    if not trozos:
+        return pd.DataFrame()
+    return pd.concat(trozos, ignore_index=True)
+
+
+def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
+                 total_ids: int) -> tuple[pd.DataFrame, dict]:
+    """La misma tabla de `mapa_del_rut`, pero contada por ID de producto.
+
+    Devuelve exactamente las mismas columnas para que la pantalla de abajo
+    —filtros, tabla, Excel— no tenga que saber de dónde vino el número.
+    """
+    if lineas.empty:
+        return pd.DataFrame(), {"sin_ventas": True, "convenios": [], "por_ids": True}
+
+    tabla = lineas.groupby("unidad", observed=True).agg(
+        gasto=("total", "sum"),
+        proveedores=("rut_proveedor", "nunique"),
+    ).reset_index()
+    vendido = (lineas[lineas["mio"]].groupby("unidad", observed=True)["total"]
+               .sum().rename("vendido"))
+    tabla = tabla.join(vendido, on="unidad").fillna({"vendido": 0})
+    tabla["parte"] = (tabla["vendido"] / tabla["gasto"] * 100).round(1)
+    tabla = tabla[tabla["gasto"] >= PISO_GASTO]
+
+    tabla = _ponerle_nombre(tabla, unidades)
+    tabla = _clasificar(tabla)
+
+    resumen = {
+        "sin_ventas": False,
+        "por_ids": True,
+        "convenios": [],
+        "mercado": float(lineas["total"].sum()),
+        "vendido": float(lineas.loc[lineas["mio"], "total"].sum()),
+        "unidades": int(lineas["unidad"].nunique()),
+        "nombre": "",
+        "total_ids": total_ids,
+    }
+    resumen["parte"] = (resumen["vendido"] / resumen["mercado"] * 100
+                        if resumen["mercado"] else 0)
+    return tabla.sort_values("gasto", ascending=False), resumen
+
+
+def _ponerle_nombre(tabla: pd.DataFrame, unidades: pd.DataFrame) -> pd.DataFrame:
+    """Le pega nombre, organismo, región y comuna a cada código de unidad."""
+    if not unidades.empty:
+        tabla = tabla.merge(unidades, left_on="unidad",
+                            right_on="codigo_unidad", how="left")
+    for columna, defecto in (("nombre_unidad", "(sin catalogar)"),
+                             ("nombre_organismo", ""), ("region", "Sin región"),
+                             ("comuna", "")):
+        if columna not in tabla:
+            tabla[columna] = defecto
+        tabla[columna] = tabla[columna].replace("", defecto).fillna(defecto)
+    return tabla
+
+
+def _clasificar(tabla: pd.DataFrame) -> pd.DataFrame:
+    """Nunca / adentro con poco / cliente firme, y lo que queda por ganar.
+
+    Se clasifica por lo VENDIDO, no por el porcentaje. Con el porcentaje, una
+    venta chica contra una compra enorme redondea a 0,0% y la unidad salía como
+    «nunca le has vendido» siendo que sí le vendió. Mandar a alguien a llamar
+    en frío a un cliente suyo es peor que no decirle nada.
+    """
+    def clasificar(fila):
+        if fila["vendido"] <= 0:
+            return "Nunca le has vendido"
+        return "Estás adentro con poco" if fila["parte"] < TECHO_CLIENTE else "Cliente firme"
+
+    tabla = tabla.copy()
+    tabla["situacion"] = tabla.apply(clasificar, axis=1)
+    tabla["por_ganar"] = tabla["gasto"] - tabla["vendido"]
+    return tabla
 
 
 def _nombre_del_rut(compras: pd.DataFrame, cuerpo: str) -> str:
@@ -225,6 +353,17 @@ def seccion_oportunidades() -> None:
         buscar = st.button("Ver oportunidades", key="op_buscar",
                            type="primary", width="stretch")
 
+    # EL CATALOGO PROPIO VA ARRIBA, ANTES DE CONSULTAR, y por dos razones.
+    #
+    # Es configuracion de la empresa, no resultado de una busqueda: se carga una
+    # vez y sirve para todas las consultas. Si estuviera despues de la tabla,
+    # habria que consultar algo primero para poder cargarlo, que es al reves.
+    #
+    # Y ademas la primera pantalla dejaba de estar vacia. Antes decia solo
+    # «Escribe un RUT para empezar» y nada mas: en una demo hay que escribir
+    # para que aparezca algo. Serling lo reporto el 01-09-2026.
+    mis_ids = mis_productos.seccion_mis_productos(st.session_state.get("yo", {}))
+
     if not escrito:
         st.info("Escribe un RUT para empezar.")
         return
@@ -249,22 +388,103 @@ def seccion_oportunidades() -> None:
         return
     unidades = cargar_unidades(sello)
 
-    elegidos = st.session_state.get("op_convenios") or None
-    tabla, resumen = mapa_del_rut(compras, unidades, cuerpo, elegidos)
+    # ----------------------------------------------------------------------
+    #  Las dos formas de comparar
+    # ----------------------------------------------------------------------
+    # Serling lo pidio el 01-09-2026. No compiten: contestan preguntas
+    # distintas y un vendedor necesita las dos. Ver `mis_productos.py`.
+    # El selector solo aparece si hay catalogo cargado: sin el, la segunda
+    # opcion no tendria nada que cruzar y seria un boton que frustra.
+    if mis_ids:
+        forma = st.radio(
+            "Con qué comparar", horizontal=True, key="op_forma",
+            options=["Según lo que ya has vendido", "Contra mis ID publicados"],
+            captions=["Los rubros salen solos del RUT. No hay que cargar nada.",
+                      f"Producto por producto, contra los {len(mis_ids):,}".replace(",", ".") +
+                      " que subiste."])
+    else:
+        forma = "Según lo que ya has vendido"
 
-    if resumen["sin_ventas"]:
-        st.warning("Ese RUT no registra ventas por Convenio Marco. "
-                   "Elige abajo los convenios de tu rubro para ver el mercado igual.")
-        st.multiselect(
-            "Convenios marco de tu rubro", key="op_convenios",
-            options=convenios_de(compras["convenio_marco"]))
+    if forma == "Contra mis ID publicados":
+        lineas = compras_de_mis_ids(sello, tuple(sorted(mis_ids)), cuerpo)
+        tabla, resumen = mapa_por_ids(lineas, unidades, len(mis_ids))
+        if resumen["sin_ventas"]:
+            st.warning(
+                "Ninguno de tus ID aparece comprado en los últimos 24 meses. "
+                "Puede ser que el archivo traiga los ID de otro convenio, o que "
+                "de verdad no se hayan comprado. Cambia arriba a «Según lo que "
+                "ya has vendido» para ver el mercado igual.")
+            return
+        st.success(
+            f"Cruzando **{resumen['total_ids']:,}".replace(",", ".") +
+            "** productos tuyos contra lo que el Estado compró de ellos.")
+    else:
+        elegidos = st.session_state.get("op_convenios") or None
+        tabla, resumen = mapa_del_rut(compras, unidades, cuerpo, elegidos)
+
+        if resumen["sin_ventas"]:
+            st.warning("Ese RUT no registra ventas por Convenio Marco. "
+                       "Elige abajo los convenios de tu rubro para ver el mercado igual.")
+            st.multiselect(
+                "Convenios marco de tu rubro", key="op_convenios",
+                options=convenios_de(compras["convenio_marco"]))
+            return
+
+        if resumen["nombre"]:
+            st.success(f"**{resumen['nombre']}** · {len(resumen['convenios'])} convenios marco")
+
+    # ----------------------------------------------------------------------
+    #  La navegación
+    # ----------------------------------------------------------------------
+    # ESTA PANTALLA ERA UN SOLO ROLLO DE SEIS MIL PIXELES: métricas, filtros,
+    # tabla, cuatro gráficos, itinerario y el puente a las alertas, todo uno
+    # debajo del otro. Para ver a quién visitar había que pasar por los cuatro
+    # gráficos sí o sí. Son cuatro trabajos distintos y ahora se eligen.
+    #
+    # SE USA `segmented_control` Y NO `st.tabs`, y esto no es estético.
+    # `st.tabs` DIBUJA TODAS LAS PESTAÑAS EN CADA CORRIDA aunque nadie las
+    # abra: es exactamente lo que reventó la memoria del panel el 27-08-2026
+    # —dos módulos cargando la bodega a la vez— y dejó la app publicada en «Oh
+    # no. Error running app» sin traceback. Con el selector se dibuja UNA sola.
+    #
+    # Y la cápsula es la forma correcta según la regla de Uplevel: lo que se
+    # elige va en cápsula, lo que contiene va en rectángulo suave.
+    SECCIONES = {
+        "A quién venderle": "Las unidades que compran lo tuyo, para filtrar y elegir",
+        "Mi cartera": "Las que ya elegiste trabajar — de acá sale el envío del catálogo",
+        "Su mercado": "Quién compra, por qué vía y contra quién se compite",
+        "A quién visitar": "El itinerario, ordenado por lo que hay para ganar",
+        "Que llegue solo": "Que esto te llegue por correo cada mañana",
+    }
+    seccion = st.segmented_control(
+        "Qué quieres ver", options=list(SECCIONES), key="op_seccion",
+        default="A quién venderle", label_visibility="collapsed")
+    # `segmented_control` devuelve None si se vuelve a apretar lo ya elegido.
+    # Sin esto la pantalla queda en blanco y parece que se rompió.
+    seccion = seccion or "A quién venderle"
+    st.caption(SECCIONES[seccion])
+
+    if seccion == "Mi cartera":
+        cartera.seccion_cartera(st.session_state.get("yo", {}))
         return
 
-    if resumen["nombre"]:
-        st.success(f"**{resumen['nombre']}** · {len(resumen['convenios'])} convenios marco")
+    if seccion == "Su mercado":
+        modulo_mercado.seccion_mercado(f"{cuerpo}-{dv or dv_correcto(cuerpo)}",
+                                       unidades, sello, con_visitas=False)
+        return
+
+    if seccion == "A quién visitar":
+        modulo_mercado.seccion_visitas_sola(
+            f"{cuerpo}-{dv or dv_correcto(cuerpo)}", unidades, sello)
+        return
+
+    if seccion == "Que llegue solo":
+        _pantalla_alertas()
+        return
 
     a, b, c, d = st.columns(4)
-    a.metric("Mercado de sus rubros", plata(resumen["mercado"]))
+    a.metric("Mercado de tus productos" if resumen["por_ids"]
+             else "Mercado de sus rubros", plata(resumen["mercado"]))
     b.metric("Lo que él vendió", plata(resumen["vendido"]))
     c.metric("Su parte", f"{resumen['parte']:.1f}%".replace(".", ","))
     d.metric("Unidades que compran", f"{resumen['unidades']:,}".replace(",", "."))
@@ -280,16 +500,32 @@ def seccion_oportunidades() -> None:
              help="Todo lo que compran estas unidades y no le compran a él")
 
     st.divider()
+
+    # ----------------------------------------------------------------------
+    #  Filtros
+    # ----------------------------------------------------------------------
+    # Los filtros se aplican EN CASCADA: las opciones de organismo salen de lo
+    # que quedó después de situación y región, y las de unidad de lo que quedó
+    # después de organismo. Sin eso, el selector de unidades ofrece las 2.700
+    # del país aunque se haya filtrado una sola región, y no se puede usar.
+    #
+    # Serling lo pidió el 01-09-2026: hasta esa fecha solo se podía filtrar por
+    # situación y región, y no se podía SACAR nada de la lista.
     filtro_situacion, filtro_region = st.columns([2, 2])
     with filtro_situacion:
         situaciones = st.multiselect(
             "Situación", key="op_situacion",
             options=["Nunca le has vendido", "Estás adentro con poco", "Cliente firme"],
-            default=["Nunca le has vendido", "Estás adentro con poco"])
+            default=["Nunca le has vendido", "Estás adentro con poco"],
+            placeholder="Todas")
     with filtro_region:
+        # El `placeholder` va escrito aunque parezca de mas: sin el, Streamlit
+        # pone «Choose options» en ingles y queda un cartel en otro idioma en
+        # medio de una pantalla en castellano.
         regiones = st.multiselect(
             "Región", key="op_region",
-            options=sorted(tabla["region"].unique()))
+            options=sorted(tabla["region"].unique()),
+            placeholder="Todo Chile")
 
     vista = tabla
     if situaciones:
@@ -297,58 +533,136 @@ def seccion_oportunidades() -> None:
     if regiones:
         vista = vista[vista["region"].isin(regiones)]
 
-    st.caption(f"{len(vista):,}".replace(",", ".") + " unidades · ordenadas por lo que gastan")
-    st.dataframe(
-        vista[["nombre_unidad", "nombre_organismo", "region", "comuna",
-               "gasto", "vendido", "parte", "proveedores", "situacion"]],
+    filtro_organismo, filtro_unidad = st.columns([2, 2])
+    with filtro_organismo:
+        organismos = st.multiselect(
+            "Institución", key="op_organismo",
+            options=sorted(x for x in vista["nombre_organismo"].unique() if x),
+            placeholder="Todas las de la región",
+            help="Deja vacío para verlas todas.")
+    if organismos:
+        vista = vista[vista["nombre_organismo"].isin(organismos)]
+    with filtro_unidad:
+        unidades_elegidas = st.multiselect(
+            "Unidad compradora", key="op_unidad",
+            options=sorted(x for x in vista["nombre_unidad"].unique() if x),
+            placeholder="Todas las de arriba")
+    if unidades_elegidas:
+        vista = vista[vista["nombre_unidad"].isin(unidades_elegidas)]
+
+    # Sacar de la lista va en un desplegable, no a la vista: se usa mucho menos
+    # que incluir, y cuatro selectores abiertos a la vez tapan la tabla.
+    with st.expander("Sacar de la lista"):
+        st.caption(
+            "Para las que no interesan: la competencia, las que ya se atienden "
+            "por otro canal, las que quedan fuera de ruta. Se descuentan de la "
+            "tabla y del Excel.")
+        sin_organismo, sin_unidad = st.columns([2, 2])
+        with sin_organismo:
+            fuera_organismos = st.multiselect(
+                "Instituciones fuera", key="op_sin_organismo",
+                options=sorted(x for x in vista["nombre_organismo"].unique() if x),
+                placeholder="Ninguna")
+        with sin_unidad:
+            fuera_unidades = st.multiselect(
+                "Unidades fuera", key="op_sin_unidad",
+                options=sorted(x for x in vista["nombre_unidad"].unique() if x),
+                placeholder="Ninguna")
+    if fuera_organismos:
+        vista = vista[~vista["nombre_organismo"].isin(fuera_organismos)]
+    if fuera_unidades:
+        vista = vista[~vista["nombre_unidad"].isin(fuera_unidades)]
+
+    # ----------------------------------------------------------------------
+    #  La tabla
+    # ----------------------------------------------------------------------
+    cuenta, bajar = st.columns([3, 1])
+    with cuenta:
+        st.caption(f"{len(vista):,}".replace(",", ".") +
+                   " unidades · ordenadas por lo que gastan")
+    with bajar:
+        exportar.boton_excel(
+            vista[COLUMNAS_VISIBLES].rename(columns=TITULOS_COLUMNAS),
+            nombre=f"Oportunidades-{cuerpo}", clave="oportunidades",
+            hoja="Oportunidades", ancho="stretch")
+
+    if vista.empty:
+        st.info("Con estos filtros no queda ninguna unidad. Saca alguno.")
+        return
+
+    # Anchos: el nombre de la unidad y el del organismo son los dos textos
+    # largos («DIRECCION GENERAL DE GENDARMERIA DE CHILE») y son los que hay que
+    # poder leer enteros; los números ocupan lo que ocupan. Serling reportó el
+    # 01-09-2026 que salían cortados. Streamlit no mide el texto para ajustar
+    # solo: lo más que se puede es repartir bien y dejar que la tabla ocupe todo
+    # el ancho de la pantalla, que es lo que hace `width="stretch"`.
+    seleccion = st.dataframe(
+        vista[COLUMNAS_VISIBLES],
         width="stretch", hide_index=True, height=520,
+        on_select="rerun", selection_mode="multi-row", key="op_tabla",
         column_config={
-            "nombre_unidad": st.column_config.TextColumn("Unidad compradora", width="medium"),
-            "nombre_organismo": st.column_config.TextColumn("Organismo", width="medium"),
-            "region": st.column_config.TextColumn("Región"),
-            "comuna": st.column_config.TextColumn("Comuna"),
+            "nombre_unidad": st.column_config.TextColumn("Unidad compradora", width="large"),
+            "nombre_organismo": st.column_config.TextColumn("Organismo", width="large"),
+            "region": st.column_config.TextColumn("Región", width="small"),
+            "comuna": st.column_config.TextColumn("Comuna", width="small"),
             # Numeros como numeros, no como texto con $: si van como texto la
             # tabla ordena «11» entre «1» y «2».
-            "gasto": st.column_config.NumberColumn("Compra", format="localized"),
-            "vendido": st.column_config.NumberColumn("Le vendió", format="localized"),
-            "parte": st.column_config.NumberColumn("Su parte", format="%.1f%%"),
-            "proveedores": st.column_config.NumberColumn("Prov."),
-            "situacion": st.column_config.TextColumn("Situación", width="small"),
+            "gasto": st.column_config.NumberColumn("Compra", format="localized", width="small"),
+            "vendido": st.column_config.NumberColumn("Le vendió", format="localized", width="small"),
+            "parte": st.column_config.NumberColumn("Su parte", format="%.1f%%", width="small"),
+            "proveedores": st.column_config.NumberColumn("Prov.", width="small"),
+            "situacion": st.column_config.TextColumn("Situación", width="medium"),
         })
 
     # ----------------------------------------------------------------------
-    #  El mercado en gráficos
+    #  De la tabla a la cartera
     # ----------------------------------------------------------------------
-    # La tabla de arriba se calcula sobre convenios marco. Estos gráficos miran
-    # las seis vías, que es donde está el 95,8% del dinero, y por eso van en un
-    # bloque aparte y no como otra columna de la misma tabla: son otra cuenta.
+    # ESTE ES EL PUENTE QUE FALTABA. Hasta el 01-09-2026 la pantalla terminaba
+    # en la tabla: decia a quien venderle y ahi moria. Quien queria hacer algo
+    # con esas unidades las copiaba a mano a una planilla.
     #
-    # El RUT va COMPLETO, con dígito verificador: en la bodega está escrito
-    # «77.082.051-0» y con el cuerpo solo no encuentra ninguna venta.
-    modulo_mercado.seccion_mercado(f"{cuerpo}-{dv or dv_correcto(cuerpo)}",
-                                   unidades, sello)
+    # Ahora se marcan y quedan en la cartera, que es lo unico que los dos lados
+    # del sistema pueden leer: el panel de envio del catalogo saca de ahi a
+    # quien le escribe. Ver `cartera.py`.
+    from app import filas_seleccionadas
+    marcadas = vista.iloc[filas_seleccionadas(seleccion, len(vista))]
 
-    # ----------------------------------------------------------------------
-    #  El puente a las alertas
-    # ----------------------------------------------------------------------
-    # Quien llego hasta aca ya vio su propio mapa: sabe cuanto se mueve en sus
-    # rubros y a quien no le ha vendido nunca. Es el momento en que la alerta
-    # diaria tiene sentido, no antes. Si hay que salir a buscar la pestana de
-    # Alertas y volver a escribir el RUT, se pierde a la mitad por el camino.
-    st.divider()
     izq, der = st.columns([3, 2])
     with izq:
-        st.markdown("#### Que esto te llegue solo, cada mañana")
-        st.caption(
-            "Lo de arriba es el histórico: quién compra lo que vendes. La alerta "
-            "diaria es lo otro: lo que se **publicó hoy** en esos mismos rubros, "
-            "con el gasto de cada comprador al lado."
-        )
+        if marcadas.empty:
+            st.caption("Marca filas en la tabla para armar tu cartera.")
+        else:
+            st.caption(
+                f"**{len(marcadas)}** marcadas · compran "
+                f"{plata(marcadas['gasto'].sum())} · por ganar "
+                f"{plata(marcadas['por_ganar'].sum())}")
     with der:
-        st.write("")
+        if st.button(f"Agregar a mi cartera ({len(marcadas)})" if len(marcadas)
+                     else "Agregar a mi cartera",
+                     type="primary", width="stretch", key="op_a_cartera",
+                     disabled=marcadas.empty):
+            cuantas, aviso = cartera.agregar(st.session_state.get("yo", {}), marcadas)
+            (st.success if cuantas else st.warning)(aviso)
+
+
+def _pantalla_alertas() -> None:
+    """El puente a las alertas, ahora como su propia sección.
+
+    Quien llego hasta aca ya vio su propio mapa: sabe cuanto se mueve en sus
+    rubros y a quien no le ha vendido nunca. Es el momento en que la alerta
+    diaria tiene sentido, no antes. Si hay que salir a buscar la pestaña de
+    Alertas y volver a escribir el RUT, se pierde a la mitad por el camino.
+    """
+    st.markdown("#### Que esto te llegue solo, cada mañana")
+    st.caption(
+        "Lo que viste es el histórico: quién compra lo que vendes. La alerta "
+        "diaria es lo otro: lo que se **publicó hoy** en esos mismos rubros, "
+        "con el gasto de cada comprador al lado.")
+    izq, der = st.columns([3, 2])
+    with der:
         if st.button("Recibir estas oportunidades por correo",
                      type="primary", width="stretch", key="op_a_alertas"):
-            # El RUT ya escrito se deja listo para la pestana de Alertas, para
+            # El RUT ya escrito se deja listo para la pestaña de Alertas, para
             # que no haya que volver a escribirlo.
             st.session_state["al_rut"] = st.session_state.get("op_rut", "")
             st.info("Anda a la pestaña **🔔 Alertas** — tu RUT ya quedó puesto ahí.")

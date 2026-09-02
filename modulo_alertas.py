@@ -64,6 +64,18 @@ def _sello() -> str:
         return "vacia"
 
 
+def _catalogo_de_unidades(sello: str) -> pd.DataFrame:
+    """Nombre, organismo, región y comuna de cada unidad compradora.
+
+    Se pide a la misma cache que usa Oportunidades: son las mismas 4.298 filas
+    y no tiene sentido leer el parquet dos veces. El import va adentro para no
+    arrastrar `modulo_mercado` y `modulo_visitas` cada vez que alguien importe
+    este archivo.
+    """
+    from modulo_oportunidades import cargar_unidades
+    return cargar_unidades(sello)
+
+
 def cargar_ordenes(sello: str) -> pd.DataFrame:
     """La bodega, pedida a la UNICA cache que hay: la de `modulo_oportunidades`.
 
@@ -164,6 +176,11 @@ def guardar_en_supabase(config: dict) -> tuple[bool, str]:
             "rubros": config.get("rubros") or [],
             "palabras_clave": config.get("palabras_clave") or [],
             "regiones": config.get("regiones") or [],
+            # Las dos columnas nuevas del 01-09-2026. Las crea
+            # `alertas-filtro-fino-para-copiar.txt`; mientras no existan,
+            # Supabase responde 400 y se avisa en pantalla sin perder el resto.
+            "instituciones": config.get("instituciones") or [],
+            "unidades": config.get("unidades") or [],
             "monto_minimo": int(config.get("monto_minimo") or 0),
             "frecuencia": "diaria",
             "incluye_licitaciones": bool(config.get("incluye_licitaciones", True)),
@@ -314,7 +331,46 @@ def seccion_alertas():
 
         st.markdown("**Dónde y desde cuánto**")
         regiones = st.multiselect("Regiones", options=REGIONES, key="al_regiones",
-                                  help="Vacío = todo Chile.")
+                                  help="Vacío = todo Chile.",
+                                  placeholder="Todo Chile")
+
+        # INSTITUCION Y UNIDAD, agregadas el 01-09-2026 a pedido de Serling.
+        # La region sola es demasiado ancha: alguien puede atender a Gendarmeria
+        # en todo Chile, o a tres hospitales de una sola region.
+        #
+        # VAN EN CASCADA, igual que en Oportunidades: las instituciones que se
+        # ofrecen son las de las regiones ya elegidas, y las unidades las de
+        # esas instituciones. Sin eso el selector de unidades ofrece las 4.298
+        # del pais y no se puede usar.
+        catalogo = _catalogo_de_unidades(sello)
+        instituciones, unidades_elegidas = [], []
+        if catalogo.empty:
+            st.caption("Para filtrar por institución falta el catálogo de "
+                       "unidades en la bodega.")
+        else:
+            alcance = catalogo
+            if regiones:
+                alcance = alcance[alcance["region"].isin(regiones)]
+
+            instituciones = st.multiselect(
+                "Instituciones", key="al_instituciones",
+                options=sorted(x for x in alcance["nombre_organismo"].unique() if x),
+                placeholder="Todas las de esas regiones",
+                help="Deja vacío para no filtrar por institución.")
+            if instituciones:
+                alcance = alcance[alcance["nombre_organismo"].isin(instituciones)]
+
+            # Las unidades se guardan por CODIGO, no por nombre: hay decenas de
+            # «Adquisiciones» y de «Bienes y Servicios» de organismos distintos,
+            # y por nombre se mezclarían compradores que no tienen que ver.
+            nombres = dict(zip(alcance["codigo_unidad"], alcance["nombre_unidad"]))
+            unidades_elegidas = st.multiselect(
+                "Unidades de compra", key="al_unidades",
+                options=sorted(nombres, key=lambda c: nombres.get(c, "")),
+                format_func=lambda c: nombres.get(c, c),
+                placeholder="Todas las de arriba",
+                help="Para seguir a compradores concretos, no a una región entera.")
+
         monto_minimo = st.number_input("Monto mínimo (CLP)", min_value=0, step=100_000,
                                        value=0, key="al_monto")
 
@@ -339,6 +395,8 @@ def seccion_alertas():
         "rubros": rubros,
         "palabras_clave": palabras_clave,
         "regiones": regiones,
+        "instituciones": instituciones,
+        "unidades": unidades_elegidas,
         "monto_minimo": monto_minimo,
         "incluye_licitaciones": incluye_lic,
         "incluye_compras_agiles": incluye_agil,
@@ -395,44 +453,54 @@ def seccion_alertas():
 
     st.divider()
 
-    # La explicacion va ANTES de los botones, no despues: se lee para decidir
-    # cual apretar, no para entender lo que uno ya apreto.
+    # UN SOLO BOTON. Hasta el 01-09-2026 habia dos —«Programar la alerta
+    # diaria» y «Programar y enviármela ahora»— con dos cuadros de explicacion
+    # arriba para decidir cual apretar.
+    #
+    # Nadie elige «no me la mandes ahora»: el que acaba de configurar la alerta
+    # quiere verla. Los dos botones solo obligaban a leer dos parrafos y elegir
+    # entre opciones que no compiten. Lo reporto Serling y tiene razon.
     st.markdown("#### ¿Y ahora qué?")
-    uno, dos = st.columns([1, 1])
-    uno.info("**Dejarla programada**\n\nLa alerta queda activa y el correo te "
-             f"llega **cada día a las {hora_envio}:00**, de lunes a viernes. "
-             "Si un día no hay nada que calce, no se envía.")
-    dos.info("**Programarla y recibir la primera ahora**\n\nLo mismo de la "
-             "izquierda, y además te manda **un correo en este momento** con "
-             "lo que está abierto hoy. Tarda hasta un minuto.")
+    st.caption(
+        f"Queda activa y el correo llega **cada día a las {hora_envio}:00**, de "
+        "lunes a viernes. El día que no haya nada que calce, no se envía. "
+        "Además te mandamos **la primera ahora mismo**, para que la veas sin "
+        "esperar a mañana; eso tarda hasta un minuto.")
 
-    boton_guardar, boton_ahora = st.columns([1, 1])
-    with boton_guardar:
-        guardar = st.button("Programar la alerta diaria", type="primary",
-                            width="stretch", key="al_guardar")
-    with boton_ahora:
-        guardar_y_enviar = st.button("Programar y enviármela ahora",
-                                     width="stretch", key="al_guardar_envia")
+    guardar = st.button("Activar la alerta y mandarme la primera ahora",
+                        type="primary", width="stretch", key="al_guardar")
 
-    if guardar or guardar_y_enviar:
+    if guardar:
         if not config["email"] or "@" not in config["email"]:
-            st.error("Falta el correo.")
+            st.error("Falta el correo: es a dónde te llega la alerta.")
         elif not bolsa_de(config)[0]:
             st.error("Falta decir qué avisar: un RUT con Convenio Marco, "
                      "rubros o palabras clave.")
         else:
             salio, aviso = guardar_en_supabase(config)
             if salio:
-                st.success(aviso)
                 st.session_state["al_guardado"] = config
-                if guardar_y_enviar:
-                    aviso_paso = st.empty()
-                    fue, detalle = enviar_ahora(config, bodega(), aviso_paso)
-                    aviso_paso.empty()
-                    if fue:
-                        st.success(detalle + " Revisa tu bandeja.")
-                    else:
-                        st.warning(detalle)
+                aviso_paso = st.empty()
+                fue, detalle = enviar_ahora(config, bodega(), aviso_paso)
+                aviso_paso.empty()
+
+                # EL MENSAJE DICE LAS TRES COSAS QUE HAY QUE SABER: a que
+                # correo quedo, a que hora llega, y que esta pasando ahora.
+                # Antes solo confirmaba lo primero y dejaba el error tecnico
+                # de Resend a la vista.
+                donde = config["email"]
+                cuando = f"{hora_envio}:00"
+                if fue:
+                    st.success(
+                        f"**Listo.** La alerta quedó activa para **{donde}** y "
+                        f"te llega cada día a las **{cuando}**.\n\n"
+                        f"{detalle} Revisa tu bandeja — si no está, mira en "
+                        "correo no deseado y marca el remitente como seguro.")
+                else:
+                    st.success(
+                        f"**La alerta quedó activa** para **{donde}**: te llega "
+                        f"cada día a las **{cuando}**, de lunes a viernes.")
+                    st.info(f"El primer correo no salió en el momento. {detalle}")
             else:
                 st.error(aviso)
                 st.download_button(
@@ -441,11 +509,6 @@ def seccion_alertas():
                     file_name="alertas_config.json", mime="application/json",
                     help="Sirve para probar el correo en el computador mientras "
                          "no estén las credenciales de Supabase.")
-
-    st.caption(
-        "El botón de la derecha hace las dos cosas: deja la alerta configurada "
-        "y manda el primer correo en el momento, sin esperar al turno de mañana."
-    )
 
 
 # --------------------------------------------------------------------------

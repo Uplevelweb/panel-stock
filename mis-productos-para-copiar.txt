@@ -1,0 +1,105 @@
+========================================================================
+ MIS PRODUCTOS PUBLICADOS
+ Para que el catalogo de ID que carga cada cliente quede guardado en su
+ cuenta, y no se pierda al cerrar el panel.
+========================================================================
+
+QUE CAMBIA
+----------
+El panel ya tiene las dos formas de comparar:
+
+  SEGUN LO QUE YA HAS VENDIDO   los rubros salen solos del RUT. Funciona
+                                sin cargar nada.
+  CONTRA MIS ID PUBLICADOS      el cliente sube su catalogo de Convenio
+                                Marco y se cruza producto por producto.
+
+La segunda ya funciona HOY, pero los ID viven solo mientras la persona
+tenga el panel abierto: si recarga, hay que volver a subir el archivo.
+Con esto quedan guardados en la cuenta de la empresa, asi que los sube
+uno y los ve todo el equipo.
+
+POR QUE EN LA CUENTA Y NO EN EL USUARIO
+---------------------------------------
+El catalogo es de la empresa, no de la persona. Si colgara del usuario,
+cada vendedor tendria que subir el mismo archivo y bastaria que uno lo
+subiera desactualizado para que dos personas de la misma empresa vieran
+numeros distintos.
+
+NO ROMPE NADA SI NO LO CORRES
+-----------------------------
+Mientras esta columna no exista, el panel guarda los ID en la sesion y lo
+dice en pantalla («Cargados para esta sesion»). No aparece ningun error.
+
+
+------------------------------------------------------------------------
+ PASO 1 - LA COLUMNA
+------------------------------------------------------------------------
+Supabase, arriba a la izquierda: SQL Editor. Pegar esto y apretar Run.
+
+Lleva "if not exists", asi que se puede correr dos veces sin miedo.
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+alter table public.cuentas
+  add column if not exists ids_publicados jsonb;
+
+comment on column public.cuentas.ids_publicados is
+  'Catalogo de ID de Convenio Marco que esa empresa tiene publicados. Lo
+   carga el propio cliente desde el panel, en Oportunidades. Se usa para
+   cruzar producto por producto contra lo que compro el Estado.';
+
+------------------------------ HASTA AQUI -------------------------------
+
+
+------------------------------------------------------------------------
+ PASO 2 - COMPROBAR QUE QUEDO
+------------------------------------------------------------------------
+En el mismo SQL Editor, pegar esto y apretar Run:
+
+------------------------------ COPIAR DESDE AQUI ------------------------
+
+select column_name, data_type
+  from information_schema.columns
+ where table_name = 'cuentas'
+   and column_name = 'ids_publicados';
+
+------------------------------ HASTA AQUI -------------------------------
+
+Tiene que devolver UNA fila que diga:
+
+    ids_publicados | jsonb
+
+Si devuelve cero filas, el Paso 1 no corrio: vuelve a pegarlo.
+
+
+------------------------------------------------------------------------
+ PASO 3 - PROBARLO EN EL PANEL
+------------------------------------------------------------------------
+1. Abre el panel y anda a la pestana Oportunidades.
+2. Escribe tu RUT y aprieta "Ver oportunidades".
+3. Abre "Mis productos publicados" y sube el catalogo de Convenio Marco
+   (el mismo .xlsx que usas para cotizar; sirve el completo, con una
+   pestana por rubro).
+4. Aprieta "Usar estos productos". Tiene que decir "Guardados en tu
+   cuenta". Si dice "Cargados para esta sesion", el Paso 1 no quedo.
+5. Recarga la pagina con F5, vuelve a Oportunidades y escribe el RUT.
+   Los productos tienen que seguir ahi.
+6. Arriba aparece "Con que comparar" con las dos opciones. Elige
+   "Contra mis ID publicados": la tabla ahora cuenta producto por
+   producto en vez de convenio por convenio.
+
+
+------------------------------------------------------------------------
+ QUE ESPERAR DE LOS NUMEROS
+------------------------------------------------------------------------
+Los dos modos NO dan lo mismo, y esta bien:
+
+  Por convenio  suma TODO lo que se compro en ese convenio marco, lo
+                vendas tu o no. Es el mercado en el que estas metido.
+  Por ID        suma solo lo que se compro de TUS productos exactos. Es
+                mas chico, y es el numero que sirve para decir "esto lo
+                puedo vender manana".
+
+Probado con Emergenza el 01-09-2026: 330 productos publicados cruzaron
+5.636 lineas de compra en 147 unidades, $11.277 millones de mercado, con
+$1.204 millones vendidos por ella. Un 10,7% de su propio mercado.

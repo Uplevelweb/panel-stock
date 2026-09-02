@@ -2064,6 +2064,25 @@ def aplicar_estilos() -> None:
             border: 1px solid {COLOR['borde']};
             border-radius: 12px;
         }}
+        /* ---------- LA REGLA DE FORMAS DE UPLEVEL ----------
+           CAPSULA (999px) = lo que se PULSA o se ELIGE: botones, pestañas,
+           selectores de opcion, chips. RECTANGULO SUAVE (12px) = lo que
+           CONTIENE: tarjetas, marcos, cabecera.
+           Es la misma regla de uplevelweb.art, de inteligencia y del correo
+           diario, para que moverse entre los cuatro se sienta el mismo sitio.
+           Streamlit trae 0.5rem por defecto en los botones; esto lo pisa. */
+        .stButton > button, .stDownloadButton > button,
+        .stFormSubmitButton > button, [data-testid^="stBaseButton"] {{
+            border-radius: 999px !important;
+        }}
+        [data-baseweb="tab"] {{
+            border-radius: 999px !important;
+        }}
+        [role="radiogroup"] label, [data-baseweb="segmented-control"],
+        [data-baseweb="segmented-control"] div[role="tab"] {{
+            border-radius: 999px !important;
+        }}
+
         /* El tamaño general (20% mas chico) se define en .streamlit/config.toml
            con baseFontSize; aqui solo se ajusta el ancho y el aire de arriba.
            Sin barra lateral se aprovecha todo el ancho de la pantalla. */
@@ -2108,6 +2127,22 @@ def aplicar_estilos() -> None:
         .subtitulo-panel {{
             color: #5A7089; font-size: 12.5px; margin-top: 2px;
         }}
+        /* ---------- LA BARRA DE STREAMLIT NO ES NUESTRA ----------
+           Arriba a la derecha, Streamlit pone «Fork» y el icono de GitHub, que
+           llevan al repositorio —que es publico—. En una demo el cliente puede
+           apretarlos y quedar mirando el codigo de lo que se le esta vendiendo.
+           Se esconde la barra entera; el menu de Streamlit tampoco aporta nada
+           a quien usa el panel. Serling lo reporto el 01-09-2026.
+
+           Se esconde con `display:none` y no con `visibility`, porque
+           `visibility:hidden` deja el hueco y corre la cabecera hacia abajo. */
+        [data-testid="stToolbar"], [data-testid="stToolbarActions"],
+        [data-testid="stAppDeployButton"], #MainMenu {{
+            display: none !important;
+        }}
+        /* Sin la barra, el espacio que Streamlit le reservaba arriba sobra. */
+        [data-testid="stHeader"] {{ height: 0; min-height: 0; }}
+
         /* En el celular: logo arriba, titulo abajo y mas chico. Este bloque va
            AL FINAL a proposito: las reglas de arriba tienen la misma fuerza y,
            puesto antes, el tamaño del titulo lo pisaba la regla general. */
@@ -2171,7 +2206,11 @@ se publicó <b>hoy</b> en esos mismos rubros. Se configura una vez y llega solo.
 a qué precio y a quién. Para preparar una visita o una cotización.<br>
 
 <b style="color:{COLOR['rojo']}">🧾 Módulo Cotizador</b> — Se sube el requerimiento que
-mandó la institución y sale la cotización con los ID de Convenio Marco.
+mandó la institución y sale la cotización con los ID de Convenio Marco.<br>
+
+<b style="color:{COLOR['rojo']}">📧 Envíos de Ofertas, Catálogo y Mailing</b> — Desde acá
+se entra a los dos paneles de envío. Cada uno dice a quién le escribe, para no
+mandar por la lista equivocada.
 </div>
             """,
             unsafe_allow_html=True,
@@ -4390,7 +4429,12 @@ def main() -> None:
              ("seguimiento", "📌 Seguimiento"),
              ("alertas", "🔔 Alertas")]
     for clave, etiqueta in (("mercado_publico", "🏛️ Mercado Público"),
-                            ("cotizador", "🧾 Módulo Cotizador")):
+                            ("cotizador", "🧾 Módulo Cotizador"),
+                            # La puerta a los dos paneles de envio de Apps
+                            # Script. Va al lado de los otros dos extras de
+                            # Emergenza porque es de la misma clase: usa sus
+                            # cuentas de Gmail y su lista de contactos.
+                            ("envios", "📧 Envíos de Ofertas, Catálogo y Mailing")):
         if puede(yo, clave):
             orden.append((clave, etiqueta))
     orden.append(("equipo", "👥 Mi equipo"))
@@ -4430,6 +4474,12 @@ def main() -> None:
     if "cotizador" in pestanas:
         with pestanas["cotizador"]:
             seccion_cotizacion_regional(url_ofertas, precios_oferta)
+    if "envios" in pestanas:
+        with pestanas["envios"]:
+            # La puerta a los dos paneles de Apps Script. No manda correo: los
+            # abre. El envio se quedo en Gmail por decision del 01-09-2026.
+            from modulo_envios import seccion_envios
+            seccion_envios(yo)
     with pestanas["equipo"]:
         if abierta("equipo"):
             # Cuentas, roles y territorios. Si las tablas de Supabase todavia

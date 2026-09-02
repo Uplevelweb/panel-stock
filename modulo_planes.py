@@ -66,6 +66,10 @@ MODULOS = {
     # entregan por cuenta, con `cuentas.modulos_extra`.
     "mercado_publico": {"nombre": "Mercado Público", "que_es": "", "extra": True},
     "cotizador": {"nombre": "Módulo Cotizador", "que_es": "", "extra": True},
+    # Es la puerta a los dos paneles de Apps Script de Emergenza, que mandan
+    # desde su Gmail. A otro cliente no le sirve: son sus cuentas y su lista.
+    "envios": {"nombre": "Envíos de Ofertas, Catálogo y Mailing",
+               "que_es": "", "extra": True},
 }
 
 

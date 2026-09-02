@@ -52,7 +52,19 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import exportar
 import modulo_cuentas
+
+# Las columnas del itinerario, en orden, y como se llaman en el Excel. Juntas
+# en un solo lugar para que la tabla de pantalla y el archivo no se separen.
+COLUMNAS_ITINERARIO = ["visita", "plan", "comuna", "nombre_unidad", "region",
+                       "por_ganar", "semana", "parte_acumulada"]
+TITULOS_ITINERARIO = {
+    "visita": "N°", "plan": "PLAN", "comuna": "COMUNA",
+    "nombre_unidad": "UNIDAD COMPRADORA", "region": "REGIÓN",
+    "por_ganar": "POR GANAR", "semana": "SEMANA",
+    "parte_acumulada": "% ACUMULADO",
+}
 
 # --------------------------------------------------------------------------
 #  El modelo de la jornada. Todo lo demas sale de estos cuatro numeros.
@@ -118,6 +130,28 @@ def plan_de_visitas(datos: dict, unidades: pd.DataFrame,
 
     if usuario:
         tabla = modulo_cuentas.filtrar_por_territorio(tabla, usuario)
+        if tabla.empty:
+            return pd.DataFrame()
+
+    # EL FILTRO DE REGION DE LA PANTALLA TAMBIEN MANDA ACA.
+    #
+    # Hasta el 01-09-2026 el itinerario solo miraba el territorio asignado al
+    # usuario en «Mi equipo», y no el multiselect «Región» de la tabla de
+    # arriba. Serling filtro Valparaiso y el itinerario de mas abajo le listo
+    # Arica: no era un error de calculo, pero delante de un cliente parece que
+    # el sistema se equivoco, que es peor.
+    #
+    # Se lee de `session_state` y no por parametro, por lo mismo que el usuario:
+    # esta funcion la llama `modulo_visitas`, que la llama `modulo_mercado`, que
+    # la llama `modulo_oportunidades`. Arrastrar el filtro por cuatro firmas
+    # para una comprobacion es peor que leerlo aca.
+    #
+    # El territorio se aplica ANTES y este despues: el territorio dice lo que
+    # esa persona tiene permitido ver, la region dice lo que esta mirando ahora.
+    # Un filtro de pantalla nunca puede ampliar lo que el permiso ya cerro.
+    regiones_en_pantalla = st.session_state.get("op_region") or []
+    if regiones_en_pantalla:
+        tabla = tabla[tabla["region"].isin(regiones_en_pantalla)]
         if tabla.empty:
             return pd.DataFrame()
 
@@ -202,8 +236,14 @@ def seccion_visitas(datos: dict, unidades: pd.DataFrame) -> None:
 
     usuario = modulo_cuentas.quien_soy()
     plan = plan_de_visitas(datos, unidades, piso, usuario)
+    filtradas = st.session_state.get("op_region") or []
     if plan.empty:
-        if modulo_cuentas.tiene_territorio(usuario):
+        if filtradas:
+            st.warning(
+                "No hay unidades sobre ese mínimo en "
+                f"**{', '.join(filtradas)}**. Baja el piso, o saca el filtro "
+                "de región de la tabla de arriba.")
+        elif modulo_cuentas.tiene_territorio(usuario):
             st.warning(
                 f"No hay unidades sobre ese mínimo **en tu territorio** "
                 f"({modulo_cuentas.resumen_de_territorio(usuario)}). Baja el "
@@ -213,6 +253,11 @@ def seccion_visitas(datos: dict, unidades: pd.DataFrame) -> None:
             st.warning("No hay unidades con ese mínimo por ganar. Baja el piso.")
         return
 
+    # Se dice en pantalla de dónde salió el recorte, para que nadie tenga que
+    # adivinar por qué el itinerario trae menos de lo que esperaba.
+    if filtradas:
+        st.caption(f"Solo **{', '.join(filtradas)}**, "
+                   "como en el filtro de región de la tabla de arriba.")
     if modulo_cuentas.tiene_territorio(usuario):
         st.caption(f"Este itinerario es **el tuyo**: "
                    f"{modulo_cuentas.resumen_de_territorio(usuario)}.")
@@ -247,11 +292,19 @@ def seccion_visitas(datos: dict, unidades: pd.DataFrame) -> None:
     # ----------------------------------------------------------------------
     #  El itinerario, visita por visita
     # ----------------------------------------------------------------------
-    st.markdown("**El itinerario, en orden**")
-    st.caption("En este orden: primero las comunas donde hay más para ganar, y "
-               "dentro de cada una las unidades más grandes.")
+    encabezado, bajar = st.columns([3, 1])
+    with encabezado:
+        st.markdown("**El itinerario, en orden**")
+        st.caption("En este orden: primero las comunas donde hay más para ganar, "
+                   "y dentro de cada una las unidades más grandes.")
     vista = plan.copy()
     vista["plan"] = ["Ir" if s <= semanas else "Llamar" for s in vista["semana"]]
+    with bajar:
+        st.write("")
+        exportar.boton_excel(
+            vista[COLUMNAS_ITINERARIO].rename(columns=TITULOS_ITINERARIO),
+            nombre="Itinerario", clave="itinerario", hoja="Itinerario",
+            etiqueta="Bajar el itinerario", ancho="stretch")
     st.dataframe(
         vista[["visita", "plan", "comuna", "nombre_unidad", "region",
                "por_ganar", "semana", "parte_acumulada"]],
