@@ -20,11 +20,44 @@ dato** y no al mostrar: si se redondeara solo en el formato, la columna seguirí
 P.MIN, P. PROM, P.MAX, MI PRECIO y MI OFERTA. DIF% se queda con su decimal, que es
 porcentaje.
 
-**El bloque de marcas se descartó.** Se propuso una estructura de tres niveles y se
-levantó el bloqueo real: **no existe campo de marca en ninguna parte** —ni en la bodega
-ni en el catálogo—, está escrita dentro del nombre del producto. Con una lista de 14
-marcas puestas a mano se reconocía el 24% de las líneas. Serling lo dio de baja: creía
-que la API la traía. **No se construyó nada de eso.**
+**El bloque de marcas se descartó, y quedó medido para no repetirlo.**
+
+No existe campo de marca **en ninguna parte**: no está en la bodega (`dia, fecha, orden,
+estado, unidad, organismo, convenio, convenio_marco, contacto, proveedor, rut_proveedor,
+id_producto, producto, cantidad, precio, total`) ni en el catálogo del Drive, cuyos
+encabezados reales son **ID · REGIÓN · PRODUCTO · MI PUBLICADO · UNID X CAJA/ENVASE**.
+La marca está escrita dentro del nombre del producto.
+
+Serling propuso la salida correcta —**lo que no se reconoce cae en un campo OTROS, sin
+alterar ningún ID**— y con eso el diseño deja de ser adivinanza. Pero el número mató la
+idea por ahora: sobre las 20 unidades de la Armada (5.348 líneas, 2.108 productos), con
+una lista de 14 marcas puestas a mano **OTROS se lleva el 91,7% de la plata**. Sería una
+fila gigante y ocho migajas.
+
+**Si se retoma, el trabajo hecho está acá y no hay que rehacerlo.** Las marcas se pueden
+sacar de los propios datos contando en cuántos productos DISTINTOS aparece cada palabra.
+Las que salieron solas en la Armada:
+
+| Marca | Productos |
+|---|---|
+| MACROFOOD | 71 |
+| COLUN | 71 |
+| VIRUTEX | 64 |
+| CAROZZI | 39 |
+| IMPEKE | 36 |
+| ELITE | 34 |
+| SOPROLE | 32 |
+| TREMEX | 32 |
+
+En la misma lista salen palabras genéricas del producto —HOJA, PAPEL, POLVO, POLLO,
+LECHE, QUESO, GALLETA, CONSERVA, DESINFECTANTE, BIDON— y «VIII» con 493, que es la
+región. **La máquina no distingue cuál es marca y cuál no; ella sí.** El camino es
+proponerle candidatas y que marque, como el diccionario de sinónimos.
+
+⚠️ **Trampa al hacer eso:** `normalizar()` **pega las palabras** (saca espacios), así que
+sirve para buscar una marca dentro del nombre pero **no** para partir el nombre en
+palabras. El primer intento devolvió cosas como
+`4194136PLATANOAMARILLO1KILOAPROXVREGION`. Para partir hay que usar el texto crudo.
 
 Corrección mía en el camino: le informé un P. PROM de 1.672 para la Coca-Cola leyéndolo
 de una captura chica; el valor real y el que la app mostraba era 1.072,6.
