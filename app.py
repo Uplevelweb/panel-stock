@@ -36,6 +36,7 @@ import re
 import time
 import inspect
 import unicodedata
+import warnings
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
@@ -91,6 +92,20 @@ CARPETA = Path(__file__).parent
 RUTA_LOGO = CARPETA / "LogoVec.png"
 # El logo de Emergenza (RUTA_LOGO) va SOLO en el PDF y el correo de
 # cotizacion, porque ahi es Emergenza la que le vende a la institucion.
+# EL REGISTRO TIENE QUE PODER LEERSE CUANDO ALGO SE CAE.
+#
+# Cada lectura del catalogo de Convenio Marco emite decenas de este aviso de
+# openpyxl —una por extension de Excel que no entiende— y son inofensivas: el
+# archivo se lee igual. Pero llenan el registro y el 02-09-2026 taparon lo unico
+# que importaba: que despues de «Updated app!» no habia traza, o sea que la app
+# se habia quedado sin memoria. Se perdieron horas leyendo ruido.
+#
+# Se silencia SOLO ese mensaje, por su texto. Cualquier otro aviso de openpyxl
+# —o de quien sea— sigue saliendo.
+warnings.filterwarnings(
+    "ignore", message="Unknown extension is not supported and will be removed",
+    category=UserWarning, module="openpyxl")
+
 # La app en si es producto de Uplevel y lleva la marca de Uplevel.
 RUTA_LOGO_UPLEVEL = CARPETA / "logo-uplevel.png"
 # Version cuadrada del logo: el original es horizontal (400x225) y como
