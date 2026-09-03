@@ -2088,10 +2088,13 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     return tabla.sort_values("MONTO", ascending=False, na_position="last").reset_index(drop=True)
 
 
-# Alto de las tablas del modulo: ~40 filas a la vista en vez de 10, para ver de
-# una pasada las compras sin ir haciendo scroll de a poco. Pedido de Serling el
-# 03-09-2026. Streamlit dibuja las filas de 35 px y el encabezado de 38.
-ALTO_40_FILAS = 38 + 35 * 40
+# Alto de las tablas del modulo. 20 filas a la vista: alcanzan para revisar sin
+# que la tabla se coma la pantalla y empuje los filtros fuera de vista. El top
+# de unidades va a 30 porque ahi lo que se mira es el ranking entero de una
+# pasada. Pedido de Serling el 03-09-2026 (antes eran 40 en las tres).
+# Streamlit dibuja las filas de 35 px y el encabezado de 38.
+ALTO_20_FILAS = 38 + 35 * 20
+ALTO_30_FILAS = 38 + 35 * 30
 
 
 MESES_CORTOS = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
@@ -2981,7 +2984,7 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
     # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan.
     vacias = [c for c in ("MI PRECIO", "MI OFERTA", "DIF%") if tabla[c].isna().all()]
 
-    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_40_FILAS,
+    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_20_FILAS,
                  hide_index=True, column_config=configuracion,
                  key="mp_tabla_instituciones")
 
@@ -3025,7 +3028,7 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
         "**Estado** de arriba: hoy suma lo que gastaron en los productos que quedaron "
         "a la vista, no todo lo que compraron.")
     st.dataframe(
-        top, width="stretch", hide_index=True, height=ALTO_40_FILAS,
+        top, width="stretch", hide_index=True, height=ALTO_30_FILAS,
         column_config={
             "UNIDAD": st.column_config.TextColumn("UNIDAD COMPRADORA", width=ancho_fijo(340)),
             "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(130)),
@@ -3534,7 +3537,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         destacar_comentarios(productos.drop(columns=ocultas),
                              SEÑALES_DESTACADAS_MP),
         width="stretch",
-        height=ALTO_40_FILAS,
+        height=ALTO_20_FILAS,
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",

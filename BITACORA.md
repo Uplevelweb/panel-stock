@@ -1,3 +1,25 @@
+## 03-09-2026 (noche 7) · Las tablas bajan a 20 filas, el top se queda en 30
+
+Serling probó las tablas de 40 filas y pidió bajarlas a 20, **menos «Quién compra
+más», que sube a 30**. Cuarenta filas es más de lo que entra en una pantalla: la
+tabla se comía la vista y los filtros de arriba quedaban fuera, así que para
+cambiar una región había que subir a buscarlos.
+
+`ALTO_40_FILAS` se parte en dos:
+
+- `ALTO_20_FILAS` — la tabla de productos y «Quién compra qué, y en qué meses».
+- `ALTO_30_FILAS` — solo el top de «Quién compra más».
+
+El top es la excepción a propósito: ahí lo que se mira no es una fila sino el
+**ranking entero**, y cortarlo en 20 obliga a desplazarse justo cuando se está
+comparando quién gasta más. Treinta unidades cubren casi cualquier consulta
+regional completa.
+
+Las columnas no cambian: `TOPE_COLUMNAS_UNIDAD` sigue en 20 unidades a lo ancho,
+y las demás siguen juntándose en «otras (n)». Es alto, no ancho.
+
+---
+
 ## 03-09-2026 (noche 6) · El SQL de `vistas` corrido en producción
 
 Serling: «córrelo, necesito probar esto ya». Ejecutado en Supabase por el camino
@@ -94,7 +116,7 @@ Serling probando el módulo con sus 20 unidades de la Armada. Todo pedido suyo:
 - **«Cotización y correo» va plegado**, y se abre solo cuando hay productos marcados.
   No en toda consulta se cotiza, y abierto empujaba la tabla de abajo fuera de pantalla.
 - **Las tablas muestran ~40 filas** en vez de 10 (`ALTO_40_FILAS`), para ver las compras
-  de una pasada.
+  de una pasada. *(Corregido esa misma noche: ver la entrada «noche 7».)*
 
 ---
 
