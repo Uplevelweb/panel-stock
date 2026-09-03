@@ -178,7 +178,8 @@ def mapa_del_rut(compras: pd.DataFrame, unidades: pd.DataFrame,
     return tabla.sort_values("gasto", ascending=False), resumen
 
 
-@st.cache_data(show_spinner="Cruzando tus productos con lo que compró el Estado…")
+@st.cache_data(max_entries=3,
+               show_spinner="Cruzando tus productos con lo que compró el Estado…")
 def compras_de_mis_ids(sello: str, ids: tuple[str, ...], cuerpo: str,
                        meses: int = 24) -> pd.DataFrame:
     """Por unidad compradora: cuánto compró de MIS productos, y cuánto fue mío.
@@ -273,7 +274,7 @@ def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
     return tabla.sort_values("gasto", ascending=False), resumen
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(max_entries=2, show_spinner=False)
 def ids_que_ya_vende(sello: str, cuerpo: str, meses: int = 24) -> set[str]:
     """Los ID de producto que ese RUT ya vendió, en cualquier institución.
 
@@ -316,7 +317,12 @@ def ids_que_ya_vende(sello: str, cuerpo: str, meses: int = 24) -> set[str]:
     return suyos
 
 
-@st.cache_data(show_spinner="Leyendo qué compran esas instituciones…")
+# max_entries=3: cada resultado trae miles de filas CON EL NOMBRE del
+# producto, que es la columna mas pesada de la bodega (570 MB entera). Sin
+# techo, cada combinacion de filtro dejaba una copia y se acumulaban hasta
+# reventar el techo de 1.000 MB de Streamlit. Costo el "Oh no" del 02-09-2026.
+@st.cache_data(max_entries=3,
+               show_spinner="Leyendo qué compran esas instituciones…")
 def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
                               meses: int = 24) -> pd.DataFrame:
     """Qué productos compran esas unidades, y cuánto de eso se lo llevó él.
@@ -489,9 +495,12 @@ def seccion_oportunidades() -> None:
     # Y ademas la primera pantalla dejaba de estar vacia. Antes decia solo
     # «Escribe un RUT para empezar» y nada mas: en una demo hay que escribir
     # para que aparezca algo. Serling lo reporto el 01-09-2026.
-    # El catálogo se lee del Drive y no se dibuja nada: no es una decisión que
-    # ella tome cada vez que entra. Solo avisa si falla. Ver `mis_productos`.
-    mis_ids = mis_productos.ids_vigentes(usuario_actual)
+    # EL CATALOGO SE BAJA SOLO SI SE VA A USAR. Antes se leía en cada pasada,
+    # aunque la pantalla estuviera en «Según lo que ya has vendido», que no lo
+    # necesita: eran 746 KB y un Excel de 24.000 filas parseados de gusto en
+    # cada click. Se lee del Drive y no se dibuja nada; solo avisa si falla.
+    quiere_ids = st.session_state.get("op_forma") == "Contra mis ID publicados"
+    mis_ids = mis_productos.ids_vigentes(usuario_actual) if quiere_ids else set()
 
     # La vista guardada sí se muestra: esa sí es una decisión suya.
     vistas.barra_de_vistas(usuario_actual)
@@ -542,13 +551,15 @@ def seccion_oportunidades() -> None:
         captions=["Los rubros salen solos del RUT. No hay que cargar nada.",
                   (f"Producto por producto, contra los {len(mis_ids):,}".replace(",", ".") +
                    " de tu catálogo.") if mis_ids
-                  else "Producto por producto. No se pudo leer tu catálogo."])
+                  # Sin contar los productos: contarlos obliga a bajar el
+                  # catálogo, y este modo todavía no está elegido.
+                  else "Producto por producto, contra tu catálogo del Drive."])
 
     if forma == "Contra mis ID publicados" and not mis_ids:
         st.info(
-            "Para comparar contra tus ID hace falta tu catálogo, y no se pudo "
-            "leer del Drive. Abre **«Mis productos publicados»** arriba para "
-            "ver por qué. Mientras tanto se muestra lo de siempre.")
+            "No se pudo leer tu catálogo del Drive, así que no hay contra qué "
+            "comparar. Mientras tanto se muestra **según lo que ya has "
+            "vendido**, que no lo necesita.")
         forma = "Según lo que ya has vendido"
 
     if forma == "Contra mis ID publicados":
@@ -1070,6 +1081,34 @@ def _resumen_de_los_id(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
     if not codigos or len(codigos) > TECHO_UNIDADES:
         return
 
+    # ESTO NO SE CALCULA SOLO, Y LA RAZON COSTO CARO.
+    #
+    # `productos_de_las_unidades` lee la columna `producto`, que es la mas
+    # pesada de la bodega —570 MB entera— y estaba corriendo en CADA pasada de
+    # la pantalla: en cada tecla del filtro, en cada click. Con la bodega de
+    # produccion —15 veces mas grande que la copia local con la que se probo—
+    # eso paso el techo de 1.000 MB de Streamlit y la app publicada quedo en
+    # «Oh no. Error running app», que es como se ve quedarse sin memoria.
+    #
+    # Ahora se pide. El boton cuesta un click y devuelve la pantalla a lo que
+    # costaba antes de hoy.
+    firma = f"{cuerpo}|{len(codigos)}|{hash(tuple(sorted(codigos)))}|{por_ids}"
+    st.divider()
+    if st.session_state.get("op_id_calculado") != firma:
+        izquierda, derecha = st.columns([3, 1])
+        with izquierda:
+            st.markdown(f"**¿Qué compran estas {len(codigos)} unidades?**")
+            st.caption("Los productos que compran, partidos en los que tienes y "
+                       "los que no. Se calcula al pedirlo porque es la lectura "
+                       "más cara del panel.")
+        with derecha:
+            st.write("")
+            if st.button("Ver qué compran", key="op_calcular_ids",
+                         width="stretch", type="primary"):
+                st.session_state["op_id_calculado"] = firma
+                st.rerun()
+        return
+
     productos = productos_de_las_unidades(sello, tuple(sorted(codigos)), cuerpo)
     if productos.empty:
         return
@@ -1080,7 +1119,6 @@ def _resumen_de_los_id(vista: pd.DataFrame, mis_ids: set, cuerpo: str,
     hay = float(tengo["compran"].sum())
     parte = hay / total * 100
 
-    st.divider()
     izquierda, derecha = st.columns([3, 1])
     with izquierda:
         st.markdown(
