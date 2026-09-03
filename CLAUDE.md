@@ -802,6 +802,12 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
   pero eso rompe el orden. **La salida es esconder la columna cuando está vacía entera**, que
   es lo que hace `sin_ofertas` con MI OFERTA y DIF%. Si un día hay que mostrar un hueco en
   medio de números, no hay forma: se ve «None».
+- **Lo que ella busca en MI OFERTA y DIF% se encuentra ORDENANDO, no mirando.** La tabla llega
+  ordenada por MONTO y los productos con oferta suelen ser montos chicos, así que quedan
+  invisibles al fondo. Un clic en el encabezado DIF% los sube todos. Medido en el Senado el
+  03-09-2026: quince o más productos con oferta, **todos con su precio bajo lo que la
+  institución pagó** (de -7% a -21%). Por eso esas dos columnas tienen que seguir siendo
+  numéricas: es su única forma de ordenarse.
 - **La selección de filas se limpia antes de usarla** (`filas_seleccionadas`): si se marcan
   filas y luego se cambia el filtro o se reordena, las posiciones guardadas ya no existen y
   `iloc` reventaba con TypeError. Lo mismo con los `multiselect` cuyas opciones cambian: hay

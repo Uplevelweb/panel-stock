@@ -35,9 +35,32 @@ siguen siendo números ordenables. El pie de la tabla lo dice en vez de dejarla 
 «Ninguno de estos productos está en tus ofertas de la semana». El Excel baja lo mismo que
 está en pantalla, como el resto del panel.
 
-**Por qué está vacía casi siempre, y no es una falla:** las ofertas son ~840 productos de los
-22.626 del catálogo. De los 397 que compró el Senado, 94 son de ella; que ninguno de esos 94
-caiga entre los 840 de esta semana es lo esperable.
+⚠️ **Y acá se cayó el supuesto con el que se hizo el arreglo.** Se había estimado que
+MI OFERTA estaría vacía casi siempre —840 ofertas contra 22.626 productos del catálogo— y que
+por eso esconder la columna limpiaba la pantalla del Senado. **Falso, y se vio al probarlo en
+producción:** ordenando por DIF% aparecen **quince productos o más** con oferta, y **todos con
+la oferta bajo lo que el Senado pagó**:
+
+| Producto | Pagó | Su oferta | DIF% |
+|---|---|---|---|
+| GALLETA MCKAY OBLEA HELADO 140 G | 1.707 | 1.347 | **-21,1%** |
+| SPAGHETTI CAROZZI N° 5 1 K | 1.834 | 1.455 | **-20,7%** |
+| HARINA SIN POLVOS SELECTA 1 K | 1.338 | 1.065 | **-20,4%** |
+| BEBIDA LIGHT COCA-COLA 591 CC | 1.133 | 955 | **-15,7%** |
+| SALSA DE TOMATE POMAROLA 1 K | 3.257 | 2.800 | **-14,0%** |
+
+Sigue habiendo más abajo: -9,1%, -8,1%, -7,7%, -7,5%, -7,3%.
+
+**O sea que la columna no se esconde en esta consulta, y el arreglo no limpia lo que ella
+vio.** Sirve para las instituciones que compran fuera de su catálogo, que es cuando la columna
+queda vacía entera. **Lo que sí resolvió el problema de verdad fue el orden**: esos quince
+productos estaban invisibles porque la tabla llega ordenada por MONTO y ellos son montos
+chicos. Un clic en el encabezado DIF% los sube todos. Esa es la razón por la que valió la pena
+NO pasarlas a texto.
+
+**Queda una pregunta abierta, y es comercial, no técnica:** hoy hay que saber que se puede
+ordenar por DIF% para encontrar esto. Un filtro «solo lo que tengo en oferta» lo pondría a la
+mano, pero es una función nueva y no se pidió — se propone aparte.
 
 ---
 

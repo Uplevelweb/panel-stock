@@ -3043,15 +3043,16 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     m3.metric("En tu catálogo", en_catalogo)
     m4.metric("Órdenes", int(vista["ORDEN"].nunique()))
 
-    # MI OFERTA y DIF% se apagan cuando NINGUN producto de la consulta tiene
-    # oferta esta semana, que es lo habitual: las ofertas son ~840 productos de
-    # los 22.600 del catalogo, asi que casi nunca calzan con lo que compro la
-    # institucion. Streamlit **no deja en blanco una celda numerica vacia**: le
-    # escribe «None», y dos columnas enteras de «None» ensucian la tabla y no
-    # dicen nada. Comprobado el 03-09-2026 en las dos versiones y con pandas 2 y
-    # 3: no hay formato ni dtype que lo evite, solo pasarlas a texto — y eso se
+    # MI OFERTA y DIF% se apagan solo si NINGUN producto de la consulta tiene
+    # oferta esta semana — pasa cuando la institucion compra cosas fuera de su
+    # catalogo—. Streamlit **no deja en blanco una celda numerica vacia**: le
+    # escribe «None», y una columna entera de «None» ensucia la tabla sin decir
+    # nada. Comprobado el 03-09-2026 en las dos versiones y con pandas 2 y 3: no
+    # hay formato ni dtype que lo evite, solo pasarlas a texto — y eso se
     # descarto, porque ordenar por DIF% es como ella encuentra donde su oferta
-    # gana. Si hay aunque sea una oferta, las dos columnas vuelven enteras.
+    # gana. Cuando hay aunque sea una, las dos columnas van enteras y los huecos
+    # dicen «None»: ahi el hueco significa «este ID no tiene oferta», al lado de
+    # los que si la tienen. No se esconde por fila, se esconde por columna.
     sin_ofertas = [c for c in ("MI OFERTA", "DIF%") if productos[c].isna().all()]
 
     st.caption(
