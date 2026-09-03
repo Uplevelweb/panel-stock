@@ -2030,9 +2030,23 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     for identificador, grupo in con_id.groupby("ID", sort=False):
         precios = [p for p in grupo["PRECIO"] if p is not None and not pd.isna(p)]
         montos = [m for m in grupo["TOTAL"] if m is not None and not pd.isna(m)]
-        promedio = sum(precios) / len(precios) if precios else None
+        # La suma de los precios dividida por cuántos precios se sumaron. Es el
+        # criterio de Serling, confirmado el 03-09-2026, y es a propósito el
+        # promedio SIMPLE y no el ponderado por cantidad: así P.MIN, P. PROM y
+        # P.MAX se leen en la misma escala. En productos comprados en cantidades
+        # muy distintas no es lo que pagaron por unidad —el pepino sale 1.382 y
+        # pagaron 1.622—, y se le dijo.
+        #
+        # Va REDONDEADO a peso entero: el peso chileno no tiene centavos y los
+        # decimales solo ensuciaban la tabla (pedido de ella el mismo día).
+        promedio = round(sum(precios) / len(precios)) if precios else None
         clave = str(identificador).strip()
         oferta = precios_oferta.get(clave)
+        # También a peso entero, por lo mismo. Se redondea ANTES de calcular el
+        # DIF% para que el porcentaje sea el del precio que se ve en pantalla y
+        # no el de un número con decimales que ella nunca vio.
+        if oferta is not None and not pd.isna(oferta):
+            oferta = round(oferta)
         # Sin catalogo cargado se cae a las ofertas, que era el criterio viejo:
         # asi la app sigue funcionando si el archivo no esta disponible.
         en_catalogo = (clave in catalogo_propio) if catalogo_propio else (oferta is not None)
@@ -2157,12 +2171,17 @@ def tabla_por_institucion(vista: pd.DataFrame, productos: pd.DataFrame,
         "MONTO": list(mias["MONTO"]),
         "OC": list(mias["OC"]),
         "P. PROM": list(mias["P. PROM"]),
-        "MI PRECIO": [precios_publicados.get(i) for i in ids],
+        # A peso entero, igual que el resto de la plata.
+        "MI PRECIO": [None if precios_publicados.get(i) is None
+                      else round(precios_publicados[i]) for i in ids],
         "MI OFERTA": list(mias["MI OFERTA"]),
         "DIF%": list(mias["DIF%"]),
     })
-    for columna in ("MI PRECIO",):
-        tabla[columna] = pd.to_numeric(tabla[columna], errors="coerce").astype("Float64")
+    # Misma escalera que la tabla de arriba: la plata va como entero (`Int64`),
+    # sin decimales, o Streamlit escribe «1.234,0». DIF% no entra: es un
+    # porcentaje y sí lleva un decimal.
+    for columna in ("MONTO", "OC", "P. PROM", "MI PRECIO", "MI OFERTA"):
+        tabla[columna] = _numeros_de_columna(tabla[columna])
     return pd.concat([tabla, matriz.reset_index(drop=True)], axis=1), \
         list(matriz.columns), max(sobrantes, 0)
 

@@ -1,3 +1,36 @@
+## 03-09-2026 (noche 3) · La plata sin centavos, y el promedio queda como estaba
+
+Serling dudó del precio promedio. Se midió antes de tocar nada, y el dato está sano:
+**PRECIO × CANTIDAD = TOTAL en el 100%** de las 722 líneas del Senado. El precio
+unitario es real.
+
+**Lo que sí apareció midiendo:** P. PROM es el promedio **simple** de los precios de
+línea, no el ponderado por cantidad, y en productos comprados en cantidades muy
+distintas se desvía de lo que de verdad pagaron por unidad: el pepino sale 1.382 y
+pagaron 1.622 — **14,8%**. Se le mostraron los dos con los números a la vista.
+
+**Decidió el simple**, describiéndolo con sus palabras: «la suma de todos los precios
+vendidos entre la cantidad de precios sumados». Que es exactamente lo que la app ya
+hacía, así que no se cambió nada. Queda anotado en `CLAUDE.md` que es decisión suya y
+cuál es la consecuencia, para que nadie lo «arregle» después.
+
+**Sí se cambió la plata a peso entero**, que era lo otro que pidió. Se redondea **en el
+dato** y no al mostrar: si se redondeara solo en el formato, la columna seguiría siendo
+`Float64` y Streamlit escribe «1.234,0». Ahora las dos tablas dan `Int64` en MONTO,
+P.MIN, P. PROM, P.MAX, MI PRECIO y MI OFERTA. DIF% se queda con su decimal, que es
+porcentaje.
+
+**El bloque de marcas se descartó.** Se propuso una estructura de tres niveles y se
+levantó el bloqueo real: **no existe campo de marca en ninguna parte** —ni en la bodega
+ni en el catálogo—, está escrita dentro del nombre del producto. Con una lista de 14
+marcas puestas a mano se reconocía el 24% de las líneas. Serling lo dio de baja: creía
+que la API la traía. **No se construyó nada de eso.**
+
+Corrección mía en el camino: le informé un P. PROM de 1.672 para la Coca-Cola leyéndolo
+de una captura chica; el valor real y el que la app mostraba era 1.072,6.
+
+---
+
 ## 03-09-2026 (noche 2) · «Quién compra qué, y en qué meses»
 
 La tabla que pidió Serling para preparar su gestión del mes: de lo que ella vende,

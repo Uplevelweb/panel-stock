@@ -863,6 +863,19 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
   encima de la pantalla. Hay una regla de seguridad que les devuelve su fuente.
 - **El orden de las reglas CSS importa**: `@media` con la misma especificidad tiene que ir
   **al final**, o la regla general lo pisa (pasó con el tamaño del título en el celular).
+- **⚠️ La plata va SIN DECIMALES, a peso entero.** El peso chileno no tiene centavos y los
+  decimales solo ensuciaban la tabla (`53.073.864,5`). Se redondea **en el dato**, no en el
+  formato: `promedio`, `oferta` y `MI PRECIO` salen ya redondeados, y así `_numeros_de_columna`
+  los deja en `Int64`. Si se redondeara solo al mostrar, la columna seguiría siendo `Float64`
+  y Streamlit escribiría «1.234,0». Pedido de Serling el 03-09-2026.
+- **⚠️ P. PROM es el promedio SIMPLE y así se queda.** Es la suma de los precios de cada línea
+  dividida por cuántos precios se sumaron — criterio de Serling, confirmado el 03-09-2026
+  cuando dudó del número y se le mostraron los dos. **No es el precio medio realmente pagado
+  por unidad**: en productos comprados en cantidades muy distintas se desvía —el pepino sale
+  1.382 y pagaron 1.622, un 14,8%— y ella lo sabe. La razón de fondo es que así P.MIN, P. PROM
+  y P.MAX se leen en la misma escala. **No cambiarlo sin preguntarle.**
+- **Hay productos cuyo «precio unitario» es un contrato entero** y no hay cómo arreglarlo:
+  «ALIMENTACIÓN -» son órdenes de cantidad 1 por $44 y $61 millones. El dato viene así.
 - **Las columnas numéricas van como números** (`Int64`), no como texto con `$`: si van como
   texto, la tabla ordena "11" entre "1" y "2". El formato con separador de miles lo pone
   `column_config` con `format="localized"`, que respeta el idioma del navegador.
