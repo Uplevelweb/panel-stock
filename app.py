@@ -2747,6 +2747,35 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     with st.container(border=True):
         st.markdown("##### 🏛️ Institución a consultar")
 
+        # El convenio va PRIMERO, antes de region (pedido de Serling el
+        # 03-09-2026): ella parte de «quiero ver Alimentos» y recien despues
+        # elige donde mirar. Antes estaba al final, debajo de las fechas.
+        #
+        # Se nombra SIEMPRE por su nombre y nunca por el codigo (`2239-9-LR24`):
+        # el numero no le dice nada a nadie. Los nombres salen de
+        # `bodega/convenios.json`, que llena el bodeguero preguntandole una vez
+        # a la API por cada codigo que aparece en las compras.
+        #
+        # La lista es la de TODOS los convenios conocidos, no la de los que
+        # compro esta institucion: puesto aqui arriba todavia no hay institucion
+        # elegida. Como eso permite pedir un convenio que esa unidad nunca
+        # compro, mas abajo —ya con las unidades marcadas— se avisa antes de
+        # consultar en vez de devolver una tabla vacia.
+        #
+        # Un mismo convenio cambia de nombre entre licitaciones («Mobiliario
+        # General» y «Convenio Marco de Mobiliario General» son el mismo rubro
+        # en anios distintos). No se juntan a mano: seria adivinar cual es cual.
+        nombres_cm = nombres_convenios(sello_bodega())
+        opciones_cm = [TODOS_CONVENIOS] + sorted({n for n in nombres_cm.values() if n})
+        if st.session_state.get("mp_convenio_uno") not in opciones_cm:
+            st.session_state["mp_convenio_uno"] = TODOS_CONVENIOS
+        st.selectbox(
+            "Convenio Marco a consultar", opciones_cm, key="mp_convenio_uno",
+            help="Elige el convenio y la tabla mostrará solo esas compras. "
+                 "Déjalo en «Todos los convenios» para ver todo lo que compró "
+                 "la institución. Solo funciona cuando el período está en la "
+                 "bodega: en una consulta en vivo el convenio no viene.")
+
         f1, f2 = st.columns([1, 2])
         # Las sin region van al final de la lista, no primeras por el parentesis.
         nombradas = sorted(r for r in catalogo["region"].unique() if r and r != SIN_REGION)
@@ -2892,24 +2921,28 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 "Falta el ticket de la API. Se anota en Streamlit ▸ Manage app ▸ "
                 'Settings ▸ Secrets así:\n\n[mercadopublico]\nticket = "TU-TICKET"')
 
-        # El convenio se elige ANTES de consultar: ella pidio filtrar lo que
-        # quiere ver, no filtrar una tabla que ya salio. Solo se puede cuando la
-        # respuesta sale de la bodega; en vivo el convenio no existe.
-        if usar_bodega and elegidas:
-            disponibles = convenios_del_periodo(
-                tuple(sorted(elegidas_df["codigo_unidad"])),
-                tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
-            if disponibles:
-                # Una lista de la que se elige UNO, no un multiselect: con las
-                # etiquetas de todos marcadas habia que ir sacandolas una por
-                # una, y en el celular ocupaban media pantalla.
-                opciones = [TODOS_CONVENIOS] + disponibles
-                if st.session_state.get("mp_convenio_uno") not in opciones:
-                    st.session_state["mp_convenio_uno"] = TODOS_CONVENIOS
-                st.selectbox(
-                    "Convenio Marco a consultar", opciones, key="mp_convenio_uno",
-                    help="Los convenios por los que compró esta institución en el "
-                         "período. Elige uno para ver solo esas compras.")
+        # El selector del convenio se subio al principio del bloque. Aqui abajo
+        # queda solo el aviso, que es lo unico que se puede saber recien ahora:
+        # ya hay unidades marcadas y ya hay periodo, asi que se puede comprobar
+        # si esa institucion compro de verdad por el convenio pedido. Sin esto,
+        # pedir un convenio que nunca compro devolvia una tabla vacia y parecia
+        # que la consulta habia fallado.
+        convenio_pedido = st.session_state.get("mp_convenio_uno", TODOS_CONVENIOS)
+        if convenio_pedido != TODOS_CONVENIOS and elegidas:
+            if not usar_bodega:
+                st.info(
+                    f"**{convenio_pedido}**: este período se consulta en vivo y la API "
+                    "no entrega el convenio, así que el filtro no se va a aplicar. "
+                    "Abajo vas a poder filtrar por el rubro de tu catálogo.")
+            else:
+                disponibles = convenios_del_periodo(
+                    tuple(sorted(elegidas_df["codigo_unidad"])),
+                    tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
+                if disponibles and convenio_pedido not in disponibles:
+                    st.warning(
+                        f"En este período no compró nada por **{convenio_pedido}**. "
+                        "Si consultas así, la tabla va a salir vacía. Compró por: "
+                        + " · ".join(disponibles))
 
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)

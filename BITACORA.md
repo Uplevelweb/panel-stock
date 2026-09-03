@@ -1,3 +1,56 @@
+## 03-09-2026 (tarde) · El convenio pasa a ser el primer filtro, y con nombre
+
+Pedido de Serling: **el filtro de convenios va antes de Región, y con el nombre del
+convenio, no con el número.** Estaba al final, debajo de las fechas.
+
+**Por qué el orden importa y no es un capricho de pantalla:** la pregunta con la que ella
+parte no es «¿qué compró esta institución?» sino «¿quién compra Alimentos?». Poner el
+convenio arriba pone la pantalla en el orden en que ella piensa.
+
+**El número no le dice nada a nadie.** El código (`2239-9-LR24`) es interno de
+ChileCompra. Los nombres viven en `bodega/convenios.json`, que el bodeguero llena
+preguntándole una vez a la API por cada código que ve. Hoy tiene **28 códigos con 26
+nombres, ninguno vacío**, así que la lista sale entera con nombre.
+
+⚠️ **Y acá volví a caer en la trampa que este mismo archivo tiene documentada.** Miré la
+carpeta `bodega/` **local**, vi 24 códigos y concluí que faltaban dos nombres
+(`2239-12-LR25` y `2239-19-LR23`); se los pedí a la API y los escribí. **Los dos ya
+estaban en el repositorio hace rato**: la copia local estaba vieja y le faltaban cuatro
+entradas. Lo agarró el `git diff` justo antes de subir — mi archivo **borraba** dos
+nombres que el bodeguero ya había guardado (`2239-7-LR17` y `2239-9-LR22`). No se subió
+nada de eso y la copia local se actualizó desde el repositorio.
+
+**La regla ya estaba escrita y no la seguí: antes de afirmar que algo falta, preguntarle
+al repositorio, no a esta carpeta.** Costó dos consultas del ticket (de 10.000) y estuvo
+a un commit de borrar datos buenos. Lo que salvó fue mirar el diff antes de empujar.
+
+**Lo que hubo que resolver al subirlo:** arriba de Región todavía no hay institución
+elegida, así que la lista ya no puede ser «los convenios que compró esta institución en
+el período» —que era lo que la hacía a prueba de errores—. Ahora es la lista completa, y
+se puede pedir un convenio que esa unidad nunca compró. En vez de devolver una tabla
+vacía —que parece una consulta fallida; ya pasó antes y por eso existe el aviso del
+21-08— **se avisa abajo, ya con las unidades y el período en la mano**:
+
+> En este período no compró nada por **Convenio Marco para la adquisición de Alimentos**.
+> Si consultas así, la tabla va a salir vacía. Compró por: CM Venta y Arriendo de
+> Computadoras y Accesorios
+
+Probado en local con el Senado: con DEPARTAMENTO INFORMATICA sale el aviso; agregando
+ALIMENTOS Y BEBIDAS desaparece solo, y la consulta devuelve 318 productos, $428.769.641
+y 134 órdenes, todas de Alimentos. **No cuesta una lectura más de la bodega**: se llama a
+`convenios_del_periodo` solo cuando hay un convenio pedido, o sea menos que antes.
+
+Si el período se va en vivo, el aviso dice que el filtro no se va a aplicar: la API no
+entrega el convenio y ahí manda el rubro del catálogo. Eso ya era así; antes se resolvía
+escondiendo el selector, que no se puede cuando está arriba de todo.
+
+⚠️ **Un mismo convenio cambia de nombre entre licitaciones.** «Mobiliario General» y
+«Convenio Marco de Mobiliario General» son el mismo rubro en años distintos; pasa igual
+con gas licuado, vehículos y ofimática. Salen como entradas separadas. **No se juntaron:
+decidir cuáles son el mismo es criterio de ella, no del código.** Queda en pendientes.
+
+---
+
 ## 03-09-2026 · El «Oh no» era el proceso viejo, y las columnas vacías decían «None»
 
 **Lo primero: la app estaba caída y el arreglo ya estaba arriba.** El registro terminaba en
@@ -1040,6 +1093,21 @@ que es donde GitHub y el plan gratuito de Streamlit empiezan a apretar.
 ---
 
 ## Pendientes
+
+**Anotados el 03-09-2026, para atender después** (pedido de Serling: «apúntalas y las
+atendemos luego»):
+
+- **Filtro «solo lo que tengo en oferta»** en la tabla de Mercado Público, al lado de
+  CON STOCK / NO LO TENGO. Hoy los productos con oferta se encuentran solo si una sabe
+  que hay que ordenar por DIF%; en el Senado eran quince y estaban invisibles al fondo
+  del orden por monto.
+- **Juntar los convenios que son el mismo rubro en años distintos** («Mobiliario General»
+  y «Convenio Marco de Mobiliario General», gas licuado, vehículos, ofimática). Hoy salen
+  como entradas separadas en el filtro. No se hizo porque decidir cuáles son el mismo es
+  criterio de ella, no del código.
+- **Alarma del reloj de Supabase**: avisar cuando lleva más de una hora sin latir. Estuvo
+  mudo dos días y medio (29-08 al 31-08) sin que nadie se enterara.
+
 
 1. **Bajar también 2024** si hace falta el 6,7% de órdenes anteriores a enero de 2025.
 2. **Agente de IA** para preguntarle por ID, precios y acciones comerciales (punto 10 del

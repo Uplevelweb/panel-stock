@@ -54,9 +54,40 @@ generan dos PDF y dos correos, porque cada convenio se compra aparte. Lo hace `p
 barrido arrastre compras anteriores. Se elige con **atajos (7, 15, 30, 90 días, 1 año) o libre**;
 los atajos terminan en el último día de la bodega, para que la consulta salga al instante.
 
-**El convenio se elige ANTES de consultar**, en una lista que sale de la bodega (los convenios por
-los que esa institución compró en ese período). Solo se puede cuando la respuesta viene de la
-bodega: en vivo el convenio no existe y ahí reaparece abajo el filtro por rubro del catálogo.
+**El convenio es el PRIMER filtro de la pantalla, arriba de Región** (03-09-2026, pedido de
+Serling): se parte de «quiero ver Alimentos» y recién después se elige dónde mirar. Antes
+estaba al final, debajo de las fechas.
+
+**Siempre se nombra por su NOMBRE, nunca por el código** (`2239-9-LR24`): el número no le dice
+nada a nadie. Los nombres viven en `bodega/convenios.json`, que el bodeguero llena
+preguntándole una vez a la API por cada código que ve — **28 códigos y 26 nombres al
+03-09-2026, ninguno vacío**. La lista del selector se arma solo con los nombres: un código sin
+nombre no aparecería ahí (sí en la tabla y en el aviso de «compró por», que muestran el código
+crudo). Si algún día pasa, el arreglo es agregarlo al archivo: el bodeguero **fusiona y no
+pisa**, así que escribirlo a mano es permanente.
+
+⚠️ **`bodega/convenios.json` es de los archivos que se desactualizan en la copia local.** El
+03-09-2026 la copia de trabajo tenía 24 códigos y el repositorio 28: se dio por «faltan dos
+nombres», se gastaron dos consultas del ticket pidiéndolos y el commit **habría borrado dos
+nombres buenos**. Lo atajó mirar el `git diff` antes de empujar. Es la misma regla de los
+workflows: **preguntarle al repositorio, no a esta carpeta.**
+
+```bash
+gh api repos/uplevelweb/panel-stock/contents/bodega/convenios.json --jq '.content' | base64 -d
+```
+
+Como el selector va arriba, su lista es la de **todos los convenios conocidos**, no la de los
+que compró esa institución —a esa altura todavía no hay institución elegida—. Eso permite
+pedir un convenio que esa unidad nunca compró, y por eso más abajo, ya con las unidades y el
+período, **se avisa antes de consultar** («no compró nada por X · compró por: Y, Z») en vez de
+devolver una tabla vacía que parece una consulta fallida. Si el período se va en vivo, el aviso
+dice que el filtro no se aplicará: la API no entrega el convenio y ahí manda el rubro del
+catálogo.
+
+⚠️ **Un mismo convenio cambia de nombre entre licitaciones** («Mobiliario General» y «Convenio
+Marco de Mobiliario General» son el mismo rubro en años distintos; lo mismo gas licuado,
+vehículos y ofimática). Salen como entradas separadas y **no se juntan a mano: sería adivinar**.
+Si algún día molesta, la decisión es de ella, no del código.
 
 **Lo que ve el comprador**: el PDF dice **INSTITUCIÓN**, no «cliente» —todavía no le compra— y el
 asunto es «ID disponibles en Convenio Marco | Comercial Emergenza **2208-0306**», terminando en el
