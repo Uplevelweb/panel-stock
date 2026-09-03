@@ -1,3 +1,26 @@
+## 03-09-2026 (noche) · El ⊗ deja de borrar veinte unidades de un toque
+
+Pedido de Serling mientras probaba el módulo para su gestión del mes. Marcar las
+unidades de la Armada son veinte toques; el botón de limpiar del multiselect las
+borra todas con uno, y está pegado a la flecha de abrir.
+
+**Streamlit no deja poner un «¿estás segura?» sobre su propio botón**, pero el
+`on_change` corre ANTES de que el widget se vuelva a dibujar: ahí se repone lo que
+había y se deja el aviso. El segundo toque sí borra —el resguardo no puede volverse
+una traba— y con una sola unidad marcada no pregunta, porque ahí es evidente.
+
+Probado con `AppTest` contra la app entera: marcar tres, tocar el ⊗ y ver que
+vuelven las tres con el aviso; tocar de nuevo y ver que ahora sí se van. Sin
+excepción: Streamlit acepta que se escriba la llave del propio widget desde su
+`on_change`.
+
+**La otra forma de perder la selección era cambiar Región u Organismo**: las
+unidades que dejaban de calzar se soltaban en silencio. Soltarlas no se puede
+evitar —Streamlit reclama si el valor no está entre las opciones— pero ahora se
+avisa cuáles se fueron y que se recuperan volviendo el filtro a como estaba.
+
+---
+
 ## 03-09-2026 (tarde) · El convenio pasa a ser el primer filtro, y con nombre
 
 Pedido de Serling: **el filtro de convenios va antes de Región, y con el nombre del

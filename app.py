@@ -1588,6 +1588,36 @@ def nombres_convenios(sello: str) -> dict[str, str]:
         return {}
 
 
+def cuidar_unidades_marcadas() -> None:
+    """Que un toque en el ⊗ no borre veinte unidades marcadas de una.
+
+    Marcar las unidades de la Armada son veinte toques; el botón de limpiar del
+    multiselect las borra todas con uno solo, y queda al lado de la flecha de
+    abrir. Serling lo pidió el 03-09-2026 después de que le pasara.
+
+    **Streamlit no deja poner un «¿estás segura?» encima de su propio botón**,
+    pero el `on_change` corre ANTES de que el widget se vuelva a dibujar: ahí se
+    puede reponer lo que había y dejar un aviso. El segundo toque sí borra, para
+    que el resguardo no se vuelva una traba.
+
+    Con UNA sola unidad marcada no pregunta: sacar la única marca es evidente y
+    preguntar ahí sería puro estorbo.
+    """
+    ahora = list(st.session_state.get("mp_unidades", []))
+    antes = st.session_state.get("mp_unidades_antes", [])
+    if ahora:
+        st.session_state["mp_unidades_antes"] = ahora
+        st.session_state.pop("mp_unidades_permiso", None)
+        return
+    if len(antes) >= 2 and not st.session_state.get("mp_unidades_permiso"):
+        st.session_state["mp_unidades"] = antes          # se repone lo borrado
+        st.session_state["mp_unidades_aviso"] = len(antes)
+        st.session_state["mp_unidades_permiso"] = True   # el proximo si borra
+        return
+    st.session_state["mp_unidades_antes"] = []
+    st.session_state.pop("mp_unidades_permiso", None)
+
+
 def anios_de_convenios(nombres: dict[str, str]) -> dict[str, set[int]]:
     """El año de cada convenio, sacado del código: `2239-9-LR24` es de 2024.
 
@@ -2865,19 +2895,45 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # unidades ya marcadas pueden dejar de estar entre las opciones. Se limpian
         # ANTES de dibujar el selector, o Streamlit reclama.
         marcadas = [c for c in st.session_state.get("mp_unidades", []) if c in etiquetas]
+        # Las que se caen NO se pierden en silencio: se avisa cuáles y por qué,
+        # porque cambiar la Región es la otra forma de quedarse sin la selección
+        # sin haberla tocado. Se dibuja después del selector, que es donde mira.
+        soltadas = [st.session_state.get("mp_etiquetas_previas", {}).get(c, c)
+                    for c in st.session_state.get("mp_unidades", []) if c not in etiquetas]
         if marcadas != list(st.session_state.get("mp_unidades", [])):
             st.session_state["mp_unidades"] = marcadas
+        # Las etiquetas de esta corrida sirven para poder nombrar mañana lo que
+        # se caiga: cuando se cae, ya no está en `etiquetas`.
+        st.session_state["mp_etiquetas_previas"] = dict(etiquetas)
 
         elegidas = st.multiselect(
             f"Unidades compradoras ({len(etiquetas)} para elegir)",
             options=list(etiquetas),
             format_func=lambda codigo: etiquetas.get(codigo, codigo),
             key="mp_unidades",
+            on_change=cuidar_unidades_marcadas,
             help="Se pueden marcar varias: si son del mismo organismo (las unidades "
                  "de la Armada, por ejemplo) la consulta no demora más. El número "
                  "de cada una es cuántas órdenes de Convenio Marco tuvo en los 8 "
                  "días hábiles con que se armó el catálogo: sirve para saber quién "
                  "compra seguido.")
+
+        # El resguardo del ⊗: el aviso se dibuja una sola vez, y el permiso para
+        # el segundo toque sobrevive porque no se toca en la corrida del aviso.
+        cuantas = st.session_state.pop("mp_unidades_aviso", 0)
+        if cuantas:
+            st.warning(
+                f"⊗ Se iban a borrar las **{cuantas} unidades** que tenías marcadas. "
+                "**No se borró nada.** Si de verdad quieres vaciarlas, toca el ⊗ otra vez.")
+        else:
+            st.session_state.pop("mp_unidades_permiso", None)
+
+        if soltadas:
+            st.warning(
+                f"Se soltaron **{len(soltadas)}** unidades que no están en este "
+                "filtro: " + " · ".join(soltadas[:6])
+                + (f" y {len(soltadas) - 6} más." if len(soltadas) > 6 else ".")
+                + " Vuelve a poner la Región o el Organismo de antes para recuperarlas.")
 
         # --- Periodo y costo de la consulta ---------------------------------
         hoy = hoy_en_chile()

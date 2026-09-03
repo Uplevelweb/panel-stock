@@ -858,6 +858,15 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
   03-09-2026: quince o más productos con oferta, **todos con su precio bajo lo que la
   institución pagó** (de -7% a -21%). Por eso esas dos columnas tienen que seguir siendo
   numéricas: es su única forma de ordenarse.
+- **⚠️ Un toque en el ⊗ del multiselect NO puede borrar veinte unidades marcadas.**
+  Marcar las unidades de la Armada son veinte toques y el botón de limpiar las borra con uno,
+  al lado de la flecha de abrir. Streamlit **no deja poner un «¿estás segura?» encima de su
+  propio botón**, pero el `on_change` corre ANTES de redibujar el widget: ahí se repone lo
+  borrado y se deja un aviso (`cuidar_unidades_marcadas`). **El segundo toque sí borra**, para
+  que el resguardo no se vuelva una traba, y con una sola unidad marcada no pregunta. Cambiar
+  Región u Organismo es la otra forma de perder la selección sin tocarla: las que ya no calzan
+  se sueltan igual —no hay alternativa, Streamlit reclama si el valor no está en las opciones—
+  pero ahora se dice cuáles y cómo recuperarlas.
 - **La selección de filas se limpia antes de usarla** (`filas_seleccionadas`): si se marcan
   filas y luego se cambia el filtro o se reordena, las posiciones guardadas ya no existen y
   `iloc` reventaba con TypeError. Lo mismo con los `multiselect` cuyas opciones cambian: hay
