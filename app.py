@@ -1504,14 +1504,41 @@ def _meses_del_rango(desde: date, hasta: date) -> list[str]:
     return meses
 
 
-@st.cache_data(show_spinner=False)
-def leer_bodega(capa: str, meses: tuple[str, ...], sello: str) -> pd.DataFrame:
-    """Lee los archivos mensuales de una capa. `sello` invalida la cache."""
+@st.cache_data(max_entries=2, show_spinner=False)
+def leer_bodega(capa: str, meses: tuple[str, ...], sello: str,
+                codigos: tuple[str, ...] = ()) -> pd.DataFrame:
+    """Lee los archivos mensuales de una capa. `sello` invalida la cache.
+
+    ⚠️ SE FILTRA POR UNIDAD AL LEER, NO DESPUES. Esto tumbó el panel el
+    02-09-2026, dos veces, consultando el Senado en Mercado Público.
+
+    Antes cargaba **todas las columnas de todos los meses del período** y las
+    juntaba en memoria; recién ahí el que llamaba se quedaba con sus unidades.
+    Un mes de producción son 393.919 líneas y **128 MB en memoria**: un período
+    de un año son doce meses, más de 1,5 GB, contra un techo de 1.000 MB.
+
+    Funcionó durante meses porque la bodega era 15 veces más chica. Creció
+    —de 121 MB a 421 MB— y cruzó la línea.
+
+    Filtrando al leer, consultar el Senado pasa de 393.919 filas por mes a las
+    de sus 5 unidades: se cae el 99,9%. Cada mes se suelta apenas se filtra, así
+    que el peor momento es UN mes, no doce.
+
+    `codigos` vacío mantiene el comportamiento de antes, para quien necesite la
+    capa entera.
+    """
+    buscadas = set(codigos)
     partes = []
     for mes in meses:
         archivo = RUTA_BODEGA / capa / f"{mes}.parquet"
-        if archivo.exists():
-            partes.append(pd.read_parquet(archivo))
+        if not archivo.exists():
+            continue
+        trozo = pd.read_parquet(archivo)
+        if buscadas and "unidad" in trozo.columns:
+            trozo = trozo[trozo["unidad"].isin(buscadas)]
+        if not trozo.empty:
+            partes.append(trozo.copy())
+        del trozo
     if not partes:
         return pd.DataFrame()
     return pd.concat(partes, ignore_index=True)
@@ -1570,7 +1597,7 @@ def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
     una tabla que ya salio. Solo se puede leyendo la bodega: en una consulta en
     vivo el convenio no viene.
     """
-    detalle = leer_bodega("detalle", meses, sello)
+    detalle = leer_bodega("detalle", meses, sello, codigos)
     if detalle.empty or "convenio_marco" not in detalle.columns:
         return []
     dias = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
@@ -1586,12 +1613,12 @@ def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
 def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
                          hasta: date) -> pd.DataFrame:
     """Las compras guardadas, en el mismo formato que devuelve la consulta viva."""
+    codigos = tuple(unidades["codigo_unidad"])
     detalle = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
-                          sello_bodega())
+                          sello_bodega(), codigos)
     if detalle.empty:
         return pd.DataFrame(columns=COLUMNAS_MP)
 
-    codigos = set(unidades["codigo_unidad"])
     nombres = dict(zip(unidades["codigo_unidad"], unidades["nombre_unidad"]))
     # Se filtra por el DIA DEL BARRIDO, no por la fecha de creacion: es lo mismo
     # que hace la consulta en vivo, que barre dias y despues deja filtrar por la
@@ -1599,7 +1626,7 @@ def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
     # la API lista un dia casi siempre se crearon antes.
     dias_barridos = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
     dentro = dias_barridos.between(desde, hasta)
-    suyas = detalle["unidad"].isin(codigos)
+    suyas = detalle["unidad"].isin(set(codigos))
     elegidas = detalle[dentro.values & suyas.values].copy()
     if elegidas.empty:
         return pd.DataFrame(columns=COLUMNAS_MP)
@@ -2899,10 +2926,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         if usar_bodega:
             with st.spinner("Leyendo la bodega..."):
                 tabla = compras_desde_bodega(elegidas_df, desde, hasta)
+                # Ya viene filtrado por unidad desde `leer_bodega`.
                 crudo = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
-                                    sello_bodega())
-                if not crudo.empty:
-                    crudo = crudo[crudo["unidad"].isin(set(elegidas_df["codigo_unidad"]))]
+                                    sello_bodega(),
+                                    tuple(elegidas_df["codigo_unidad"]))
                 resumen = resumen_bodega(tabla, desde, hasta, crudo)
         else:
             barra = st.progress(0.0, text="Consultando Mercado Público...")
