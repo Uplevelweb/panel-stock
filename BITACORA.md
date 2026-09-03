@@ -1,3 +1,42 @@
+## 03-09-2026 (noche 5) · La cartera se guarda en Mercado Público
+
+Pedido de Serling: «con posibilidad de guardar y proteger la vista porque sería la
+cartera del comercial». El mecanismo ya existía (`vistas.py`) pero estaba cableado a
+Oportunidades: sus `CAMPOS` son todos `op_*` y `aplicar()` importaba cosas de
+`modulo_oportunidades`.
+
+Ahora `vistas.py` **sirve a dos ámbitos**. `leer/guardar/borrar/aplicar/barra_de_vistas`
+reciben `ambito` y por defecto siguen siendo los de Oportunidades, así que ese módulo no
+se tocó. Las llaves de los widgets llevan prefijo (`vi_` y `vimp_`) o Streamlit los
+pisaría entre sí.
+
+Decisiones que conviene no rehacer:
+
+- **Los campos de Mercado van TODOS dentro de una sola columna `jsonb`** (`mp`), no una
+  columna por filtro como los `op_*`. Agregar un filtro nuevo no obliga a tocar la tabla.
+  Los `op_*` quedaron como estaban por historia.
+- ⚠️ **EL PERÍODO NO SE GUARDA, a propósito.** Una cartera dice **a quién** le vendes, no
+  en qué fechas: guardar el rango haría que una vista de septiembre se abriera en enero
+  mirando meses viejos. El período ya se propone solo, un año hacia atrás.
+- **El ámbito se filtra en Python, no en la consulta**: las filas viejas no traen la
+  columna y se cuentan como de Oportunidades, que es lo que eran.
+
+⚠️ **Y apareció un defecto viejo de paso: al SQL le faltaba `op_convenios`.** Está en
+`CAMPOS` desde siempre pero no en el `create table`, así que **las vistas de Oportunidades
+tampoco habrían quedado guardadas** aunque se corriera el SQL: PostgREST rechaza la
+columna desconocida, `_pedir` devuelve `None` y se cae a la sesión con su aviso. Nunca se
+notó porque el SQL jamás se corrió. Corregido junto con `ambito` y `mp`, y los tres van
+además como `alter table ... add column if not exists` por si la tabla ya existiera.
+
+**Mientras el SQL no se corra, la cartera vive en la sesión y la pantalla lo dice.** Es
+el criterio de siempre: una función nueva no puede dejar el panel esperando un SQL.
+
+Probado con `AppTest`: se arma una cartera de 2 regiones y 6 unidades, se guarda, se
+desarma entera y al apretar Aplicar vuelven las dos regiones, las seis unidades y la
+búsqueda.
+
+---
+
 ## 03-09-2026 (noche 4) · Seis ajustes de uso, probando con la Armada
 
 Serling probando el módulo con sus 20 unidades de la Armada. Todo pedido suyo:

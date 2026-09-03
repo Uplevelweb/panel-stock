@@ -3059,6 +3059,16 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
 
     hay_ticket = bool(ticket_mp())
 
+    # La cartera guardada: mismo mecanismo que las vistas de Oportunidades, con
+    # sus propios campos (03-09-2026). Se aplica ANTES de dibujar un solo filtro,
+    # que es la única forma de que Streamlit los muestre ya puestos.
+    import vistas
+    yo = st.session_state.get("yo", {})
+    de_entrada = vistas.aplicar_la_de_entrada(yo, "mercado")
+    if de_entrada:
+        st.caption(f"Abriste con tu cartera **«{de_entrada}»**.")
+    vistas.barra_de_vistas(yo, "mercado")
+
     # --- Filtros -------------------------------------------------------------
     with st.container(border=True):
         st.markdown("##### 🏛️ Institución a consultar")

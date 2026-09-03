@@ -40,24 +40,33 @@ create table if not exists public.vistas (
   email             text        not null,
   nombre            text        not null,
   de_entrada        boolean     default false,
+  ambito            text        default 'oportunidades',
   op_rut            text,
   op_forma          text,
+  op_convenios      jsonb       default '[]'::jsonb,
   op_situacion      jsonb       default '[]'::jsonb,
   op_region         jsonb       default '[]'::jsonb,
   op_organismo      jsonb       default '[]'::jsonb,
   op_unidad         jsonb       default '[]'::jsonb,
   op_sin_organismo  jsonb       default '[]'::jsonb,
   op_sin_unidad     jsonb       default '[]'::jsonb,
+  mp                jsonb       default '{}'::jsonb,
   guardada_en       timestamptz default now(),
   primary key (email, nombre)
 );
+
+-- Si la tabla ya existia de antes, le faltan estas tres. Correrlas no molesta:
+-- «if not exists» las salta cuando ya estan.
+alter table public.vistas add column if not exists ambito       text  default 'oportunidades';
+alter table public.vistas add column if not exists op_convenios jsonb default '[]'::jsonb;
+alter table public.vistas add column if not exists mp           jsonb default '{}'::jsonb;
 
 -- Para encontrar rapido la vista de entrada de quien acaba de abrir.
 create index if not exists vistas_por_correo
   on public.vistas (email);
 
 comment on table public.vistas is
-  'Filtros guardados de Oportunidades. Son de la PERSONA (email), no de
+  'Filtros guardados. Son de la PERSONA (email), no de
    la cuenta: es su forma de trabajar. La marcada de_entrada se aplica
    sola al abrir la pestana.';
 

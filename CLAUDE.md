@@ -153,7 +153,7 @@ no.
 | `modulo_cuentas.py` | Cuentas, roles y territorios (pestaña «Mi equipo»). Quién entró y qué le toca ver |
 | `mis_productos.py` | El catálogo del cliente. **Se lee solo del Drive**, del archivo «CATALOGO CONVENIO MARCO». Un ID de Convenio Marco tiene **exactamente 7 dígitos** (`LARGO_ID`) |
 | `cartera.py` | Las unidades que se decidió trabajar. El puente entre el panel y el envío del catálogo: se elige acá y lo lee el otro lado |
-| `vistas.py` | El filtro guardado de cada vendedor. Es de la PERSONA, no de la cuenta. La marcada «de entrada» se aplica sola al abrir |
+| `vistas.py` | El filtro guardado de cada vendedor. Es de la PERSONA, no de la cuenta. La marcada «de entrada» se aplica sola al abrir. **Sirve a DOS ámbitos** (03-09-2026): `oportunidades` y `mercado` —la cartera del comercial—, con `leer/guardar/aplicar/barra_de_vistas(usuario, ambito)`. Los campos de Mercado van en **una sola columna `jsonb`**, no una por filtro |
 | `modulo_envios.py` | Pestaña «Envíos de Ofertas, Catálogo y Mailing»: la puerta única a los dos paneles de Apps Script. No manda correo, los abre |
 | `exportar.py` | El mismo botón de bajar a Excel en todos los módulos. Baja lo que está **filtrado en pantalla**, no la tabla entera |
 | `cartera-para-copiar.txt` | El SQL de la tabla `cartera` |
