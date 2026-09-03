@@ -275,6 +275,49 @@ def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
 
 
 @st.cache_data(max_entries=2, show_spinner=False)
+def nombres_de_productos(sello: str, ids: tuple[str, ...], meses: int = 6) -> dict:
+    """El nombre de SOLO los ID que hacen falta.
+
+    ⚠️ ESTA ES LA COLUMNA QUE TUMBO LA APP EL 02-09-2026, dos veces.
+
+    `producto` es texto largo y casi nunca repetido: leerla de un mes de
+    produccion cuesta **+129 MB de golpe** —medido sobre 2026-08, 393.919
+    lineas—. Estaba dentro del bucle que recorre 24 meses Y dentro de la
+    consulta: cada filtro la leia 24 veces, +364 MB por consulta. Python no le
+    devuelve al sistema lo que libera, asi que la huella subia hasta pasar el
+    techo de 1.000 MB. Serling lo vio caerse al consultar el Senado.
+
+    Se lee de SEIS meses y solo para los ID pedidos, asi que lo que queda
+    guardado son unos pocos miles de textos y no el catalogo del pais. Se corta
+    apenas todos tienen nombre, asi que casi nunca llega a los seis. Con dos
+    meses solo se le ponia nombre al 56% —el producto mas comprado del Senado
+    salia en blanco—; con seis sube muchisimo. Al que igual no aparezca se le
+    muestra su ID, que es mejor que una celda vacia.
+    """
+    import alertador as _al
+
+    if not ids or not _al.BODEGA_OC.exists():
+        return {}
+
+    faltan = set(ids)
+    nombres: dict = {}
+    for archivo in sorted(_al.BODEGA_OC.glob("*.parquet"))[-meses:]:
+        if not faltan:
+            break
+        try:
+            mes = pd.read_parquet(archivo, columns=["id_producto", "producto"])
+        except Exception:
+            continue
+        mes["id_producto"] = mes["id_producto"].astype(str).str.strip()
+        mes = mes[mes["id_producto"].isin(faltan)].drop_duplicates(subset="id_producto")
+        for identificador, nombre in zip(mes["id_producto"], mes["producto"]):
+            nombres[identificador] = str(nombre)
+        faltan -= set(mes["id_producto"])
+        del mes
+    return nombres
+
+
+@st.cache_data(max_entries=2, show_spinner=False)
 def ids_que_ya_vende(sello: str, cuerpo: str, meses: int = 24) -> set[str]:
     """Los ID de producto que ese RUT ya vendió, en cualquier institución.
 
@@ -354,8 +397,7 @@ def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
             continue
         try:
             mes = pd.read_parquet(archivo, columns=["unidad", "id_producto",
-                                                    "producto", "total",
-                                                    "rut_proveedor"])
+                                                    "total", "rut_proveedor"])
         except Exception:
             continue
         mes = mes[mes["unidad"].astype(str).str.strip().isin(buscadas)]
@@ -368,7 +410,7 @@ def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
                       .str.replace("-", "", regex=False)
                       .str.startswith(cuerpo, na=False))
         mes["tuyo"] = mes["total"].where(mes["mio"], 0.0)
-        trozos.append(mes.groupby(["id_producto", "producto"], observed=True)
+        trozos.append(mes.groupby("id_producto", observed=True)
                       .agg(compran=("total", "sum"),
                            te_compraron=("tuyo", "sum"),
                            unidades=("unidad", "nunique"),
@@ -383,13 +425,19 @@ def productos_de_las_unidades(sello: str, codigos: tuple[str, ...], cuerpo: str,
     # y `proveedores` se suman por mes y por eso quedan altos; se usa el maximo,
     # que es el numero honesto («hasta N unidades lo compraron»).
     junto = pd.concat(trozos, ignore_index=True)
-    return (junto.groupby(["id_producto", "producto"], observed=True)
-            .agg(compran=("compran", "sum"),
-                 te_compraron=("te_compraron", "sum"),
-                 unidades=("unidades", "max"),
-                 proveedores=("proveedores", "max"))
-            .reset_index()
-            .sort_values("compran", ascending=False))
+    resumen = (junto.groupby("id_producto", observed=True)
+               .agg(compran=("compran", "sum"),
+                    te_compraron=("te_compraron", "sum"),
+                    unidades=("unidades", "max"),
+                    proveedores=("proveedores", "max"))
+               .reset_index())
+    # El nombre se pega al final, desde el diccionario compartido: asi la
+    # columna pesada se lee UNA vez para todo el panel y no en cada consulta.
+    nombres = nombres_de_productos(sello, tuple(resumen["id_producto"]))
+    # Sin nombre se muestra el ID, nunca una celda vacia: con el ID igual se
+    # puede buscar el producto en Mercado Publico.
+    resumen["producto"] = [nombres.get(i) or f"ID {i}" for i in resumen["id_producto"]]
+    return resumen.sort_values("compran", ascending=False)
 
 
 def _ponerle_nombre(tabla: pd.DataFrame, unidades: pd.DataFrame) -> pd.DataFrame:
