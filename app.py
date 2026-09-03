@@ -234,8 +234,10 @@ RUTA_TICKET_LOCAL = Path.home() / "ticket-mp.txt"
 # El periodo se elige con un calendario, sin topes: cada dia es una consulta por
 # organismo, asi que el largo del rango ES el costo. Se comprobo que la API
 # responde al menos hasta enero de 2023 (salio «2950-28-CM23»).
-# El periodo que aparece al abrir: el año en curso completo.
-PRIMER_DIA_SUGERIDO = date(2026, 1, 1)
+# El periodo que aparece al abrir: UN AÑO hacia atras desde el dia de la
+# consulta (pedido de Serling el 03-09-2026). Antes era una fecha fija —el
+# 1 de enero de 2026— que envejecia sola: en enero habria mostrado un dia.
+DIAS_SUGERIDOS = 365
 PRIMERA_FECHA_MP = date(2023, 1, 1)
 # Atajos del periodo, contados hacia atras desde el ultimo dia de la bodega.
 # El 0 es «Libre»: no toca las fechas y ella las elige en el calendario.
@@ -2086,6 +2088,12 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     return tabla.sort_values("MONTO", ascending=False, na_position="last").reset_index(drop=True)
 
 
+# Alto de las tablas del modulo: ~40 filas a la vista en vez de 10, para ver de
+# una pasada las compras sin ir haciendo scroll de a poco. Pedido de Serling el
+# 03-09-2026. Streamlit dibuja las filas de 35 px y el encabezado de 38.
+ALTO_40_FILAS = 38 + 35 * 40
+
+
 MESES_CORTOS = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
                 "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
 
@@ -2973,8 +2981,9 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
     # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan.
     vacias = [c for c in ("MI PRECIO", "MI OFERTA", "DIF%") if tabla[c].isna().all()]
 
-    st.dataframe(tabla.drop(columns=vacias), width="stretch", hide_index=True,
-                 column_config=configuracion, key="mp_tabla_instituciones")
+    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_40_FILAS,
+                 hide_index=True, column_config=configuracion,
+                 key="mp_tabla_instituciones")
 
     st.download_button(
         "⬇️ Descargar Excel de quién compra qué",
@@ -2983,6 +2992,50 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="mp_xlsx_instituciones",
     )
+    top_de_unidades(vista, productos)
+
+
+def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
+    """El ranking de unidades compradoras por plata, según el Estado elegido.
+
+    Responde «¿a quién le vendo más?» sin tener que leer la matriz de arriba
+    columna por columna. Pedida por Serling el 03-09-2026.
+
+    ⚠️ **Respeta el filtro de Estado**, y por eso el número cambia con él: con
+    CON STOCK es la plata que esa unidad gastó **en lo que ella vende** —que es
+    lo que sirve para priorizar—; con TODOS es todo lo que compró. Los productos
+    llegan ya filtrados desde arriba, así que aquí solo hay que cruzarlos.
+    """
+    if vista.empty or productos.empty:
+        return
+    ids = set(str(i).strip() for i in productos["ID"])
+    lineas = vista[vista["ID"].astype(str).str.strip().isin(ids)]
+    if lineas.empty:
+        return
+
+    top = (lineas.groupby("UNIDAD")
+           .agg(MONTO=("TOTAL", "sum"), OC=("ORDEN", "nunique"), PRODUCTOS=("ID", "nunique"))
+           .sort_values("MONTO", ascending=False).reset_index())
+    top["MONTO"] = _numeros_de_columna(top["MONTO"])
+    top["% DEL TOTAL"] = (top["MONTO"] / top["MONTO"].sum() * 100).round(1)
+
+    st.markdown("#### 🏆 Quién compra más")
+    st.caption(
+        f"Las **{len(top)}** unidades de la consulta, por plata. Sigue el filtro de "
+        "**Estado** de arriba: hoy suma lo que gastaron en los productos que quedaron "
+        "a la vista, no todo lo que compraron.")
+    st.dataframe(
+        top, width="stretch", hide_index=True, height=ALTO_40_FILAS,
+        column_config={
+            "UNIDAD": st.column_config.TextColumn("UNIDAD COMPRADORA", width=ancho_fijo(340)),
+            "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(130)),
+            "OC": st.column_config.NumberColumn(format="localized", width=ancho_fijo(70),
+                                                help="Órdenes de compra del período"),
+            "PRODUCTOS": st.column_config.NumberColumn(format="localized", width=ancho_fijo(90),
+                                                       help="Cuántos productos distintos le compró"),
+            "% DEL TOTAL": st.column_config.NumberColumn(format="%.1f%%", width=ancho_fijo(90)),
+        },
+        key="mp_top_unidades")
 
 
 def seccion_mercado_publico(precios_oferta: dict[str, float],
@@ -3045,20 +3098,33 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                  "funciona cuando el período está en la bodega: en una consulta "
                  "en vivo el convenio no viene.")
 
+        # Región y Organismo aceptan VARIOS (03-09-2026): una cartera puede ser
+        # interregional —Valparaíso y Metropolitana— y antes había que hacer dos
+        # consultas y sumarlas a mano. Vacío significa «todas», que es lo que
+        # dice el placeholder: así no hace falta una opción «Todas» en la lista.
         f1, f2 = st.columns([1, 2])
         # Las sin region van al final de la lista, no primeras por el parentesis.
         nombradas = sorted(r for r in catalogo["region"].unique() if r and r != SIN_REGION)
-        regiones = ["Todas las regiones"] + nombradas
         if (catalogo["region"] == SIN_REGION).any():
-            regiones.append(SIN_REGION)
-        region = f1.selectbox("Región", regiones, key="mp_region")
-        por_region = catalogo if region == regiones[0] else catalogo[catalogo["region"] == region]
+            nombradas.append(SIN_REGION)
+        elegidas_region = f1.multiselect(
+            "Región", nombradas, key="mp_region", placeholder="Todas las regiones",
+            help="Puedes marcar varias. Vacío = todas.")
+        por_region = (catalogo if not elegidas_region
+                      else catalogo[catalogo["region"].isin(elegidas_region)])
 
-        organismos = ["Todos los organismos"] + sorted(
-            o for o in por_region["nombre_organismo"].unique() if o)
-        organismo = f2.selectbox("Organismo", organismos, key="mp_organismo")
-        candidatas = (por_region if organismo == organismos[0]
-                      else por_region[por_region["nombre_organismo"] == organismo])
+        organismos = sorted(o for o in por_region["nombre_organismo"].unique() if o)
+        # Las opciones de Organismo dependen de la Región, así que cambian solas:
+        # hay que soltar lo que ya no calza ANTES de dibujar, o Streamlit reclama.
+        vigentes = [o for o in st.session_state.get("mp_organismo", []) if o in organismos]
+        if vigentes != list(st.session_state.get("mp_organismo", [])):
+            st.session_state["mp_organismo"] = vigentes
+        elegidos_organismo = f2.multiselect(
+            "Organismo", organismos, key="mp_organismo",
+            placeholder="Todos los organismos",
+            help="Puedes marcar varios. Vacío = todos los de las regiones elegidas.")
+        candidatas = (por_region if not elegidos_organismo
+                      else por_region[por_region["nombre_organismo"].isin(elegidos_organismo)])
 
         busqueda = st.text_input(
             "Buscar por institución o unidad", key="mp_busqueda",
@@ -3162,7 +3228,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # dos a la vez es lo que Streamlit reclama en el registro, porque el
         # atajo también escribe ahí.
         if "mp_periodo" not in st.session_state:
-            st.session_state["mp_periodo"] = (min(PRIMER_DIA_SUGERIDO, tope), tope)
+            # Un año hacia atrás desde el último día que tiene la bodega, nunca
+            # antes de donde llega Mercado Público.
+            st.session_state["mp_periodo"] = (
+                max(PRIMERA_FECHA_MP, tope - timedelta(days=DIAS_SUGERIDOS - 1)), tope)
         p1, p2 = st.columns([1, 2])
         elegido = p1.date_input(
             "Fechas",
@@ -3304,15 +3373,21 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             "Prueba con un período más largo.")
         return
 
-    if resumen.get("de_bodega") and resumen.get("desde_real"):
+    # Con veinte unidades marcadas, escribir sus nombres completos gastaba cinco
+    # renglones antes de llegar a los números. Se dice cuántas son y los nombres
+    # quedan a un clic (pedido de Serling el 03-09-2026: «oculta texto
+    # innecesario»). Con una o dos se escriben, que ahí no estorban.
+    cuantas = len(unidades_c)
+    quienes = ", ".join(unidades_c) if cuantas <= 2 else f"**{cuantas} unidades**"
+    if resumen.get("desde_real") and resumen.get("hasta_real"):
+        origen = ("**leído de la bodega**, sin gastar consultas. "
+                  if resumen.get("de_bodega") else "")
         st.caption(
-            f"{', '.join(unidades_c)} · **leído de la bodega**, sin gastar consultas. "
-            f"{resumen.get('ordenes', 0)} órdenes creadas entre "
+            f"{quienes} · {origen}{resumen.get('ordenes', 0)} órdenes entre "
             f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
-    elif resumen.get("desde_real") and resumen.get("hasta_real"):
-        st.caption(
-            f"{', '.join(unidades_c)} · {resumen.get('ordenes', 0)} órdenes compradas entre "
-            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
+        if cuantas > 2:
+            with st.expander(f"Ver las {cuantas} unidades de esta consulta"):
+                st.write(" · ".join(unidades_c))
 
     # --- La tabla de trabajo: una fila por producto --------------------------
     # Los dias que dice el comentario son los que de verdad cubren las ordenes
@@ -3436,6 +3511,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         destacar_comentarios(productos.drop(columns=ocultas),
                              SEÑALES_DESTACADAS_MP),
         width="stretch",
+        height=ALTO_40_FILAS,
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",
@@ -3456,9 +3532,16 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
 
     # El PDF y el correo son los mismos del panel de arriba. El contacto lo
     # propone la API; el correo no, porque llega siempre vacio.
-    cotizacion_y_correo(marcados, precios_oferta,
-                        unidades_c[0] if unidades_c else "",
-                        resumen.get("contacto", ""), "mp")
+    # Va plegado: no en toda consulta se cotiza, y abierto empujaba la tabla de
+    # abajo fuera de la pantalla (pedido de Serling el 03-09-2026). Se abre solo
+    # cuando ya hay productos marcados, que es cuando de verdad va a usarlo.
+    with st.expander(
+            f"📄 Cotización y correo" + (f" — {len(marcados)} productos marcados"
+                                         if len(marcados) else ""),
+            expanded=bool(len(marcados))):
+        cotizacion_y_correo(marcados, precios_oferta,
+                            unidades_c[0] if unidades_c else "",
+                            resumen.get("contacto", ""), "mp")
 
     # --- Quién compra qué, y en qué meses -----------------------------------
     seccion_quien_compra_que(vista, productos, url_catalogo)

@@ -1,3 +1,30 @@
+## 03-09-2026 (noche 4) · Seis ajustes de uso, probando con la Armada
+
+Serling probando el módulo con sus 20 unidades de la Armada. Todo pedido suyo:
+
+- **Región y Organismo aceptan VARIOS.** Una cartera puede ser interregional
+  —Valparaíso y Metropolitana— y antes había que hacer dos consultas y sumarlas a
+  mano. Vacío significa «todas», que es lo que dice el placeholder: así no hace falta
+  una opción «Todas» dentro de la lista. ⚠️ Las opciones de Organismo dependen de la
+  Región, así que hay que **soltar lo que ya no calza ANTES de dibujar** o Streamlit
+  reclama. Probado: dos regiones dan 6 unidades donde una daba 5.
+- **Top «Quién compra más»**, debajo de la tabla de meses: unidad, monto, OC, productos
+  distintos y % del total. ⚠️ **Sigue el filtro de Estado**, y por eso el número cambia
+  con él: con CON STOCK es la plata que esa unidad gastó **en lo que ella vende**, que
+  es lo que sirve para priorizar. En la Armada, ALIMENTOS Y BEBIDAS se lleva el 79,1%.
+- **El período por defecto pasa a ser UN AÑO hacia atrás** desde el último día de la
+  bodega. Antes era la fecha fija `date(2026, 1, 1)`, que envejecía sola: en enero
+  habría propuesto un día de rango.
+- **El listado de nombres de unidades se plegó.** Con veinte marcadas gastaba cinco
+  renglones antes de llegar a los números; ahora dice «20 unidades» y los nombres
+  quedan en un desplegable. Con una o dos se siguen escribiendo.
+- **«Cotización y correo» va plegado**, y se abre solo cuando hay productos marcados.
+  No en toda consulta se cotiza, y abierto empujaba la tabla de abajo fuera de pantalla.
+- **Las tablas muestran ~40 filas** en vez de 10 (`ALTO_40_FILAS`), para ver las compras
+  de una pasada.
+
+---
+
 ## 03-09-2026 (noche 3) · La plata sin centavos, y el promedio queda como estaba
 
 Serling dudó del precio promedio. Se midió antes de tocar nada, y el dato está sano:
