@@ -2072,6 +2072,101 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     return tabla.sort_values("MONTO", ascending=False, na_position="last").reset_index(drop=True)
 
 
+MESES_CORTOS = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
+                "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
+
+# Cuántas unidades compradoras salen con columna propia. Las demás NO se
+# pierden: se juntan en «otras (n)» y siguen contando en MONTO, OC y P. PROM.
+TOPE_COLUMNAS_UNIDAD = 20
+
+
+def tabla_por_institucion(vista: pd.DataFrame, productos: pd.DataFrame,
+                          precios_publicados: dict[str, float],
+                          tope: int = TOPE_COLUMNAS_UNIDAD
+                          ) -> tuple[pd.DataFrame, list[str], int]:
+    """Una fila por producto y una columna por unidad compradora.
+
+    Responde la pregunta con la que ella prepara el mes: **de lo que yo vendo,
+    qué compra cada institución y en qué meses**. Pedida el 03-09-2026.
+
+    En la celda van los MESES, no la cantidad de veces: «FEB · MAR×2 · JUL».
+    Idea de Serling, y es mejor que el número — saber que compra en marzo dice
+    cuándo llamar; saber que compró tres veces, no.
+
+    **Se cuenta por mes del calendario y no por mes-año a propósito**: lo que
+    busca es la estacionalidad, así que dos marzos de años distintos son la
+    misma señal y suman ×2. Y se cuentan ÓRDENES distintas, no líneas: una orden
+    con tres líneas del mismo producto es una compra, no tres.
+
+    Solo salen los productos que están en su catálogo: el resto no lo puede
+    ofrecer y llenaría la tabla.
+
+    Devuelve (tabla, columnas de unidad en orden, cuántas quedaron en «otras»).
+    """
+    mias = productos[productos[COLUMNA_ESTADO] == "CON STOCK"]
+    if mias.empty or vista.empty:
+        return pd.DataFrame(), [], 0
+
+    ids = [str(i).strip() for i in mias["ID"]]
+    lineas = vista[vista["ID"].astype(str).str.strip().isin(set(ids))].copy()
+    if lineas.empty:
+        return pd.DataFrame(), [], 0
+
+    lineas["ID"] = lineas["ID"].astype(str).str.strip()
+    lineas["_mes"] = pd.to_datetime(lineas["FECHA"], errors="coerce").dt.month
+    lineas = lineas.dropna(subset=["_mes"])
+    if lineas.empty:
+        return pd.DataFrame(), [], 0
+
+    # Las principales son las que más ÓRDENES tienen, que es el mismo criterio
+    # con el que se ordenan las unidades en el selector de arriba. El número va
+    # en el encabezado, así que la lista queda explicada sola.
+    ordenes_por_unidad = lineas.groupby("UNIDAD")["ORDEN"].nunique().sort_values(ascending=False)
+    principales = list(ordenes_por_unidad.index[:tope])
+    sobrantes = len(ordenes_por_unidad) - len(principales)
+    etiqueta_otras = f"otras ({sobrantes})"
+
+    lineas["_col"] = [u if u in set(principales) else etiqueta_otras
+                      for u in lineas["UNIDAD"]]
+
+    # Una fila por (producto, columna, mes) con cuántas órdenes hubo, y de ahí
+    # el texto. Vectorizado: con miles de productos, hacerlo grupo por grupo
+    # con `apply` se nota.
+    porcion = (lineas.groupby(["ID", "_col", "_mes"])["ORDEN"]
+               .nunique().reset_index(name="_veces"))
+    porcion["_txt"] = [f"{MESES_CORTOS[int(m) - 1]}" + (f"×{v}" if v > 1 else "")
+                       for m, v in zip(porcion["_mes"], porcion["_veces"])]
+    juntos = (porcion.sort_values(["ID", "_col", "_mes"])
+              .groupby(["ID", "_col"])["_txt"].agg(" · ".join).reset_index())
+    matriz = juntos.pivot(index="ID", columns="_col", values="_txt")
+
+    columnas_unidad = [c for c in principales if c in matriz.columns]
+    if etiqueta_otras in matriz.columns:
+        columnas_unidad.append(etiqueta_otras)
+    matriz = matriz.reindex(index=ids, columns=columnas_unidad).fillna("")
+
+    # El encabezado lleva la suma de OC de esa unidad: en una pasada se ve quién
+    # compra más (encabezado) y cuándo compra (celda).
+    titulos = {u: f"{u} ({int(ordenes_por_unidad.get(u, 0))} OC)" for u in principales}
+    titulos[etiqueta_otras] = etiqueta_otras
+    matriz = matriz.rename(columns=titulos)
+
+    tabla = pd.DataFrame({
+        "ID": ids,
+        "PRODUCTO": list(mias["PRODUCTO"]),
+        "MONTO": list(mias["MONTO"]),
+        "OC": list(mias["OC"]),
+        "P. PROM": list(mias["P. PROM"]),
+        "MI PRECIO": [precios_publicados.get(i) for i in ids],
+        "MI OFERTA": list(mias["MI OFERTA"]),
+        "DIF%": list(mias["DIF%"]),
+    })
+    for columna in ("MI PRECIO",):
+        tabla[columna] = pd.to_numeric(tabla[columna], errors="coerce").astype("Float64")
+    return pd.concat([tabla, matriz.reset_index(drop=True)], axis=1), \
+        list(matriz.columns), max(sobrantes, 0)
+
+
 def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
                       avisar=None) -> tuple[pd.DataFrame, dict]:
     """Barre el periodo y devuelve (tabla de productos comprados, resumen)."""
@@ -2790,13 +2885,97 @@ def propuesta(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
 
 
 
+def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
+                             url_catalogo: str) -> None:
+    """La tabla de abajo: de lo que vendo, qué compra cada unidad y cuándo.
+
+    Va al final del módulo y se dibuja sola con lo que quedó de la consulta: no
+    tiene filtros propios, hereda los de arriba. Así lo pidió Serling el
+    03-09-2026 —«que se genere automáticamente al extraer la data»—.
+
+    MI PRECIO sale de `cargar_catalogo_regional`, que es el mismo lector que usa
+    el Módulo Cotizador y ya está cacheado: no cuesta una lectura más de Drive.
+    **Falla abierto**: si el catálogo no se puede leer, la tabla sale igual, sin
+    esa columna, en vez de no salir.
+    """
+    publicados: dict[str, float] = {}
+    try:
+        catalogo_regional, _, _ = cargar_catalogo_regional(url_catalogo)
+        if not catalogo_regional.empty and "MI PUBLICADO" in catalogo_regional.columns:
+            publicados = {str(i).strip(): p for i, p in
+                          zip(catalogo_regional["ID"], catalogo_regional["MI PUBLICADO"])
+                          if p is not None and not pd.isna(p)}
+    except Exception:
+        publicados = {}
+
+    tabla, columnas_unidad, otras = tabla_por_institucion(vista, productos, publicados)
+
+    st.markdown("#### 🗓️ Quién compra qué, y en qué meses")
+    if tabla.empty:
+        st.info("Ninguno de los productos de tu catálogo aparece en esta consulta.")
+        return
+
+    st.caption(
+        f"Solo lo que **está en tu catálogo**: {len(tabla)} productos, ordenados por monto. "
+        "En cada casilla van los **meses** en que esa unidad lo compró (`MAR×2` es dos "
+        "órdenes en marzo). El número del encabezado es **cuántas órdenes** tuvo esa unidad. "
+        + (f"Salen las **{len(columnas_unidad) - (1 if otras else 0)}** que más compran; las "
+           f"otras **{otras}** van juntas en la última columna, y sus compras **sí** están "
+           "sumadas en MONTO, OC y P. PROM." if otras else "")
+        + " Toca ⛶ arriba a la derecha de la tabla para verla en grande.")
+
+    configuracion = {
+        "ID": st.column_config.TextColumn("ID", width=ancho_fijo(80)),
+        # El producto va FIJO: en el celular se va de lado buscando los meses y
+        # sin esto no se sabe de qué producto son.
+        "PRODUCTO": st.column_config.TextColumn("PRODUCTO", width=ancho_fijo(240),
+                                                **({"pinned": True} if ACEPTA_FIJAR else {})),
+        "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(110),
+                                               help="Lo que pagó por ese producto en el período"),
+        "OC": st.column_config.NumberColumn(format="localized", width=ancho_fijo(60),
+                                            help="Órdenes de compra del período"),
+        "P. PROM": st.column_config.NumberColumn(format="localized", width=ancho_fijo(100),
+                                                 help="El precio promedio que PAGÓ esta institución"),
+        "MI PRECIO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(100),
+                                                   help="Tu precio publicado en Convenio Marco"),
+        "MI OFERTA": st.column_config.NumberColumn(format="localized", width=ancho_fijo(100),
+                                                   help="Tu precio de oferta de la semana, si ese ID la tiene"),
+        "DIF%": st.column_config.NumberColumn("DIF%", format="%+.1f%%", width=ancho_fijo(80),
+                                              help="Tu oferta contra lo que pagó. Negativo: estás más barata"),
+    }
+    for columna in columnas_unidad:
+        # El encabezado se corta por ancho: el nombre entero va en la ayuda, que
+        # es lo que sale al pasar el mouse por encima.
+        configuracion[columna] = st.column_config.TextColumn(
+            columna, width=ancho_fijo(150),
+            help=f"**{columna}** · los meses en que compró ese producto")
+
+    # Misma regla que la tabla de arriba: una columna numérica vacía entera
+    # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan.
+    vacias = [c for c in ("MI PRECIO", "MI OFERTA", "DIF%") if tabla[c].isna().all()]
+
+    st.dataframe(tabla.drop(columns=vacias), width="stretch", hide_index=True,
+                 column_config=configuracion, key="mp_tabla_instituciones")
+
+    st.download_button(
+        "⬇️ Descargar Excel de quién compra qué",
+        data=a_excel(tabla, nombre_hoja="Quién compra qué"),
+        file_name="MercadoPublico-quien-compra-que.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="mp_xlsx_instituciones",
+    )
+
+
 def seccion_mercado_publico(precios_oferta: dict[str, float],
-                            catalogo_propio: dict[str, str]) -> None:
+                            catalogo_propio: dict[str, str],
+                            url_catalogo: str = "") -> None:
     """Selector de instituciones con filtros y consulta en vivo a la API.
 
     Recibe las dos listas que la app lee de Drive:
       - `catalogo_propio`: todo lo que ella vende. Decide el estado.
       - `precios_oferta`: lo que esta rebajado esta semana. Llena MI OFERTA.
+      - `url_catalogo`: la carpeta de Drive, para leer MI PUBLICADO en la tabla
+        de abajo. Es el mismo enlace que usa el Modulo Cotizador.
     """
     catalogo = cargar_catalogo_unidades()
     if catalogo.empty:
@@ -3261,6 +3440,9 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     cotizacion_y_correo(marcados, precios_oferta,
                         unidades_c[0] if unidades_c else "",
                         resumen.get("contacto", ""), "mp")
+
+    # --- Quién compra qué, y en qué meses -----------------------------------
+    seccion_quien_compra_que(vista, productos, url_catalogo)
 
     # --- El detalle, por si quiere ver orden por orden -----------------------
     with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "
@@ -4269,6 +4451,11 @@ def a_pdf_regional(tabla: pd.DataFrame, no_disponibles: pd.DataFrame, institucio
 ANCHO_NUMERICO = tuple(int(p) for p in st.__version__.split(".")[:2]) >= (1, 48)
 ACEPTA_CENTRADO = "alignment" in inspect.signature(
     st.column_config.TextColumn).parameters
+# `pinned` deja una columna fija mientras la tabla se va de lado. Es lo que hace
+# legible en el celular la tabla de «quién compra qué», que lleva 20 columnas de
+# unidades: sin el producto fijo no se sabe de qué fila son los meses.
+ACEPTA_FIJAR = "pinned" in inspect.signature(
+    st.column_config.TextColumn).parameters
 
 
 def ancho_fijo(pixeles: int):
@@ -4757,7 +4944,7 @@ def main() -> None:
             seccion_alertas()
     if "mercado_publico" in pestanas:
         with pestanas["mercado_publico"]:
-            seccion_mercado_publico(precios_oferta, catalogo_propio)
+            seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
     if "cotizador" in pestanas:
         with pestanas["cotizador"]:
             seccion_cotizacion_regional(url_ofertas, precios_oferta)

@@ -1,3 +1,40 @@
+## 03-09-2026 (noche 2) · «Quién compra qué, y en qué meses»
+
+La tabla que pidió Serling para preparar su gestión del mes: de lo que ella vende,
+qué compra cada unidad y **cuándo**.
+
+**El cambio de diseño lo puso ella, y es el que hace útil la tabla.** La primera
+versión iba a poner en la celda cuántas veces compró. Ella pidió los meses:
+`FEB · MAR×2 · JUL`. Es mejor y por una razón concreta — *saber que compra en marzo
+dice cuándo llamar; saber que compró tres veces, no*. La suma de OC no se perdió:
+se subió al encabezado de cada columna, que es donde no estorba.
+
+Decisiones tomadas con ella, para no rehacerlas:
+
+- **20 columnas de unidad, el resto en «otras (n)».** Lo confirmó con la frase que
+  importa: *«las otras quedarán ocultas, no eliminadas»*. Y así es: **sus compras
+  siguen sumadas** en MONTO, OC y P. PROM. Solo pierden columna propia.
+- **Todas las filas de su catálogo**, no las primeras 50: *«que muestre todo, la idea
+  es leer la cartera»*.
+- **Tiene que verse en el celular** *«aunque sea ajustada»*. Por eso PRODUCTO va fijo
+  (`pinned`): con 20 columnas la tabla se va de lado y sin la columna fija no se sabe
+  de qué producto son los meses. Para ampliar está el ⛶ de la propia tabla.
+- **Los meses se cuentan por mes del calendario**, no por mes-año: dos marzos de años
+  distintos suman ×2, porque lo que se busca es la estacionalidad.
+
+**Lo que costó un intento:** `ACEPTA_FIJAR` quedó escrito en la función pero nunca se
+definió, y la comprobación que hice —«¿está el nombre en el archivo?»— dio verde
+porque el nombre estaba... en el uso. Una comprobación que no podía fallar no
+comprueba nada. Lo cazó `AppTest` con un `NameError` al consultar.
+
+Probado de punta a punta con `AppTest` contra el Senado: **94 productos**, que es
+exactamente el «En tu catálogo: 94» de la tabla de arriba —cuadra—, con MI PRECIO
+lleno en los 94 y columnas `ALIMENTOS Y BEBIDAS (60 OC)` y `MATERIALES Y SUMINISTROS
+(16 OC)`. Ejemplo real de lo que ahora se ve: la bebida Coca-Cola Zero la compra
+ALIMENTOS Y BEBIDAS en `ENE×2 · MAR×3 · ABR · MAY · JUN · JUL · AGO`.
+
+---
+
 ## 03-09-2026 (noche) · El ⊗ deja de borrar veinte unidades de un toque
 
 Pedido de Serling mientras probaba el módulo para su gestión del mes. Marcar las

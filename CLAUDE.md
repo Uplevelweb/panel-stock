@@ -46,6 +46,29 @@ el 18-08**: el módulo nuevo la reemplaza. El código sigue ahí (`seccion_anali
 `render_informe`) por si hay que volver a mostrarla; para eso basta reponer el `st.tabs` en
 `main()`.
 
+**La tabla de abajo, «Quién compra qué, y en qué meses»** (03-09-2026,
+`seccion_quien_compra_que`): una fila por producto **de su catálogo** y una columna por unidad
+compradora. Se dibuja sola al final del módulo con lo que quedó de la consulta —no tiene
+filtros propios, hereda los de arriba— porque así lo pidió Serling: «que se genere
+automáticamente al extraer la data».
+
+- **En la celda van los MESES, no la cantidad de veces**: `FEB · MAR×2 · JUL`. Idea de ella, y
+  es mejor que el número: saber que compra en marzo dice **cuándo llamar**; saber que compró
+  tres veces, no. Se cuenta por mes del **calendario** —dos marzos de años distintos suman
+  ×2—, porque lo que busca es la estacionalidad. Y se cuentan **órdenes distintas**, no líneas.
+- **El encabezado lleva la suma de OC** de esa unidad (`ESCUELA NAVAL (387 OC)`): en una
+  pasada se ve quién compra más (encabezado) y cuándo compra (celda).
+- **Máximo 20 columnas de unidad** (`TOPE_COLUMNAS_UNIDAD`), las que más órdenes tienen. ⚠️ Las
+  demás **no se pierden**: van juntas en «otras (n)» y **sus compras siguen sumadas** en MONTO,
+  OC y P. PROM. Esto se le explicó y lo confirmó; no cambiarlo por un recorte de verdad.
+- **PRODUCTO va fijo** (`pinned`, con guarda `ACEPTA_FIJAR`): con 20 columnas la tabla se va de
+  lado y sin eso no se sabe de qué fila son los meses. Es lo que la hace usable en el celular,
+  que ella pidió expresamente («aunque sea ajustada, y si desea más que amplíe la vista» — para
+  ampliar está el ⛶ nativo de la tabla).
+- **MI PRECIO sale de `cargar_catalogo_regional`**, el mismo lector del Módulo Cotizador, que ya
+  está cacheado: no cuesta una lectura más de Drive. **Falla abierto**: si no se puede leer, la
+  tabla sale igual sin esa columna.
+
 **La cotización sale separada por rubro**: si se marcan productos de Alimentos y de Aseo se
 generan dos PDF y dos correos, porque cada convenio se compra aparte. Lo hace `propuesta()`, que
 `cotizacion_y_correo()` llama una vez por rubro.
