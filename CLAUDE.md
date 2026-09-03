@@ -158,8 +158,14 @@ El repositorio pesa 121 MB por la bodega, así que **no se clona entero**:
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse https://github.com/uplevelweb/panel-stock.git
-git sparse-checkout set --no-cone '/*' '!/bodega/'
+MSYS_NO_PATHCONV=1 git sparse-checkout set --no-cone '/*' '!/bodega/'
 ```
+
+⚠️ **`MSYS_NO_PATHCONV=1` no es opcional en Git Bash.** Sin él, Git Bash convierte el
+`!/bodega/` en `!C:/Program Files/Git/bodega/`, la exclusión no calza con nada y **se baja la
+bodega entera**: 490 MB y varios minutos colgado. Pasó el 03-09-2026 al intentar
+`sparse-checkout add`. Para comprobar que quedó bien: `git sparse-checkout list` tiene que
+mostrar `!/bodega/`, no una ruta de Windows.
 
 Streamlit redesplega solo en 1-2 minutos.
 
