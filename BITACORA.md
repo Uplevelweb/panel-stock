@@ -1,3 +1,32 @@
+## 03-09-2026 (noche 6) · El SQL de `vistas` corrido en producción
+
+Serling: «córrelo, necesito probar esto ya». Ejecutado en Supabase por el camino
+que documenta `CLAUDE.md` —Monaco por su propia API, sin escribir a mano— y sin
+que ella tocara nada.
+
+Lo que se hizo, en orden, y que es la receta si hay que repetirlo:
+
+1. **Extraer el bloque real.** El archivo tiene DOS bloques y el corte se hace entre
+   `COPIAR DESDE AQUI` y **`HASTA AQUI`** — no «COPIAR HASTA AQUI», que no existe. El
+   primer intento se llevó el instructivo entero como si fuera SQL.
+2. **Comprobar antes de tocar nada:** 1.711 caracteres, **sin la palabra DROP** —que
+   cuelga el editor en silencio— y sin backticks.
+3. **Escribir por base64** en el modelo cuya URI empieza con `file:///` (el otro,
+   `inmemory://`, es el panel del asistente). Se comprobó que `getValue().length` daba
+   1.711, idéntico al archivo.
+4. **Apretar Run por JavaScript.** Hay dos botones «Run»: el bueno es el de arriba
+   (`top` 104); el otro (`top` 597) es del asistente. Elegirlo por `top` es más claro
+   que por `left`, que fue como quedó anotado en agosto.
+5. **Comprobar CONTRA LA BASE, no contra la pantalla:** `tiene_ambito 1 ·
+   tiene_op_convenios 1 · tiene_mp 1 · columnas_totales 15`.
+
+⚠️ **La grilla de resultados sigue sin salir en `innerText`** —devuelve vacío— y hay
+que leerla con una captura. Ya estaba anotado y se confirmó otra vez.
+
+Quedan sin correr los otros tres: `cartera`, `mis-productos` y `alertas-filtro-fino`.
+
+---
+
 ## 03-09-2026 (noche 5) · La cartera se guarda en Mercado Público
 
 Pedido de Serling: «con posibilidad de guardar y proteger la vista porque sería la
@@ -41,7 +70,12 @@ búsqueda.
 
 Serling probando el módulo con sus 20 unidades de la Armada. Todo pedido suyo:
 
-- **Región y Organismo aceptan VARIOS.** Una cartera puede ser interregional
+- **Región, COMUNA y Organismo aceptan VARIOS.** La comuna se agregó al final del día,
+  cuando ella preguntó si ya la había pedido: no la había pedido. Es el tercer escalón
+  de la cascada y sirve para partir la Metropolitana —sola tiene más unidades que varias
+  regiones juntas— y para armar una ruta por cercanía. Probado: en Valparaíso hay 40
+  comunas, y marcando dos la lista baja a 6 organismos y 10 unidades. Se guarda en la
+  cartera como el resto. Una cartera puede ser interregional
   —Valparaíso y Metropolitana— y antes había que hacer dos consultas y sumarlas a
   mano. Vacío significa «todas», que es lo que dice el placeholder: así no hace falta
   una opción «Todas» dentro de la lista. ⚠️ Las opciones de Organismo dependen de la

@@ -3112,7 +3112,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # interregional —Valparaíso y Metropolitana— y antes había que hacer dos
         # consultas y sumarlas a mano. Vacío significa «todas», que es lo que
         # dice el placeholder: así no hace falta una opción «Todas» en la lista.
-        f1, f2 = st.columns([1, 2])
+        f1, fc, f2 = st.columns([1, 1, 2])
         # Las sin region van al final de la lista, no primeras por el parentesis.
         nombradas = sorted(r for r in catalogo["region"].unique() if r and r != SIN_REGION)
         if (catalogo["region"] == SIN_REGION).any():
@@ -3122,6 +3122,19 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             help="Puedes marcar varias. Vacío = todas.")
         por_region = (catalogo if not elegidas_region
                       else catalogo[catalogo["region"].isin(elegidas_region)])
+
+        # La comuna es el tercer escalón de la cascada (03-09-2026). Sirve para
+        # partir la Metropolitana, que sola tiene más unidades que varias
+        # regiones juntas, y para armar una ruta de visitas por cercanía.
+        comunas = sorted(c for c in por_region["comuna"].unique() if c)
+        vigentes_comuna = [c for c in st.session_state.get("mp_comuna", []) if c in comunas]
+        if vigentes_comuna != list(st.session_state.get("mp_comuna", [])):
+            st.session_state["mp_comuna"] = vigentes_comuna
+        elegidas_comuna = fc.multiselect(
+            "Comuna", comunas, key="mp_comuna", placeholder="Todas las comunas",
+            help="Puedes marcar varias. Vacío = todas las de las regiones elegidas.")
+        if elegidas_comuna:
+            por_region = por_region[por_region["comuna"].isin(elegidas_comuna)]
 
         organismos = sorted(o for o in por_region["nombre_organismo"].unique() if o)
         # Las opciones de Organismo dependen de la Región, así que cambian solas:

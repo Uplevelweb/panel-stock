@@ -161,7 +161,7 @@ no.
 | `mis-productos-para-copiar.txt` | El SQL de `cuentas.ids_publicados` |
 | `alertas-filtro-fino-para-copiar.txt` | El SQL de `filtros.instituciones` y `filtros.unidades` |
 | `supabase-cuentas-para-copiar.txt` | El SQL de las tablas `cuentas` y `usuarios`. **Hay que pegarlo una vez** para que los roles empiecen a mandar |
-| ⚠️ *Los cuatro `-para-copiar.txt` del 02-09-2026* | *Sin correr al cierre de esa sesión. Nada se rompe: cada pantalla avisa «para esta sesión» y sigue andando* |
+| ⚠️ *De los cuatro `-para-copiar.txt` del 02-09-2026* | **`vistas` ya está corrido** (03-09-2026, tabla `public.vistas` con 15 columnas, verificada contra la base). *Siguen sin correr `cartera`, `mis-productos` y `alertas-filtro-fino`; nada se rompe: cada pantalla avisa «para esta sesión»* |
 | `supabase-soporte-para-copiar.txt` | El SQL del rol `superadmin` y la `bitacora_soporte`. Se pega **después** del anterior |
 | `modulo_seguimiento.py` | El embudo: en qué quedó cada oportunidad que avisó el correo (pestaña «Seguimiento») |
 | `supabase-seguimiento-para-copiar.txt` | El SQL de la tabla `seguimiento`, las `visitas` y la foto que `envios` guarda de cada oportunidad |

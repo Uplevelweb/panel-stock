@@ -68,6 +68,7 @@ CAMPOS = {
 CAMPOS_MP = {
     "mp_convenio_uno": TODOS_CONVENIOS_POR_DEFECTO,
     "mp_region": [],
+    "mp_comuna": [],
     "mp_organismo": [],
     "mp_busqueda": "",
     "mp_unidades": [],
