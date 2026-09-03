@@ -44,10 +44,27 @@ Si el período se va en vivo, el aviso dice que el filtro no se va a aplicar: la
 entrega el convenio y ahí manda el rubro del catálogo. Eso ya era así; antes se resolvía
 escondiendo el selector, que no se puede cuando está arriba de todo.
 
-⚠️ **Un mismo convenio cambia de nombre entre licitaciones.** «Mobiliario General» y
-«Convenio Marco de Mobiliario General» son el mismo rubro en años distintos; pasa igual
-con gas licuado, vehículos y ofimática. Salen como entradas separadas. **No se juntaron:
-decidir cuáles son el mismo es criterio de ella, no del código.** Queda en pendientes.
+⚠️ **Y lo que quedó «para después» reventó el mismo día, probándolo ella.** Eligió
+«Convenio Marco de Alimentos» en la Armada y la tabla salió vacía: ese es el convenio de
+**2017**, y el vigente es «Convenio Marco para la adquisición de Alimentos», el de
+**2024**. Dos entradas de la lista que se leen igual. El aviso de «compró por» sí traía el
+correcto, pero perdido entre otros dieciséis y sin nada que los distinguiera.
+
+**Lo arregló su propia idea: poner el año.** Ahora cada opción dice «· 2017», «· 2024»,
+y el año sale del código (`-LR24`), que es dato duro, no criterio. Va en los tres lugares
+donde aparece un convenio: la lista, el aviso y el encabezado del resultado. **Lo que se
+filtra sigue siendo el nombre pelado** —el año es solo lo que se ve, con `format_func`—,
+así que un nombre con dos años («Escritorio y Papelería · 2023, 2024») se sigue llevando
+las compras de los dos.
+
+Esto **reemplaza** el pendiente de «juntar los convenios repetidos»: no había que
+juntarlos, había que distinguirlos. Antes de escribirlo se midió si los viejos se podían
+esconder por no tener compras, y **no**: «Convenio Marco de Alimentos» sí tiene compras en
+la bodega, solo que no de la Armada en 2026. Esconderlos habría borrado datos buenos.
+
+⚠️ **Y el aviso mostraba «NA» como si fuera un convenio.** No lo es: es lo que traen las
+órdenes que no son de Convenio Marco, la misma trampa que `alertador.convenios_de` filtra
+desde siempre. `convenios_del_periodo` no lo estaba sacando. Corregido.
 
 ---
 
@@ -1101,10 +1118,6 @@ atendemos luego»):
   CON STOCK / NO LO TENGO. Hoy los productos con oferta se encuentran solo si una sabe
   que hay que ordenar por DIF%; en el Senado eran quince y estaban invisibles al fondo
   del orden por monto.
-- **Juntar los convenios que son el mismo rubro en años distintos** («Mobiliario General»
-  y «Convenio Marco de Mobiliario General», gas licuado, vehículos, ofimática). Hoy salen
-  como entradas separadas en el filtro. No se hizo porque decidir cuáles son el mismo es
-  criterio de ella, no del código.
 - **Alarma del reloj de Supabase**: avisar cuando lleva más de una hora sin latir. Estuvo
   mudo dos días y medio (29-08 al 31-08) sin que nadie se enterara.
 

@@ -84,10 +84,23 @@ devolver una tabla vacía que parece una consulta fallida. Si el período se va 
 dice que el filtro no se aplicará: la API no entrega el convenio y ahí manda el rubro del
 catálogo.
 
-⚠️ **Un mismo convenio cambia de nombre entre licitaciones** («Mobiliario General» y «Convenio
-Marco de Mobiliario General» son el mismo rubro en años distintos; lo mismo gas licuado,
-vehículos y ofimática). Salen como entradas separadas y **no se juntan a mano: sería adivinar**.
-Si algún día molesta, la decisión es de ella, no del código.
+⚠️ **CADA OPCIÓN LLEVA EL AÑO DEL CONVENIO, y no es decorativo.** Un mismo rubro tiene varios
+convenios con nombres parecidos y de años distintos: «Convenio Marco de Alimentos» es el de
+**2017** y «Convenio Marco para la adquisición de Alimentos» el de **2024**. Sin el año se leen
+igual, y elegir el viejo devuelve una tabla vacía sin que se entienda por qué — le pasó a
+Serling el 03-09-2026 consultando la Armada, y fue ella la que pidió el año. Pasa lo mismo con
+gas licuado, mobiliario, vehículos y ofimática.
+
+El año sale del código (`-LR24` → 2024) con `anios_de_convenios()`, y lo pinta `con_anio()` en
+los tres lugares donde aparece un convenio: la lista, el aviso de «sí compró por» y el
+encabezado del resultado. **Lo que se guarda y con lo que se filtra sigue siendo el nombre
+pelado** (es lo que trae la columna `CONVENIO`); el año es solo lo que se ve, con `format_func`.
+Un nombre con dos años («Escritorio y Papelería · 2023, 2024») los muestra los dos y filtra los
+dos, que es lo correcto.
+
+⚠️ **El «NA» no es un convenio y no puede aparecer en ninguna lista.** Es lo que traen las
+órdenes que no son de Convenio Marco. Se coló en el aviso de «compró por» hasta el 03-09-2026.
+`convenios_del_periodo` lo saca ahora, con la misma regla que `alertador.convenios_de`.
 
 **Lo que ve el comprador**: el PDF dice **INSTITUCIÓN**, no «cliente» —todavía no le compra— y el
 asunto es «ID disponibles en Convenio Marco | Comercial Emergenza **2208-0306**», terminando en el

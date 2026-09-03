@@ -1588,6 +1588,37 @@ def nombres_convenios(sello: str) -> dict[str, str]:
         return {}
 
 
+def anios_de_convenios(nombres: dict[str, str]) -> dict[str, set[int]]:
+    """El año de cada convenio, sacado del código: `2239-9-LR24` es de 2024.
+
+    ⚠️ EL NOMBRE SOLO NO ALCANZA PARA DISTINGUIRLOS, y eso hace perder tiempo de
+    verdad. «Convenio Marco de Alimentos» es el de 2017 y «Convenio Marco para
+    la adquisición de Alimentos» el de 2024: son dos entradas distintas de la
+    lista, se leen igual, y elegir el viejo devuelve una tabla vacía sin que se
+    entienda por qué. Le pasó a Serling el 03-09-2026 consultando la Armada.
+
+    Un mismo nombre puede tener dos años (Escritorio y Papelería es 2023 y
+    2024): se muestran los dos, y el filtro por nombre se lleva las compras de
+    ambos, que es lo correcto.
+    """
+    anios: dict[str, set[int]] = {}
+    for codigo, nombre in nombres.items():
+        if not nombre:
+            continue
+        marca = re.search(r"-LR(\d{2})$", str(codigo).strip())
+        if marca:
+            anios.setdefault(nombre, set()).add(2000 + int(marca.group(1)))
+    return anios
+
+
+def con_anio(nombre: str, anios: dict[str, set[int]]) -> str:
+    """«Convenio Marco de Alimentos» -> «Convenio Marco de Alimentos · 2017»."""
+    suyos = anios.get(nombre)
+    if not suyos:
+        return nombre
+    return f"{nombre} · {', '.join(str(a) for a in sorted(suyos))}"
+
+
 @st.cache_data(show_spinner=False)
 def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
                           desde: date, hasta: date, sello: str) -> list[str]:
@@ -1606,8 +1637,12 @@ def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
     if suyas.empty:
         return []
     nombres = nombres_convenios(sello)
-    return sorted({nombres.get(c, c) or SIN_CONVENIO
-                   for c in suyas["convenio_marco"] if isinstance(c, str)})
+    # ⚠️ El «NA» NO es un convenio: es lo que traen las órdenes que no son de
+    # Convenio Marco. Colándose aquí aparecía en la lista de «compró por» como
+    # si fuera uno más. Misma regla que `alertador.convenios_de`.
+    reales = [c for c in suyas["convenio_marco"]
+              if isinstance(c, str) and c.strip().upper() not in ("NA", "")]
+    return sorted({nombres.get(c, c) or SIN_CONVENIO for c in reales})
 
 
 def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
@@ -2766,15 +2801,21 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # General» y «Convenio Marco de Mobiliario General» son el mismo rubro
         # en anios distintos). No se juntan a mano: seria adivinar cual es cual.
         nombres_cm = nombres_convenios(sello_bodega())
+        anios_cm = anios_de_convenios(nombres_cm)
         opciones_cm = [TODOS_CONVENIOS] + sorted({n for n in nombres_cm.values() if n})
         if st.session_state.get("mp_convenio_uno") not in opciones_cm:
             st.session_state["mp_convenio_uno"] = TODOS_CONVENIOS
         st.selectbox(
             "Convenio Marco a consultar", opciones_cm, key="mp_convenio_uno",
-            help="Elige el convenio y la tabla mostrará solo esas compras. "
-                 "Déjalo en «Todos los convenios» para ver todo lo que compró "
-                 "la institución. Solo funciona cuando el período está en la "
-                 "bodega: en una consulta en vivo el convenio no viene.")
+            # El valor que se guarda es el nombre pelado, porque es con el que
+            # se filtra la columna CONVENIO. El año es solo lo que se ve.
+            format_func=lambda n: n if n == TODOS_CONVENIOS else con_anio(n, anios_cm),
+            help="El año es el del convenio, no el de la compra: hay rubros con "
+                 "dos convenios distintos (Alimentos 2017 y Alimentos 2024) y el "
+                 "viejo casi no tiene compras. Elige uno y la tabla mostrará solo "
+                 "esas. Déjalo en «Todos los convenios» para ver todo. Solo "
+                 "funciona cuando el período está en la bodega: en una consulta "
+                 "en vivo el convenio no viene.")
 
         f1, f2 = st.columns([1, 2])
         # Las sin region van al final de la lista, no primeras por el parentesis.
@@ -2940,9 +2981,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                     tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
                 if disponibles and convenio_pedido not in disponibles:
                     st.warning(
-                        f"En este período no compró nada por **{convenio_pedido}**. "
-                        "Si consultas así, la tabla va a salir vacía. Compró por: "
-                        + " · ".join(disponibles))
+                        "En este período no compró nada por **"
+                        f"{con_anio(convenio_pedido, anios_cm)}**. Si consultas así, la "
+                        "tabla va a salir vacía. Sí compró por:\n\n"
+                        + "\n".join(f"- {con_anio(d, anios_cm)}" for d in disponibles))
 
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)
@@ -3052,7 +3094,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             # Repetir el selector obligaba a filtrar dos veces lo mismo.
             uno = st.session_state.get("mp_convenio_uno", TODOS_CONVENIOS)
             elegidos_rubro = [] if uno == TODOS_CONVENIOS else [uno]
-            st.caption("**Convenio Marco:** " + uno)
+            st.caption("**Convenio Marco:** " + con_anio(uno, anios_cm))
         else:
             rubros = sorted(r for r in productos[columna_filtro].unique() if r)
             marcar_lo_nuevo("mp_rubro", rubros)
