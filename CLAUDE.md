@@ -411,6 +411,12 @@ Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
 
 - **SÍ funciona:** apretar botones, marcar casillas, elegir de listas desplegables
   **en GitHub y en Supabase**. El formulario del token de GitHub se llenó entero así.
+- **SÍ funciona el panel entero, incluido escribir** (03-09-2026), entrando a la URL de
+  adentro del iframe (`/~/+/`, ver «Verificación antes de entregar»). Se consultó el Senado
+  de punta a punta —buscar la institución, marcar las seis unidades, apretar Consultar y leer
+  la tabla— sin que ella tocara nada. También el menú de Streamlit Cloud: *Manage app ▸ ⋮ ▸
+  Reboot app* se apretó así. ⚠️ **Ahí conviene apretar por referencia y no por coordenada**:
+  «Delete app» queda 41 píxeles debajo de «Reboot app».
 - ⚠️ **EN AUTH0 NO FUNCIONA NADA, ni siquiera los clics** (comprobado el 31-08-2026
   en Email Provider): el interruptor «Use my own email provider» y el radio de
   Resend no se marcan ni con `.click()`, ni con `MouseEvent` sintético, ni sobre
@@ -787,6 +793,15 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
 - **Las columnas numéricas van como números** (`Int64`), no como texto con `$`: si van como
   texto, la tabla ordena "11" entre "1" y "2". El formato con separador de miles lo pone
   `column_config` con `format="localized"`, que respeta el idioma del navegador.
+- **⚠️ Una celda numérica vacía NO sale en blanco: Streamlit le escribe «None».** Medido el
+  03-09-2026 sobre ocho variantes: pasa con Styler y sin Styler, con `column_config` y sin
+  él, con `Int64`, con `Float64` y con `float64`+NaN, en Streamlit 1.61.1 y 1.63.0 (la
+  última) y con pandas 2.3.3 y 3.0.5. **El Arrow que sale de Python lleva nulos correctos**:
+  lo dibuja así el navegador. `.format(na_rep="")` del Styler no lo arregla y además **le
+  come el signo** a los negativos. Lo único que sale en blanco es una columna de **texto**,
+  pero eso rompe el orden. **La salida es esconder la columna cuando está vacía entera**, que
+  es lo que hace `sin_ofertas` con MI OFERTA y DIF%. Si un día hay que mostrar un hueco en
+  medio de números, no hay forma: se ve «None».
 - **La selección de filas se limpia antes de usarla** (`filas_seleccionadas`): si se marcan
   filas y luego se cambia el filtro o se reordena, las posiciones guardadas ya no existen y
   `iloc` reventaba con TypeError. Lo mismo con los `multiselect` cuyas opciones cambian: hay
@@ -834,6 +849,20 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
   exactamente lo que se ve cuando hay un error de código, pero sin ninguna pista. **Si el
   registro no tiene traza, es memoria.** Pasó el 27-08-2026 al ampliar la bodega a las seis
   vías (de 1,2 a 8,3 millones de líneas).
+- **⚠️ Filtrar AL LEER, nunca después.** `leer_bodega` (`app.py`) cargaba todas las columnas de
+  todos los meses del período y recién ahí el que llamaba se quedaba con sus unidades. Medido
+  con los meses de producción y las 5 unidades del Senado: **3 meses → 1.240.871 filas → +555
+  MB**; filtrando al leer, **467 filas** y memoria plana —mismas filas, mismas columnas, mismo
+  total $622.413.127. Un período de un año son doce meses: más de 2 GB contra un techo de
+  1.000 MB. Por eso Módulo Mercado Público moría siempre en el mismo paso (02-09-2026, commit
+  `a080b77`). Los tres que la llaman pasan `codigos`: `convenios_del_periodo`,
+  `compras_desde_bodega` y la lectura cruda. **Toda caché de datos lleva `max_entries`**: sin
+  él, `st.cache_data` guarda una copia entera por cada juego de argumentos distinto.
+- **⚠️ La bodega local NO sirve para medir memoria.** El clon de trabajo tiene ~38.000 líneas
+  por mes; producción tiene **393.919 y pesa 421 MB** (eran 121 MB). Medir contra la copia local
+  da quince veces menos y lleva a diagnosticar mal: el 02-09-2026 se erró el diagnóstico tres
+  veces por eso, y se desarmó el panel dos veces sin necesidad. Antes de decir «no es
+  memoria», **bajar los meses de producción de verdad y medir con ellos.**
 - **La bodega se lee en UN solo lugar: `alertador.resumen_de_ordenes`**, y una sola
   `@st.cache_data` la guarda (`modulo_oportunidades.cargar_compras`). **No hacer otra caché de
   la bodega.** `st.tabs` dibuja TODAS las pestañas en cada corrida, así que dos cachés se
@@ -864,11 +893,22 @@ Para el PDF hay que mirarlo, no solo generarlo: `pypdfium2` lo convierte a PNG y
 detectan los defectos visuales (el logo montado sobre el texto, la tabla pintada de azul, el
 título cortado en dos líneas: los tres aparecieron así).
 
-El navegador de estas sesiones **no dibuja la tabla de Streamlit** (es un canvas y el panel no
-compone imagen), así que la selección de filas y los colores de la tabla los tiene que
-confirmar ella. Por lo mismo **tampoco se pueden elegir opciones en los desplegables**: la
-lista es virtualizada y sin compositor llega vacía. Sí sirve `javascript_tool` para medir el
-CSS aplicado (ancho, centrado, tamaño de letra, desborde en celular).
+**Esto decía que la tabla y los desplegables no se podían manejar desde el navegador. Ya no
+es cierto** (corregido el 03-09-2026), y esa nota costaba pedirle a ella comprobaciones que
+se pueden hacer solas. Lo que fallaba era el panel embebido, no el navegador: **la app corre
+dentro de un iframe** y hay que entrar a la URL de adentro,
+`https://panel-stock-uplevel.streamlit.app/~/+/`. Desde ahí, en el Chrome de ella:
+
+- **La tabla se dibuja entera** y se lee con una captura o con `zoom` sobre la región.
+- **Los desplegables se abren y se eligen opciones** (incluido «Select all» del multiselect).
+- **Se escribe en los campos de texto** normalmente.
+- Sobre la URL de afuera no funciona nada de eso: `read_page` devuelve contenedores vacíos y
+  `document.querySelectorAll('input')` no encuentra ni un campo, porque todo vive en el iframe.
+- ⚠️ **La captura se cae con «renderer may be frozen» mientras la app calcula.** No es que el
+  navegador esté colgado: es que Streamlit está trabajando. Se espera y se vuelve a capturar.
+
+Sí sirve `javascript_tool` para medir el CSS aplicado (ancho, centrado, tamaño de letra,
+desborde en celular).
 
 Para probar la interfaz de verdad (elegir unidades, apretar el botón, leer lo que quedó en
 pantalla) se usa **`streamlit.testing.v1.AppTest`**, que corre la app entera sin navegador:

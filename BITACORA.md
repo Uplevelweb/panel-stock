@@ -1,3 +1,88 @@
+## 03-09-2026 · El «Oh no» era el proceso viejo, y las columnas vacías decían «None»
+
+**Lo primero: la app estaba caída y el arreglo ya estaba arriba.** El registro terminaba en
+`[03:13:43] Updated app!` sin ninguna traza debajo — la firma del cierre por memoria. El
+commit `a080b77` de la noche anterior estaba desplegado, pero el proceso seguía muerto del
+corte anterior. **Subir el código no lo revive: hay que reiniciar**, y eso ya estaba escrito
+en `CLAUDE.md`. *Manage app ▸ ⋮ ▸ Reboot app*, cinco minutos de rearmado y volvió.
+
+Se comprobó en el camino exacto que la mataba, pero más pesado: **Senado, seis unidades, ocho
+meses** (01-01 al 31-08-2026) en vez de tres. 555 órdenes, 397 productos, $720.119.070, leído
+de la bodega y sin gastar ticket. La tabla dibujó entera. El arreglo de memoria aguanta.
+
+---
+
+**Lo segundo, que apareció mirando esa tabla:** MI OFERTA y DIF% decían «None» en las 397
+filas.
+
+No era del panel. **Streamlit no deja en blanco una celda numérica vacía: le escribe
+«None».** Ocho variantes probadas antes de tocar una línea: con Styler y sin Styler, con
+`column_config` y sin él, `Int64`, `Float64` y `float64`+NaN, Streamlit 1.61.1 y 1.63.0 —que
+es la última, no hay a dónde subir— y pandas 2.3.3 y 3.0.5. **El Arrow que sale de Python
+lleva nulos correctos**; el «None» lo dibuja el navegador. `.format(na_rep="")` del Styler no
+lo arregla y encima **le come el signo a los negativos**: el -5,6% salía 5,6%. Lo único que
+sale en blanco es una columna de texto.
+
+Así que la pregunta era: ¿texto en blanco pero sin poder ordenar, o números ordenables con
+«None»? **La respondió Serling y cambió el diseño:** *«esos campos son las ofertas que se
+generan semanalmente y sirven cuando la llamemos y queramos comparar con algún precio de
+compra u ofrecerlo cuando seamos atractivos»*. Ordenar por DIF% **es** el caso de uso —
+encontrar dónde su oferta gana—, así que pasarlas a texto estaba descartado.
+
+**Las columnas se esconden cuando están vacías enteras** (`sin_ofertas`), y vuelven completas
+en cuanto un producto tiene oferta. Vacías no informan nada, así que no se pierde nada; llenas
+siguen siendo números ordenables. El pie de la tabla lo dice en vez de dejarla adivinando:
+«Ninguno de estos productos está en tus ofertas de la semana». El Excel baja lo mismo que
+está en pantalla, como el resto del panel.
+
+**Por qué está vacía casi siempre, y no es una falla:** las ofertas son ~840 productos de los
+22.626 del catálogo. De los 397 que compró el Senado, 94 son de ella; que ninguno de esos 94
+caiga entre los 840 de esta semana es lo esperable.
+
+---
+
+**Y una nota vieja que costaba plata cada sesión.** `CLAUDE.md` decía que el navegador no
+dibuja la tabla de Streamlit ni abre los desplegables, y por eso las comprobaciones de
+pantalla se le pedían a ella. Era falso: **la app corre dentro de un iframe** y hay que entrar
+a la URL de adentro (`/~/+/`). Desde ahí se escribe, se abren los desplegables y se lee la
+tabla. La consulta del Senado de arriba se hizo entera así, sin que ella tocara nada.
+Corregido en las dos secciones donde estaba.
+
+---
+
+## 02-09-2026 (tarde) · Módulo Mercado Público caía por memoria
+
+Tres caídas seguidas de «Oh no. Error running app». Lo que las ubicó fue que ella dijera
+**en qué estaba**: consultando al SENADO en Módulo Mercado Público. El problema estaba ahí,
+en código que nadie había tocado ese día.
+
+`leer_bodega` cargaba **todas las columnas de todos los meses del período** y las juntó en
+memoria; recién después el que llamaba se quedaba con sus unidades. Los tres lugares que la
+usan hacen exactamente eso.
+
+Medido con los meses de producción y las 5 unidades del Senado:
+
+| | Filas cargadas | Memoria |
+|---|---|---|
+| **Antes** | 1.240.871 | **+555 MB** |
+| **Ahora** | 467 | plana |
+
+Y eso con **tres** meses. Un período de un año son doce: más de 2 GB contra un techo de
+1.000 MB. Ahora filtra mes por mes al leer y suelta cada uno; el peor momento es un mes.
+Se le puso `max_entries=2` a la caché, que antes guardaba una copia entera por cada período
+distinto consultado.
+
+**Se verificó que el resultado es idéntico antes de publicar:** las mismas 467 filas, las
+mismas columnas, el mismo total $622.413.127. Ningún número de ella cambia. Commit `a080b77`.
+
+**Por qué apareció ahora:** ese código anduvo meses porque la bodega era quince veces más
+chica. Creció de 121 MB a 421 MB y cruzó la línea.
+
+**Lo que costó caro:** se diagnosticó mal tres veces midiendo contra la bodega **local**
+(38.000 líneas por mes) cuando producción tiene 393.919. El propio CLAUDE.md avisaba que la
+copia local estaba vieja. Se ignoró dos veces y se desarmó el panel dos veces al pedo.
+Regla que quedó escrita arriba: **bajar los meses de verdad antes de opinar de memoria.**
+
 ## 02-09-2026 · Oportunidades se rearma: pasos, caminos, cartera y catálogo
 
 La pestaña era un solo rollo de seis mil píxeles con cuatro trabajos apilados.

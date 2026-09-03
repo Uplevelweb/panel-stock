@@ -3043,10 +3043,26 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     m3.metric("En tu catálogo", en_catalogo)
     m4.metric("Órdenes", int(vista["ORDEN"].nunique()))
 
+    # MI OFERTA y DIF% se apagan cuando NINGUN producto de la consulta tiene
+    # oferta esta semana, que es lo habitual: las ofertas son ~840 productos de
+    # los 22.600 del catalogo, asi que casi nunca calzan con lo que compro la
+    # institucion. Streamlit **no deja en blanco una celda numerica vacia**: le
+    # escribe «None», y dos columnas enteras de «None» ensucian la tabla y no
+    # dicen nada. Comprobado el 03-09-2026 en las dos versiones y con pandas 2 y
+    # 3: no hay formato ni dtype que lo evite, solo pasarlas a texto — y eso se
+    # descarto, porque ordenar por DIF% es como ella encuentra donde su oferta
+    # gana. Si hay aunque sea una oferta, las dos columnas vuelven enteras.
+    sin_ofertas = [c for c in ("MI OFERTA", "DIF%") if productos[c].isna().all()]
+
     st.caption(
         "Los precios son los que **pagó esta institución** en el período consultado, no "
-        "precios de mercado. **MI OFERTA** sale de tu catálogo y queda en blanco si ese ID "
-        "no tiene oferta. Selecciona los productos para el PDF: clic en una fila, y con "
+        "precios de mercado. " + (
+            "Ninguno de estos productos está en tus ofertas de la semana, así que "
+            "**MI OFERTA** y **DIF%** no se muestran. "
+            if sin_ofertas else
+            "**MI OFERTA** sale de tu catálogo y queda en blanco si ese ID "
+            "no tiene oferta. ") +
+        "Selecciona los productos para el PDF: clic en una fila, y con "
         "**Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas. "
         "En amarillo, las oportunidades que conviene aprovechar.")
 
@@ -3082,8 +3098,12 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         if productos.empty:
             return
 
+    # Las de adentro (ESTADO, RUBRO, CONVENIO) viajan con la tabla para filtrar
+    # y para el PDF, pero nunca se dibujan. `sin_ofertas` se suma a esa lista.
+    ocultas = [COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO] + sin_ofertas
+
     seleccion = st.dataframe(
-        destacar_comentarios(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]),
+        destacar_comentarios(productos.drop(columns=ocultas),
                              SEÑALES_DESTACADAS_MP),
         width="stretch",
         hide_index=True,
@@ -3097,8 +3117,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     nombre_base = normalizar(unidades_c[0])[:20] if unidades_c else "consulta"
     st.download_button(
         "⬇️ Descargar Excel de esta vista",
-        data=a_excel(productos.drop(columns=[COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]),
-                     nombre_hoja="Mercado Público"),
+        data=a_excel(productos.drop(columns=ocultas), nombre_hoja="Mercado Público"),
         file_name=f"MercadoPublico-{nombre_base}-{desde_c:%d%m%Y}-{hasta_c:%d%m%Y}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         disabled=productos.empty,
