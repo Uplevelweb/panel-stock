@@ -1,0 +1,30 @@
+# QUE NUNCA DEBE SUBIRSE A ESTE REPOSITORIO
+# ==========================================
+# Este repositorio es PUBLICO. Cualquiera lee lo que este aca, y lo que se
+# sube una vez queda en el historial aunque despues se borre.
+#
+# Hasta el 03-09-2026 lo unico que protegia estos archivos era acordarse de
+# no copiarlos. Este archivo lo vuelve mecanico: aunque alguien copie la
+# carpeta entera y haga `git add -A`, estos no entran.
+#
+# NO agregar nombres nuevos "por si acaso": un patron ancho de mas puede
+# tapar un archivo que la app necesita y la caida no se entiende despues.
+
+# --- Secretos ---
+.streamlit/secrets.toml
+auth0-para-copiar.txt
+llave.txt
+ticket-mp.txt
+.env
+*.env
+
+# --- Datos de personas y estado de los envios ---
+# Los suscriptores viven en Supabase, no aca.
+alertas_config.json
+bienvenidas_enviadas.json
+
+# --- Basura de Python y del sistema ---
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

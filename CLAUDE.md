@@ -638,6 +638,13 @@ la tanda. Plan Pro: USD 20/mes por 50.000.
 
 ## Secretos y acceso
 
+**El guardia es `.gitignore`, no la memoria de nadie (03-09-2026).** Este repositorio es
+publico. `secrets.toml`, `auth0-para-copiar.txt`, `llave.txt`, `ticket-mp.txt`,
+`alertas_config.json` y `bienvenidas_enviadas.json` estan bloqueados ahi, asi que aunque se
+copie la carpeta entera y se haga `git add -A`, no entran. **No borrar ese archivo ni
+aflojarlo.** Se comprobo el 03-09-2026 que ninguno de los tres prohibidos estuvo jamas en el
+historial (0 commits cada uno) y que ningun archivo publicado contiene claves.
+
 En **Streamlit ▸ Manage app ▸ Settings ▸ Secrets** (nunca en GitHub):
 
 ```toml
