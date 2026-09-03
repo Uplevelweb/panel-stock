@@ -562,6 +562,12 @@ def seccion_oportunidades() -> None:
             "vendido**, que no lo necesita.")
         forma = "Según lo que ya has vendido"
 
+    # Los convenios en los que ese RUT vende. Se calculan ANTES de la
+    # bifurcacion porque el selector se dibuja en los dos modos.
+    convenios_del_rut = convenios_de(
+        compras.loc[compras["rut"].str.startswith(cuerpo, na=False),
+                    "convenio_marco"])
+
     if forma == "Contra mis ID publicados":
         lineas = compras_de_mis_ids(sello, tuple(sorted(mis_ids)), cuerpo)
         tabla, resumen = mapa_por_ids(lineas, unidades, len(mis_ids))
@@ -587,12 +593,6 @@ def seccion_oportunidades() -> None:
                 options=convenios_de(compras["convenio_marco"]))
             return
 
-        # Todos los convenios en los que ese RUT vende: son las opciones del
-        # filtro de más abajo. Se calcula acá, con la tabla ya hecha, y no de
-        # `resumen["convenios"]` —que es el resultado de la selección—.
-        convenios_del_rut = convenios_de(
-            compras.loc[compras["rut"].str.startswith(cuerpo, na=False),
-                        "convenio_marco"])
 
         if resumen["nombre"]:
             st.success(f"**{resumen['nombre']}** · {len(resumen['convenios'])} convenios marco")
@@ -780,11 +780,16 @@ def seccion_oportunidades() -> None:
     # Las opciones NO salen de `resumen["convenios"]`, que es el resultado de
     # la selección: si se eligiera uno solo, la lista se reduciría a ese y no
     # habría cómo volver. Salen de todos los que ese RUT ha vendido.
-    if not resumen["por_ids"]:
-        st.multiselect(
-            "Convenio marco", key="op_convenios", options=convenios_del_rut,
-            placeholder="Todos los tuyos",
-            help="Deja vacío para mirar todos los convenios en los que vendes.")
+    # SE DIBUJA SIEMPRE, apagado cuando no aplica. Un selector que aparece y
+    # desaparece pierde su valor —Streamlit borra el estado del widget que deja
+    # de dibujarse— y ademas confunde: la persona lo eligio y ya no esta.
+    # Apagado se ve, se entiende por que no sirve, y conserva lo elegido.
+    st.multiselect(
+        "Convenio marco", key="op_convenios", options=convenios_del_rut,
+        placeholder="Todos los tuyos", disabled=resumen["por_ids"],
+        help=("En «Contra mis ID publicados» el mercado lo definen tus "
+              "productos, no el convenio." if resumen["por_ids"] else
+              "Deja vacío para mirar todos los convenios en los que vendes."))
 
     filtro_situacion, filtro_region = st.columns([2, 2])
     with filtro_situacion:
@@ -959,6 +964,12 @@ FILTROS = (
 )
 COPIA_FILTROS = "op_filtros_guardados"
 
+# El convenio se guarda con los demas aunque no filtre ninguna columna: no
+# recorta la tabla, define el mercado. Pero desaparece igual cuando su selector
+# deja de dibujarse -en el modo "Contra mis ID" no se dibuja-, y sin esto la
+# eleccion se perdia al cambiar de modo y volver.
+PERSISTEN = tuple(clave for clave, _, _ in FILTROS) + ("op_convenios",)
+
 
 # A qué paso pertenece cada sección. El orden del diccionario es el orden en
 # que se dibujan, y por eso las tres de un paso van juntas: si se intercalaran,
@@ -1026,7 +1037,7 @@ def _recordar_filtros() -> None:
     la toca nunca.
     """
     st.session_state[COPIA_FILTROS] = {
-        clave: list(st.session_state.get(clave) or []) for clave, _, _ in FILTROS}
+        clave: list(st.session_state.get(clave) or []) for clave in PERSISTEN}
 
 
 def _restaurar_filtros() -> None:

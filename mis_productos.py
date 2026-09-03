@@ -94,43 +94,88 @@ def ids_del_archivo(archivo) -> tuple[set[str], str]:
     except Exception:
         return set(), "No se pudo leer el archivo."
 
-    hojas: dict[str, pd.DataFrame] = {}
+    encontrados: set[str] = set()
+    cuantas_hojas = 1
+
+    # SE LEE EN FLUJO, CELDA POR CELDA, Y NO SE ARMA NINGUNA TABLA.
+    #
+    # Antes esto era `pd.read_excel(sheet_name=None, dtype=str)`, que carga las
+    # cuatro pestañas enteras en DataFrames: +24 MB por lectura **que no se
+    # devuelven ni forzando el recolector**. Con la bodega de producción ya
+    # ocupando lo suyo, unas cuantas lecturas se comían el techo de 1.000 MB de
+    # Streamlit y la app moría sin traceback. Es el «Oh no» del 02-09-2026: el
+    # registro mostraba decenas de lecturas seguidas del catálogo.
+    #
+    # Con `read_only=True` openpyxl no construye el libro en memoria: entrega
+    # las filas de a una y las suelta. Y como lo único que hace falta son los
+    # números de 7 dígitos, no hay por qué guardar nada más.
     if nombre.lower().endswith(".csv"):
-        for separador in (";", ","):
+        import csv
+        for codificacion in ("utf-8-sig", "latin-1"):
             try:
-                hojas = {"csv": pd.read_csv(io.BytesIO(contenido), sep=separador,
-                                            header=None, dtype=str,
-                                            on_bad_lines="skip")}
+                texto = contenido.decode(codificacion)
                 break
-            except Exception:
+            except UnicodeDecodeError:
                 continue
+        else:
+            return set(), "No se pudo leer el archivo: codificación desconocida."
+        separador = ";" if texto.count(";") >= texto.count(",") else ","
+        for fila in csv.reader(io.StringIO(texto), delimiter=separador):
+            for celda in fila:
+                _si_es_id(celda, encontrados)
     else:
+        import openpyxl
         try:
-            hojas = pd.read_excel(io.BytesIO(contenido), sheet_name=None,
-                                  header=None, dtype=str)
+            libro = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True,
+                                           data_only=True)
         except Exception as error:
             return set(), f"No se pudo abrir el archivo: {error}"
-
-    if not hojas:
-        return set(), "El archivo no se pudo leer. ¿Es un .xlsx o un .csv?"
-
-    encontrados: set[str] = set()
-    for grilla in hojas.values():
-        if grilla is None or grilla.empty:
-            continue
-        for columna in grilla.columns:
-            valores = grilla[columna].dropna().astype(str).str.strip()
-            # `.str.replace` saca los puntos de miles que Excel a veces deja.
-            valores = valores.str.replace(".", "", regex=False)
-            buenos = valores[valores.str.fullmatch(r"\d{%d}" % LARGO_ID)]
-            encontrados.update(buenos.tolist())
+        try:
+            cuantas_hojas = len(libro.sheetnames)
+            for hoja in libro.worksheets:
+                for fila in hoja.iter_rows(values_only=True):
+                    for celda in fila:
+                        _si_es_id(celda, encontrados)
+        finally:
+            # `read_only` deja el zip abierto: hay que cerrarlo a mano o el
+            # archivo temporal queda tomado.
+            libro.close()
 
     if not encontrados:
         return set(), ("No encontré ningún ID en ese archivo. Tienen que ser "
                        f"números de {LARGO_ID} dígitos, en cualquier columna.")
     return encontrados, (f"{len(encontrados):,}".replace(",", ".") +
                          f" productos leídos de «{nombre}»" +
-                         (f", {len(hojas)} pestañas" if len(hojas) > 1 else ""))
+                         (f", {cuantas_hojas} pestañas" if cuantas_hojas > 1 else ""))
+
+
+def _si_es_id(celda, encontrados: set) -> None:
+    """Guarda la celda si parece un ID de Convenio Marco.
+
+    ⚠️ LA MITAD DE LOS ID VIENEN COMO NUMERO, NO COMO TEXTO. openpyxl los
+    entrega tal cual están guardados, así que un ID numérico llega como
+    `4194137.0` y `str()` lo deja de 9 caracteres: se descartaba. Con
+    `pd.read_excel(dtype=str)` esto no se notaba porque pandas los convertía.
+    Costó 10.346 productos de 22.656 en la primera versión de este lector.
+
+    Acepta también el número escrito con puntos de miles («4.194.137»), que es
+    como Excel a veces deja la columna.
+    """
+    if celda is None:
+        return
+    if isinstance(celda, bool):
+        return
+    if isinstance(celda, int):
+        texto = str(celda)
+    elif isinstance(celda, float):
+        # Un ID no tiene decimales: si los trae, no es un ID.
+        if not celda.is_integer():
+            return
+        texto = str(int(celda))
+    else:
+        texto = str(celda).strip().replace(".", "")
+    if len(texto) == LARGO_ID and texto.isdigit():
+        encontrados.add(texto)
 
 
 # --------------------------------------------------------------------------

@@ -45,6 +45,7 @@ CLAVE_SESION = "vistas_local"
 CAMPOS = {
     "op_rut": "",
     "op_forma": "Según lo que ya has vendido",
+    "op_convenios": [],
     "op_situacion": [],
     "op_region": [],
     "op_organismo": [],
@@ -134,9 +135,9 @@ def aplicar(vista: dict) -> None:
     # La copia que sobrevive al cambio de sección también se pone al día, o la
     # vista recién aplicada duraría hasta que se mirara otra sección.
     # Ver `modulo_oportunidades._recordar_filtros`.
-    from modulo_oportunidades import COPIA_FILTROS, FILTROS
+    from modulo_oportunidades import COPIA_FILTROS, PERSISTEN
     st.session_state[COPIA_FILTROS] = {
-        clave: list(vista.get(clave) or []) for clave, _, _ in FILTROS}
+        clave: list(vista.get(clave) or []) for clave in PERSISTEN}
     # Para que la consulta se lance sola, sin tener que apretar el botón.
     if vista.get("op_rut"):
         st.session_state["op_visto"] = vista["op_rut"]
