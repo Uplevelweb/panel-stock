@@ -265,10 +265,11 @@ SIN_REGION = "(sin región informada)"
 # el rango consultado, no precios de mercado.
 COLUMNAS_PANEL_MP = [
     "ID", "PRODUCTO", "MONTO", "P.MIN", "P. PROM", "P.MAX",
-    "MI OFERTA", "DIF%", "OC", "PROVEEDORES", "COMENTARIO",
+    "MI PRECIO", "MI OFERTA", "DIF%", "OC", "PROVEEDORES", "COMENTARIO",
 ]
 COLUMNAS_NUMERICAS_PANEL_MP = [
-    "MONTO", "P.MIN", "P. PROM", "P.MAX", "MI OFERTA", "OC", "PROVEEDORES",
+    "MONTO", "P.MIN", "P. PROM", "P.MAX", "MI PRECIO", "MI OFERTA", "OC",
+    "PROVEEDORES",
 ]
 
 # Aqui solo hay dos estados posibles, porque el catalogo de ofertas dice si el
@@ -907,7 +908,8 @@ def a_excel(tabla: pd.DataFrame, nombre_hoja: str = "Oportunidades") -> bytes:
         numerica.to_excel(escritor, index=False, sheet_name=nombre_hoja)
         hoja = escritor.sheets[nombre_hoja]
         anchos = {"ID": 12, "PRODUCTO": 60, "MONTO": 16, "P.MIN": 12, "P. PROM": 12,
-                  "P.MAX": 12, "MI PUBLICADO": 14, "OC": 8, "COMENTARIO": 70,
+                  "P.MAX": 12, "MI PUBLICADO": 14, "MI PRECIO": 14, "OC": 8,
+                  "COMENTARIO": 70,
                   # Columnas del modulo de Mercado Publico.
                   "FECHA": 12, "ORDEN": 20, "ESTADO": 20, "UNIDAD": 34,
                   "CANTIDAD": 11, "PRECIO": 14, "TOTAL": 16,
@@ -2039,7 +2041,8 @@ def sin_id_adelante(nombre) -> str:
 
 
 def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float],
-                         dias: int, catalogo_propio: dict[str, str] | None = None) -> pd.DataFrame:
+                         dias: int, catalogo_propio: dict[str, str] | None = None,
+                         publicados: dict[str, float] | None = None) -> pd.DataFrame:
     """De una fila por linea de orden a una fila por ID, como el panel de arriba.
 
     Los precios son los que PAGO la institucion en el rango consultado. El
@@ -2081,6 +2084,13 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
         # no el de un número con decimales que ella nunca vio.
         if oferta is not None and not pd.isna(oferta):
             oferta = round(oferta)
+        # MI PRECIO es lo que ella tiene PUBLICADO en Convenio Marco, del
+        # catalogo del Drive. Va al lado de lo que pago la institucion porque
+        # es la comparacion que decide si vale la pena ir por ese producto:
+        # antes habia que salir de la app a buscarlo. Tambien a peso entero.
+        publicado = (publicados or {}).get(clave)
+        publicado = (None if publicado is None or pd.isna(publicado)
+                     else round(publicado))
         # Sin catalogo cargado se cae a las ofertas, que era el criterio viejo:
         # asi la app sigue funcionando si el archivo no esta disponible.
         en_catalogo = (clave in catalogo_propio) if catalogo_propio else (oferta is not None)
@@ -2094,6 +2104,7 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
             "P.MIN": min(precios) if precios else None,
             "P. PROM": promedio,
             "P.MAX": max(precios) if precios else None,
+            "MI PRECIO": publicado,
             # Solo se llena si existe oferta: un precio normal no sirve para
             # cotizar y en el PDF sale con un guion.
             "MI OFERTA": oferta,
@@ -2137,7 +2148,6 @@ TOPE_COLUMNAS_UNIDAD = 20
 
 
 def tabla_por_institucion(vista: pd.DataFrame, productos: pd.DataFrame,
-                          precios_publicados: dict[str, float],
                           tope: int = TOPE_COLUMNAS_UNIDAD
                           ) -> tuple[pd.DataFrame, list[str], int]:
     """Una fila por producto y una columna por unidad compradora.
@@ -2213,11 +2223,15 @@ def tabla_por_institucion(vista: pd.DataFrame, productos: pd.DataFrame,
         "MONTO": list(mias["MONTO"]),
         "OC": list(mias["OC"]),
         "P. PROM": list(mias["P. PROM"]),
-        # A peso entero, igual que el resto de la plata.
-        "MI PRECIO": [None if precios_publicados.get(i) is None
-                      else round(precios_publicados[i]) for i in ids],
+        # MI PRECIO ya viene calculado en la tabla de arriba: aquí solo se
+        # arrastra. Antes se leía el catálogo dos veces para lo mismo.
+        "MI PRECIO": list(mias["MI PRECIO"]),
         "MI OFERTA": list(mias["MI OFERTA"]),
         "DIF%": list(mias["DIF%"]),
+        # Viaja escondida y no se dibuja: la necesita la cotización para
+        # separar por rubro, porque cada convenio se compra aparte.
+        COLUMNA_RUBRO: list(mias[COLUMNA_RUBRO]) if COLUMNA_RUBRO in mias.columns
+        else [""] * len(ids),
     })
     # Misma escalera que la tabla de arriba: la plata va como entero (`Int64`),
     # sin decimales, o Streamlit escribe «1.234,0». DIF% no entra: es un
@@ -2946,30 +2960,44 @@ def propuesta(seleccionados: pd.DataFrame, precios_oferta: dict[str, float],
 
 
 
+def precios_publicados(url_catalogo: str) -> dict[str, float]:
+    """Tu precio publicado en Convenio Marco, por ID.
+
+    Sale de `cargar_catalogo_regional`, el mismo lector que usa el Módulo
+    Cotizador y que ya está cacheado: no cuesta una lectura más de Drive.
+    **Falla abierto**: si el catálogo no se puede leer devuelve vacío y las
+    tablas salen sin esa columna, en vez de no salir.
+    """
+    try:
+        catalogo_regional, _, _ = cargar_catalogo_regional(url_catalogo)
+    except Exception:
+        return {}
+    if catalogo_regional.empty or "MI PUBLICADO" not in catalogo_regional.columns:
+        return {}
+    return {str(i).strip(): p for i, p in
+            zip(catalogo_regional["ID"], catalogo_regional["MI PUBLICADO"])
+            if p is not None and not pd.isna(p)}
+
+
 def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
-                             url_catalogo: str) -> None:
+                             precios_oferta: dict[str, float],
+                             institucion: str = "", contacto: str = "") -> None:
     """La tabla de abajo: de lo que vendo, qué compra cada unidad y cuándo.
 
     Va al final del módulo y se dibuja sola con lo que quedó de la consulta: no
     tiene filtros propios, hereda los de arriba. Así lo pidió Serling el
     03-09-2026 —«que se genere automáticamente al extraer la data»—.
 
-    MI PRECIO sale de `cargar_catalogo_regional`, que es el mismo lector que usa
-    el Módulo Cotizador y ya está cacheado: no cuesta una lectura más de Drive.
-    **Falla abierto**: si el catálogo no se puede leer, la tabla sale igual, sin
-    esa columna, en vez de no salir.
-    """
-    publicados: dict[str, float] = {}
-    try:
-        catalogo_regional, _, _ = cargar_catalogo_regional(url_catalogo)
-        if not catalogo_regional.empty and "MI PUBLICADO" in catalogo_regional.columns:
-            publicados = {str(i).strip(): p for i, p in
-                          zip(catalogo_regional["ID"], catalogo_regional["MI PUBLICADO"])
-                          if p is not None and not pd.isna(p)}
-    except Exception:
-        publicados = {}
+    MI PRECIO viene ya calculado en la tabla de arriba, que lo trae del
+    catálogo del Drive: aquí no se lee nada más.
 
-    tabla, columnas_unidad, otras = tabla_por_institucion(vista, productos, publicados)
+    **Desde aquí también se cotiza** (04-09-2026, pedido de Serling): se marcan
+    filas y sale el mismo bloque «Cotización y correo» de arriba. Es la tabla
+    que dice CUÁNDO compra cada unidad, así que es donde se decide a quién
+    ofrecerle qué; obligarla a subir a la otra tabla a marcar lo mismo era el
+    doble de trabajo.
+    """
+    tabla, columnas_unidad, otras = tabla_por_institucion(vista, productos)
 
     st.markdown("#### 🗓️ Quién compra qué, y en qué meses")
     if tabla.empty:
@@ -2983,7 +3011,9 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
         + (f"Salen las **{len(columnas_unidad) - (1 if otras else 0)}** que más compran; las "
            f"otras **{otras}** van juntas en la última columna, y sus compras **sí** están "
            "sumadas en MONTO, OC y P. PROM." if otras else "")
-        + " Toca ⛶ arriba a la derecha de la tabla para verla en grande.")
+        + " Toca ⛶ arriba a la derecha de la tabla para verla en grande. "
+        "**Marca las filas** que quieras cotizar —clic, y con **Shift** varias "
+        "de corrido— y abajo sale el PDF y el correo.")
 
     configuracion = {
         "ID": st.column_config.TextColumn("ID", width=ancho_fijo(80)),
@@ -2994,7 +3024,8 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
         "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(110),
                                                help="Lo que pagó por ese producto en el período"),
         "OC": st.column_config.NumberColumn(format="localized", width=ancho_fijo(60),
-                                            help="Órdenes de compra del período"),
+                                            help="Cuántas órdenes de compra distintas "
+                                                 "del período incluyeron este ID"),
         "P. PROM": st.column_config.NumberColumn(format="localized", width=ancho_fijo(100),
                                                  help="El precio promedio que PAGÓ esta institución"),
         "MI PRECIO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(100),
@@ -3012,20 +3043,35 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
             help=f"**{columna}** · los meses en que compró ese producto")
 
     # Misma regla que la tabla de arriba: una columna numérica vacía entera
-    # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan.
+    # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan. El
+    # rubro nunca se dibuja: viaja solo para separar la cotización.
     vacias = [c for c in ("MI PRECIO", "MI OFERTA", "DIF%") if tabla[c].isna().all()]
+    ocultas = ([COLUMNA_RUBRO] if COLUMNA_RUBRO in tabla.columns else []) + vacias
+    a_la_vista = tabla.drop(columns=ocultas)
 
-    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_15_FILAS,
-                 hide_index=True, column_config=configuracion,
-                 key="mp_tabla_instituciones")
+    seleccion = st.dataframe(a_la_vista, width="stretch", height=ALTO_15_FILAS,
+                             hide_index=True, column_config=configuracion,
+                             on_select="rerun", selection_mode="multi-row",
+                             key="mp_tabla_instituciones")
+    marcados = tabla.iloc[filas_seleccionadas(seleccion, len(tabla))]
 
     st.download_button(
         "⬇️ Descargar Excel de quién compra qué",
-        data=a_excel(tabla, nombre_hoja="Quién compra qué"),
+        data=a_excel(a_la_vista, nombre_hoja="Quién compra qué"),
         file_name="MercadoPublico-quien-compra-que.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="mp_xlsx_instituciones",
     )
+
+    # El mismo bloque de arriba, con su propia clave («mpq») para que los dos
+    # no se pisen los campos. Plegado mientras no haya nada marcado: abierto
+    # empujaba el top de unidades fuera de la pantalla.
+    with st.expander(
+            "📄 Cotización y correo" + (f" — {len(marcados)} productos marcados"
+                                        if len(marcados) else ""),
+            expanded=bool(len(marcados))):
+        cotizacion_y_correo(marcados, precios_oferta, institucion, contacto, "mpq")
+
     top_de_unidades(vista, productos)
 
 
@@ -3472,7 +3518,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     dias_vista = (hasta_c - desde_c).days + 1
     if fechas_vista:
         dias_vista = max(dias_vista, (max(fechas_vista) - min(fechas_vista)).days + 1)
-    productos = agrupar_por_producto(vista, precios_oferta, dias_vista, catalogo_propio)
+    productos = agrupar_por_producto(vista, precios_oferta, dias_vista, catalogo_propio,
+                                     precios_publicados(url_catalogo))
     if productos.empty:
         st.warning("Las órdenes encontradas no traen el ID de Convenio Marco, "
                    "así que no se pueden agrupar por producto.")
@@ -3538,6 +3585,9 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # dicen «None»: ahi el hueco significa «este ID no tiene oferta», al lado de
     # los que si la tienen. No se esconde por fila, se esconde por columna.
     sin_ofertas = [c for c in ("MI OFERTA", "DIF%") if productos[c].isna().all()]
+    # MI PRECIO se apaga por su cuenta: sale del catálogo del Drive, no de las
+    # ofertas de la semana, así que puede faltar sin que falten las otras dos.
+    sin_publicado = ["MI PRECIO"] if productos["MI PRECIO"].isna().all() else []
 
     st.caption(
         "Los precios son los que **pagó esta institución** en el período consultado, no "
@@ -3547,6 +3597,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             if sin_ofertas else
             "**MI OFERTA** sale de tu catálogo y queda en blanco si ese ID "
             "no tiene oferta. ") +
+        ("**MI PRECIO** es el tuyo publicado en Convenio Marco: al lado de P.MIN, "
+         "P. PROM y P.MAX se ve de una si entra o no. " if not sin_publicado else "") +
         "Selecciona los productos para el PDF: clic en una fila, y con "
         "**Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas. "
         "En amarillo, las oportunidades que conviene aprovechar.")
@@ -3560,8 +3612,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     for columna in COLUMNAS_NUMERICAS_PANEL_MP:
         configuracion[columna] = st.column_config.NumberColumn(
             format="localized",
-            help={"OC": "Órdenes de compra del período",
+            help={"OC": "Cuántas órdenes de compra distintas del período "
+                        "incluyeron este ID",
                   "PROVEEDORES": "Cuántos proveedores le vendieron este ID",
+                  "MI PRECIO": "Tu precio publicado en Convenio Marco, del catálogo",
                   "MI OFERTA": "Tu precio de oferta de la semana, si ese ID la tiene",
                   }.get(columna, "En pesos"))
     # El signo importa mas que el numero: negativo es que tu oferta gana.
@@ -3585,7 +3639,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
 
     # Las de adentro (ESTADO, RUBRO, CONVENIO) viajan con la tabla para filtrar
     # y para el PDF, pero nunca se dibujan. `sin_ofertas` se suma a esa lista.
-    ocultas = [COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO] + sin_ofertas
+    ocultas = ([COLUMNA_ESTADO, COLUMNA_RUBRO, COLUMNA_CONVENIO]
+               + sin_ofertas + sin_publicado)
 
     seleccion = st.dataframe(
         destacar_comentarios(productos.drop(columns=ocultas),
@@ -3624,7 +3679,9 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                             resumen.get("contacto", ""), "mp")
 
     # --- Quién compra qué, y en qué meses -----------------------------------
-    seccion_quien_compra_que(vista, productos, url_catalogo)
+    seccion_quien_compra_que(vista, productos, precios_oferta,
+                             unidades_c[0] if unidades_c else "",
+                             resumen.get("contacto", ""))
 
     # --- El detalle, por si quiere ver orden por orden -----------------------
     with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "

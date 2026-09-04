@@ -57,7 +57,11 @@ automáticamente al extraer la data».
   tres veces, no. Se cuenta por mes del **calendario** —dos marzos de años distintos suman
   ×2—, porque lo que busca es la estacionalidad. Y se cuentan **órdenes distintas**, no líneas.
 - **El encabezado lleva la suma de OC** de esa unidad (`ESCUELA NAVAL (387 OC)`): en una
-  pasada se ve quién compra más (encabezado) y cuándo compra (celda).
+  pasada se ve quién compra más (encabezado) y cuándo compra (celda). ⚠️ **Ese número cuenta
+  solo las órdenes que traen algo de SU catálogo**, no todas las de la unidad: medido el
+  04-09-2026 sobre la Escuela Naval, con 336 productos en catálogo dice 193 OC (todas), con 50
+  dice 119 y con 10 dice 33. Es lo correcto —mide la relación comercial, no el tamaño del
+  comprador—, pero no cuadra con la métrica «Órdenes» de arriba, que sí son todas.
 - **Máximo 20 columnas de unidad** (`TOPE_COLUMNAS_UNIDAD`), las que más órdenes tienen. ⚠️ Las
   demás **no se pierden**: van juntas en «otras (n)» y **sus compras siguen sumadas** en MONTO,
   OC y P. PROM. Esto se le explicó y lo confirmó; no cambiarlo por un recorte de verdad.
@@ -65,9 +69,23 @@ automáticamente al extraer la data».
   lado y sin eso no se sabe de qué fila son los meses. Es lo que la hace usable en el celular,
   que ella pidió expresamente («aunque sea ajustada, y si desea más que amplíe la vista» — para
   ampliar está el ⛶ nativo de la tabla).
-- **MI PRECIO sale de `cargar_catalogo_regional`**, el mismo lector del Módulo Cotizador, que ya
-  está cacheado: no cuesta una lectura más de Drive. **Falla abierto**: si no se puede leer, la
-  tabla sale igual sin esa columna.
+- **MI PRECIO sale de `precios_publicados()`**, que envuelve a `cargar_catalogo_regional` —el
+  mismo lector del Módulo Cotizador, ya cacheado: no cuesta una lectura más de Drive—.
+  **Falla abierto**: si no se puede leer, las tablas salen igual sin esa columna. Desde el
+  04-09-2026 **la columna la calcula `agrupar_por_producto` y va en las DOS tablas**: la de
+  arriba, al lado de P.MIN/P. PROM/P.MAX, que es donde se ve de una si tu precio entra; y la
+  de abajo, que solo la arrastra. Antes se leía el catálogo dos veces para lo mismo.
+- **Desde la tabla de abajo también se cotiza** (04-09-2026, pedido de Serling): se marcan
+  filas y sale el mismo bloque «Cotización y correo» de arriba, con la clave `mpq` para que
+  los dos no se pisen los campos. Para eso `tabla_por_institucion` arrastra el `RUBRO`
+  escondido —`cotizacion_y_correo` separa por rubro, porque cada convenio se compra aparte— y
+  se dibuja `tabla.drop(columns=ocultas)` pero se marca sobre `tabla`, igual que arriba.
+- **`OC` es cuántas ÓRDENES DISTINTAS del período incluyeron ese ID**, no cuántas líneas ni
+  cuántas unidades. Verificado el 04-09-2026 recontando a mano las 336 filas de la Escuela
+  Naval en 365 días: 336 de 336 calzaron. La diferencia con las líneas es real y se ve poco
+  —2 IDs de 336—, pero existe: el ID 2237550 tiene 47 líneas repartidas en 38 órdenes y la
+  tabla dice 38. Y **el período es el que ella eligió**, no el año: con «1 año» el comentario
+  dice «en 365 días», con 90 días dice otra cosa.
 
 **La cotización sale separada por rubro**: si se marcan productos de Alimentos y de Aseo se
 generan dos PDF y dos correos, porque cada convenio se compra aparte. Lo hace `propuesta()`, que

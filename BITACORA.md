@@ -1,3 +1,40 @@
+## 04-09-2026 · MI PRECIO en las dos tablas, cotizar desde abajo, y qué cuenta el OC
+
+**1. MI PRECIO se subió a la tabla principal.** Estaba solo en «Quién compra qué»: para saber
+si su precio publicado entraba contra lo que la institución ya pagó había que bajar a la otra
+tabla o salir de la app. Ahora va en las dos, entre `P.MAX` y `MI OFERTA`, y la calcula
+`agrupar_por_producto` una sola vez. El lector del catálogo quedó como función propia,
+`precios_publicados()`, y la tabla de abajo dejó de leer el Drive por su cuenta: leía lo mismo
+dos veces. Se esconde sola si viene vacía entera, y **aparte** de MI OFERTA — sale del catálogo
+del Drive, no de las ofertas de la semana, así que puede faltar una sin la otra.
+
+**2. Desde «Quién compra qué» ahora se cotiza.** Marcar filas y abajo el mismo bloque
+«Cotización y correo»: PDF, correo, todo igual. Pedido de Serling, y tiene sentido — esa tabla
+es la que dice **cuándo** compra cada unidad, así que es donde se decide a quién ofrecerle qué;
+obligarla a subir a la otra tabla a marcar lo mismo era el doble de trabajo. La clave del bloque
+es `mpq` para que los dos no se pisen los campos, y `tabla_por_institucion` arrastra el `RUBRO`
+escondido porque la cotización separa por rubro.
+
+**3. Se verificó qué cuenta la columna OC**, que era lo que ella preguntó. **Es cuántas
+ÓRDENES DISTINTAS del período incluyeron ese ID.** No líneas, no unidades, y el período es el
+que ella eligió arriba —con «1 año» sí es el año, que es como estaba consultando—.
+
+Se recontó a mano, sin pandas, sobre la Escuela Naval en 365 días: 760 líneas, 193 órdenes, 336
+productos. **336 de 336 filas calzaron.** El ID 4196839 (plátano) dice 11 OC y son 11 órdenes
+reales, una por fecha, entre agosto de 2025 y agosto de 2026.
+
+La diferencia entre líneas y órdenes se ve poco pero existe: **2 IDs de 336** aparecen dos veces
+dentro de una misma orden. El 2237550 tiene 47 líneas repartidas en 38 órdenes, y la tabla dice
+38 — que es lo correcto: una orden con dos líneas del mismo producto es una compra, no dos.
+
+⚠️ **El número del encabezado de cada unidad es OTRA cosa** y conviene no confundirlos:
+`ESCUELA NAVAL (80 OC)` cuenta solo las órdenes que traen **algo de su catálogo**. Medido el
+mismo día: con 336 productos en catálogo dice 193 (todas las de la unidad), con 50 dice 119, con
+10 dice 33. Está bien así —mide la relación comercial, no el tamaño del comprador—, pero no
+cuadra con la métrica «Órdenes» de arriba, que sí son todas.
+
+---
+
 ## 03-09-2026 (noche 8) · El Excel tumbaba la app, y el convenio pasa a ser varios
 
 Tres cosas, todas probando con la V Región.
