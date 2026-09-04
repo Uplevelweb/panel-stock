@@ -863,6 +863,20 @@ secretos: los correos de Uplevel entran aunque Supabase esté caído.
 
 ## Lo que no es evidente y cuesta caro olvidar
 
+- **⚠️ El Excel se cae con un carácter invisible, y se lleva la app entera.** Excel no
+  admite caracteres de control dentro de una celda y openpyxl levanta
+  `IllegalCharacterError`. Los nombres de Mercado Público traen alguno suelto —«HUB USB 4
+  puertos USB-A» termina en un salto de página—, y como `st.download_button` arma el
+  archivo **mientras se dibuja la página**, no al apretarlo, la caída no era «no se pudo
+  descargar»: era «Oh no. Error running app.» con el módulo completo abajo. Se limpia en
+  `a_excel` con `sin_controles`, sobre la copia: el dato original queda como vino para la
+  pantalla y el PDF.
+- **⚠️ En pandas 3 las columnas de texto ya NO son `object`.** `if columna.dtype == object`
+  no encuentra ninguna, y un `for` que recorra las columnas buscando texto así **no hace
+  nada, sin avisar**. Hay que preguntar al revés (`is_numeric_dtype` / `is_datetime64_any_dtype`
+  y limpiar el resto). Pasó el 03-09-2026 con la limpieza del Excel: la primera versión
+  parecía correcta, pasó la revisión a ojo y el Excel se seguía cayendo idéntico. **Lo
+  atrapó una prueba que escribía el .xlsx de verdad**, no la lectura del código.
 - **El tema (colores y tamaño de letra) solo se puede definir en `.streamlit/config.toml`**,
   no desde el código. Si ese archivo no está en GitHub, la app se ve en claro y descuadrada.
 - **No usar selectores CSS amplios** como `[class*="st-"]` con `font-family`: los iconos de

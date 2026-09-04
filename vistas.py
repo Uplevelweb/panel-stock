@@ -38,9 +38,6 @@ import streamlit as st
 import modulo_cuentas
 
 CLAVE_SESION = "vistas_local"
-# El mismo texto que usa app.TODOS_CONVENIOS. Se repite aqui a proposito:
-# importar app.py desde este modulo seria un ciclo.
-TODOS_CONVENIOS_POR_DEFECTO = "Todos los convenios"
 
 # Lo que compone una vista. En un solo lugar para que guardar y aplicar no se
 # separen nunca: si se agrega un filtro nuevo a la pantalla, se agrega aquí y
@@ -66,7 +63,7 @@ CAMPOS = {
 # abriera en enero mirando meses viejos. El periodo ya se propone solo, un año
 # hacia atras.
 CAMPOS_MP = {
-    "mp_convenio_uno": TODOS_CONVENIOS_POR_DEFECTO,
+    "mp_convenios": [],
     "mp_region": [],
     "mp_comuna": [],
     "mp_organismo": [],

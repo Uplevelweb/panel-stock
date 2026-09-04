@@ -863,12 +863,44 @@ def ids_de_pestana(bruto: pd.DataFrame) -> set[str]:
 # 7. EXPORTACION
 # ===========================================================================
 
+# Excel no acepta caracteres de control dentro de una celda: openpyxl levanta
+# IllegalCharacterError y se cae la exportacion ENTERA. No es teorico: el
+# producto «HUB USB 4 puertos USB-A» de Mercado Publico termina en un salto de
+# pagina invisible.
+#
+# Y como el boton de descarga arma el archivo MIENTRAS se dibuja la pagina, no
+# al apretarlo, la caida no era «no se pudo descargar»: se llevaba el modulo
+# entero, «Oh no. Error running app.», sin que nadie hubiera pedido un Excel.
+#
+# La lista es la misma que usa openpyxl: los controles, menos tabulador, salto
+# de linea y retorno de carro.
+CONTROLES_ILEGALES = re.compile(
+    "[" + "".join(chr(c) for c in range(32) if c not in (9, 10, 13)) + "]")
+
+
+def sin_controles(valor):
+    """Saca los caracteres que Excel no admite. Lo demas pasa intacto."""
+    return CONTROLES_ILEGALES.sub("", valor) if isinstance(valor, str) else valor
+
+
 def a_excel(tabla: pd.DataFrame, nombre_hoja: str = "Oportunidades") -> bytes:
     """Convierte la tabla en un .xlsx, con los montos como numeros (no texto)."""
     numerica = tabla.copy()
     for col in ["MONTO", "P.MIN", "P. PROM", "P.MAX", "MI PUBLICADO", "OC"]:
         if col in numerica.columns:
             numerica[col] = numerica[col].map(a_numero)
+
+    # Se limpia AQUI y no al leer la API: el dato queda como vino para la
+    # pantalla y el PDF, y solo el Excel —que es el unico quisquilloso— lo pide.
+    #
+    # Se pregunta al reves —lo que NO es numero ni fecha— a proposito: en
+    # pandas 3 las columnas de texto dejaron de ser `object` y preguntar por
+    # `dtype == object` no encontraba ninguna. La limpieza no se aplicaba y el
+    # Excel se seguia cayendo igual, sin ruido.
+    for col in numerica.columns:
+        if not (pd.api.types.is_numeric_dtype(numerica[col])
+                or pd.api.types.is_datetime64_any_dtype(numerica[col])):
+            numerica[col] = numerica[col].map(sin_controles)
 
     memoria = io.BytesIO()
     with pd.ExcelWriter(memoria, engine="openpyxl") as escritor:
@@ -2088,13 +2120,12 @@ def agrupar_por_producto(compras: pd.DataFrame, precios_oferta: dict[str, float]
     return tabla.sort_values("MONTO", ascending=False, na_position="last").reset_index(drop=True)
 
 
-# Alto de las tablas del modulo. 20 filas a la vista: alcanzan para revisar sin
-# que la tabla se coma la pantalla y empuje los filtros fuera de vista. El top
-# de unidades va a 30 porque ahi lo que se mira es el ranking entero de una
-# pasada. Pedido de Serling el 03-09-2026 (antes eran 40 en las tres).
-# Streamlit dibuja las filas de 35 px y el encabezado de 38.
-ALTO_20_FILAS = 38 + 35 * 20
-ALTO_30_FILAS = 38 + 35 * 30
+# Alto de las tablas del modulo: 15 filas, TODAS, el top de unidades incluido.
+# Se probaron 40 y 20/30 el 03-09-2026 y las dos saturan: la tabla se come la
+# pantalla y hay que subir a buscar los filtros. Con 15 el bloque entero
+# —filtros, metricas y tabla— entra de una. Streamlit dibuja las filas de 35 px
+# y el encabezado de 38.
+ALTO_15_FILAS = 38 + 35 * 15
 
 
 MESES_CORTOS = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
@@ -2984,7 +3015,7 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
     # Streamlit la llena de «None». Si nada tiene oferta, no se dibujan.
     vacias = [c for c in ("MI PRECIO", "MI OFERTA", "DIF%") if tabla[c].isna().all()]
 
-    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_20_FILAS,
+    st.dataframe(tabla.drop(columns=vacias), width="stretch", height=ALTO_15_FILAS,
                  hide_index=True, column_config=configuracion,
                  key="mp_tabla_instituciones")
 
@@ -3028,7 +3059,7 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
         "**Estado** de arriba: hoy suma lo que gastaron en los productos que quedaron "
         "a la vista, no todo lo que compraron.")
     st.dataframe(
-        top, width="stretch", hide_index=True, height=ALTO_30_FILAS,
+        top, width="stretch", hide_index=True, height=ALTO_15_FILAS,
         column_config={
             "UNIDAD": st.column_config.TextColumn("UNIDAD COMPRADORA", width=ancho_fijo(340)),
             "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(130)),
@@ -3096,20 +3127,27 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # en anios distintos). No se juntan a mano: seria adivinar cual es cual.
         nombres_cm = nombres_convenios(sello_bodega())
         anios_cm = anios_de_convenios(nombres_cm)
-        opciones_cm = [TODOS_CONVENIOS] + sorted({n for n in nombres_cm.values() if n})
-        if st.session_state.get("mp_convenio_uno") not in opciones_cm:
-            st.session_state["mp_convenio_uno"] = TODOS_CONVENIOS
-        st.selectbox(
-            "Convenio Marco a consultar", opciones_cm, key="mp_convenio_uno",
-            # El valor que se guarda es el nombre pelado, porque es con el que
-            # se filtra la columna CONVENIO. El año es solo lo que se ve.
-            format_func=lambda n: n if n == TODOS_CONVENIOS else con_anio(n, anios_cm),
-            help="El año es el del convenio, no el de la compra: hay rubros con "
-                 "dos convenios distintos (Alimentos 2017 y Alimentos 2024) y el "
-                 "viejo casi no tiene compras. Elige uno y la tabla mostrará solo "
-                 "esas. Déjalo en «Todos los convenios» para ver todo. Solo "
-                 "funciona cuando el período está en la bodega: en una consulta "
-                 "en vivo el convenio no viene.")
+        # Acepta VARIOS (03-09-2026). Un mismo comprador toma alimentos y aseo
+        # por convenios distintos, y con uno solo habia que consultar dos veces
+        # y sumar a mano. Vacio = todos, igual que Region y Comuna: asi no hace
+        # falta una opcion «Todos» dentro de la lista.
+        opciones_cm = sorted({n for n in nombres_cm.values() if n})
+        # Si una cartera guardada trae un convenio que ya no esta en la lista,
+        # se suelta antes de dibujar; si no, Streamlit reclama.
+        vigentes_cm = [c for c in st.session_state.get("mp_convenios", []) if c in opciones_cm]
+        if vigentes_cm != list(st.session_state.get("mp_convenios", [])):
+            st.session_state["mp_convenios"] = vigentes_cm
+        st.multiselect(
+            "Convenio Marco a consultar", opciones_cm, key="mp_convenios",
+            placeholder=TODOS_CONVENIOS,
+            # Lo que se guarda es el nombre pelado, porque es con el que se
+            # filtra la columna CONVENIO. El año es solo lo que se ve.
+            format_func=lambda n: con_anio(n, anios_cm),
+            help="Puedes marcar varios. El año es el del convenio, no el de la "
+                 "compra: hay rubros con dos convenios distintos (Alimentos 2017 "
+                 "y Alimentos 2024) y el viejo casi no tiene compras. Vacío = "
+                 "todos. Solo funciona cuando el período está en la bodega: en "
+                 "una consulta en vivo el convenio no viene.")
 
         # Región y Organismo aceptan VARIOS (03-09-2026): una cartera puede ser
         # interregional —Valparaíso y Metropolitana— y antes había que hacer dos
@@ -3317,23 +3355,33 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # si esa institucion compro de verdad por el convenio pedido. Sin esto,
         # pedir un convenio que nunca compro devolvia una tabla vacia y parecia
         # que la consulta habia fallado.
-        convenio_pedido = st.session_state.get("mp_convenio_uno", TODOS_CONVENIOS)
-        if convenio_pedido != TODOS_CONVENIOS and elegidas:
+        convenios_pedidos = list(st.session_state.get("mp_convenios", []))
+        if convenios_pedidos and elegidas:
             if not usar_bodega:
                 st.info(
-                    f"**{convenio_pedido}**: este período se consulta en vivo y la API "
-                    "no entrega el convenio, así que el filtro no se va a aplicar. "
-                    "Abajo vas a poder filtrar por el rubro de tu catálogo.")
+                    f"**{', '.join(convenios_pedidos)}**: este período se consulta en "
+                    "vivo y la API no entrega el convenio, así que el filtro no se va a "
+                    "aplicar. Abajo vas a poder filtrar por el rubro de tu catálogo.")
             else:
                 disponibles = convenios_del_periodo(
                     tuple(sorted(elegidas_df["codigo_unidad"])),
                     tuple(_meses_del_rango(desde, hasta)), desde, hasta, sello_bodega())
-                if disponibles and convenio_pedido not in disponibles:
-                    st.warning(
-                        "En este período no compró nada por **"
-                        f"{con_anio(convenio_pedido, anios_cm)}**. Si consultas así, la "
-                        "tabla va a salir vacía. Sí compró por:\n\n"
-                        + "\n".join(f"- {con_anio(d, anios_cm)}" for d in disponibles))
+                # Con varios marcados hay dos casos distintos: que NINGUNO tenga
+                # compras —la tabla sale vacia, es un aviso— o que falte alguno,
+                # que es lo normal y no se avisa como si fuera una falla.
+                faltan = [c for c in convenios_pedidos if c not in disponibles]
+                if disponibles and faltan:
+                    lista_faltan = "\n".join(f"- {con_anio(c, anios_cm)}" for c in faltan)
+                    if len(faltan) == len(convenios_pedidos):
+                        st.warning(
+                            "En este período no compró nada por:\n\n" + lista_faltan
+                            + "\n\nSi consultas así, la tabla va a salir vacía. Sí "
+                            "compró por:\n\n"
+                            + "\n".join(f"- {con_anio(d, anios_cm)}" for d in disponibles))
+                    else:
+                        st.info(
+                            "De lo que marcaste, en este período no compró por:\n\n"
+                            + lista_faltan + "\n\nLos demás sí traen compras.")
 
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)
@@ -3447,9 +3495,15 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         if por_convenio:
             # Ya se eligió arriba, antes de consultar: aquí solo se respeta.
             # Repetir el selector obligaba a filtrar dos veces lo mismo.
-            uno = st.session_state.get("mp_convenio_uno", TODOS_CONVENIOS)
-            elegidos_rubro = [] if uno == TODOS_CONVENIOS else [uno]
-            st.caption("**Convenio Marco:** " + con_anio(uno, anios_cm))
+            elegidos_rubro = list(st.session_state.get("mp_convenios", []))
+            if not elegidos_rubro:
+                dice = TODOS_CONVENIOS
+            elif len(elegidos_rubro) <= 2:
+                dice = " · ".join(con_anio(c, anios_cm) for c in elegidos_rubro)
+            else:
+                # Con muchos marcados, la lista entera empujaba las metricas.
+                dice = f"{len(elegidos_rubro)} convenios marcados"
+            st.caption("**Convenio Marco:** " + dice)
         else:
             rubros = sorted(r for r in productos[columna_filtro].unique() if r)
             marcar_lo_nuevo("mp_rubro", rubros)
@@ -3537,7 +3591,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         destacar_comentarios(productos.drop(columns=ocultas),
                              SEÑALES_DESTACADAS_MP),
         width="stretch",
-        height=ALTO_20_FILAS,
+        height=ALTO_15_FILAS,
         hide_index=True,
         on_select="rerun",
         selection_mode="multi-row",

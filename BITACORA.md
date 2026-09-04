@@ -1,3 +1,47 @@
+## 03-09-2026 (noche 8) · El Excel tumbaba la app, y el convenio pasa a ser varios
+
+Tres cosas, todas probando con la V Región.
+
+**1. Las tablas quedan en 15 filas, todas.** Se probaron 40 (muy grande) y después
+20/30, y siguió igual: «todos saturan cuando son muchas». Con 15 el bloque entero
+—filtros, métricas y tabla— entra en una pantalla, que es lo que ella pidió desde el
+principio. El top de «Quién compra más» también, sin excepción: `ALTO_15_FILAS`.
+
+**2. El Excel se caía con un carácter invisible y se llevaba el módulo completo.**
+El error decía `IllegalCharacterError: HUB USB 4 puertos USB-A. Entrada USB-A␌ cannot
+be used in worksheets`. Ese producto de Mercado Público termina en un salto de página
+(`\x0c`), y Excel no acepta caracteres de control dentro de una celda.
+
+Lo grave es *cuándo* se caía: `st.download_button` arma el archivo **mientras se dibuja
+la página**, no cuando se aprieta el botón. Así que un solo producto con un carácter
+raro en la consulta no rompía la descarga: rompía **toda la pestaña**, «Oh no. Error
+running app.», sin que ella hubiera pedido ningún Excel.
+
+Se limpia en `a_excel`, sobre la copia y no sobre el dato de ella: en pantalla y en el
+PDF el nombre sigue llegando como vino.
+
+**El primer intento no servía y parecía que sí.** Recorría las columnas preguntando
+`dtype == object`, que es como se hacía antes; en pandas 3 el texto ya no es `object`
+y el `for` no limpiaba nada. El código se leía bien. Lo agarró una prueba que escribía
+el `.xlsx` de verdad con el carácter adentro y volvía a leerlo — la lectura a ojo lo
+habría dejado pasar.
+
+**3. El Convenio Marco acepta varios.** Era uno solo, y un mismo comprador toma
+alimentos por un convenio y aseo por otro: había que consultar dos veces y sumar a
+mano. Ahora es multiselección, vacío = todos, igual que Región, Comuna y Organismo.
+
+El aviso de «en este período no compró por ahí» distingue los dos casos, que con varios
+marcados dejan de ser lo mismo: si **ninguno** tiene compras avisa fuerte —la tabla va a
+salir vacía— y si falta **alguno** lo dice como dato, no como falla. Y en el encabezado
+de la tabla, con más de dos marcados dice «N convenios marcados» en vez de la lista
+entera, que tapaba las métricas.
+
+La cartera guarda `mp_convenios` (lista) en vez de `mp_convenio_uno` (texto). Una
+cartera guardada antes de este cambio abre sin convenio marcado —o sea, todos— y no
+se cae: el campo viejo simplemente ya no se lee.
+
+---
+
 ## 03-09-2026 (noche 7) · Las tablas bajan a 20 filas, el top se queda en 30
 
 Serling probó las tablas de 40 filas y pidió bajarlas a 20, **menos «Quién compra
