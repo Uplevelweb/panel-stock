@@ -13,6 +13,7 @@
 # --- Secretos ---
 .streamlit/secrets.toml
 auth0-para-copiar.txt
+anthropic-para-copiar.txt
 llave.txt
 ticket-mp.txt
 .env

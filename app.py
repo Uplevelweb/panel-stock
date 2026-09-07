@@ -4340,6 +4340,111 @@ def _candidato(catalogo_region: pd.DataFrame, posicion: int, precios: dict[str, 
     }
 
 
+def clave_anthropic() -> str:
+    """La clave de la API de Claude, para leer requerimientos que llegan
+    como foto. Mismo criterio que `ticket_mp` y `clave_envio`: vive en los
+    Secrets de Streamlit, nunca en el código ni en el repositorio."""
+    try:
+        return str(st.secrets["anthropic"]["api_key"]).strip()
+    except Exception:
+        return ""
+
+
+def extraer_productos_de_imagen(datos: bytes, tipo_mime: str) -> tuple[pd.DataFrame, str]:
+    """(requerimiento, error). Lee una FOTO o escaneo del pedido con IA y
+    saca la lista de productos, con las MISMAS columnas que
+    `leer_requerimiento` —CÓDIGO, PEDIDO, CANTIDAD—: el resto del Cotizador
+    (`cruzar_requerimiento` en adelante) no nota la diferencia.
+
+    Pedido de Serling (07-09-2026): algunas instituciones mandan el pedido
+    como foto, no como planilla, y el cotizador solo sabía leer filas y
+    columnas. Usa la API de Claude (Anthropic) con visión —el panel no
+    tenía ninguna IA conectada hasta ahora—, así que hace falta una clave
+    nueva en los Secrets, que ella carga a mano (ver
+    `anthropic-para-copiar.txt`), igual que el ticket de Mercado Público o
+    la clave de Resend.
+    """
+    clave = clave_anthropic()
+    if not clave:
+        return pd.DataFrame(), (
+            "Para leer fotos hace falta una clave de la API de Claude en los "
+            "Secrets de Streamlit (sección [anthropic], campo api_key). "
+            "Mientras tanto, sube la planilla en Excel o CSV.")
+
+    instrucciones = (
+        "Esta imagen es el pedido de compra de una institución chilena. "
+        "Devuelve SOLO un JSON, sin texto alrededor y sin bloque de código, "
+        "con una lista de objetos —uno por producto pedido— con estas claves "
+        'exactas: "codigo" (el código interno que traiga, o "" si no hay), '
+        '"producto" (el nombre o descripción tal como aparece), "cantidad" '
+        "(número entero; si no se indica, usa 1). No inventes productos que "
+        "no estén en la imagen."
+    )
+    cuerpo = json.dumps({
+        "model": "claude-sonnet-5",
+        "max_tokens": 4096,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": tipo_mime,
+                                             "data": base64.b64encode(datos).decode("ascii")}},
+                {"type": "text", "text": instrucciones},
+            ],
+        }],
+    }).encode("utf-8")
+
+    peticion = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=cuerpo, method="POST",
+        headers={
+            "x-api-key": clave,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+            # Mismo motivo que en `alertador.enviar_por_resend`: sin un
+            # User-Agent propio, algunos proveedores bloquean el que pone
+            # urllib por defecto.
+            "User-Agent": "Mozilla/5.0 (panel-oportunidades-emergenza)",
+        })
+    try:
+        with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+            salida = json.loads(respuesta.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        detalle = error.read().decode("utf-8", "replace")[:300]
+        return pd.DataFrame(), f"La IA no pudo leer la imagen ({error.code}): {detalle}"
+    except Exception as error:
+        return pd.DataFrame(), f"No se pudo consultar la IA: {error}"
+
+    texto = "".join(b.get("text", "") for b in salida.get("content", [])
+                    if b.get("type") == "text").strip()
+    # Por si la respuesta viene con un bloque de código a pesar de haberlo
+    # pedido sin eso.
+    if texto.startswith("```"):
+        texto = texto.strip("`")
+        if "\n" in texto:
+            texto = texto.split("\n", 1)[1]
+    try:
+        items = json.loads(texto)
+    except Exception:
+        return pd.DataFrame(), ("La IA no devolvió una lista que se pueda leer. "
+                                "Prueba con una foto más nítida o mejor encuadrada.")
+
+    filas = []
+    for item in (items if isinstance(items, list) else []):
+        if not isinstance(item, dict):
+            continue
+        pedido = str(item.get("producto") or "").strip()
+        if not pedido:
+            continue
+        cantidad = a_numero(item.get("cantidad"))
+        filas.append({
+            "CÓDIGO": str(item.get("codigo") or "").strip(),
+            "PEDIDO": pedido,
+            "CANTIDAD": int(cantidad) if cantidad and cantidad > 0 else 1,
+        })
+    if not filas:
+        return pd.DataFrame(), "La IA no encontró ningún producto en la imagen."
+    return pd.DataFrame(filas), ""
+
+
 def leer_requerimiento(archivo) -> tuple[pd.DataFrame, str]:
     """(requerimiento, error). La planilla que manda la institución.
 
@@ -4824,15 +4929,26 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
 
     with st.container(border=True):
         st.markdown("##### 📄 Requerimiento que te enviaron")
+        # Pedido de Serling (07-09-2026): algunas instituciones mandan el
+        # pedido como foto o escaneo, no como planilla. Se acepta el
+        # archivo igual; `leer_requerimiento` o `extraer_productos_de_imagen`
+        # deciden abajo según el tipo, sin que ella tenga que elegir nada.
         archivo = st.file_uploader(
-            "Planilla con los productos pedidos (Excel o CSV)",
-            type=["xlsx", "xlsm", "csv"], key="reg_archivo",
-            help="Necesita una columna con el nombre del producto («PRODUCTO» o "
-                 "«DESCRIPCIÓN»). El código de ellos y la cantidad son opcionales.")
+            "Planilla con los productos pedidos (Excel, CSV, o una foto/escaneo)",
+            type=["xlsx", "xlsm", "csv", "jpg", "jpeg", "png", "webp"], key="reg_archivo",
+            help="Con planilla: necesita una columna con el nombre del producto "
+                 "(«PRODUCTO» o «DESCRIPCIÓN»); el código y la cantidad son "
+                 "opcionales. Con foto: que se lea nítida y con buena luz.")
 
     candidatos, sin_equivalencia = pd.DataFrame(), pd.DataFrame()
     if archivo is not None:
-        requerimiento, error = leer_requerimiento(archivo)
+        es_imagen = (archivo.type or "").startswith("image/")
+        if es_imagen:
+            with st.spinner("Leyendo la foto con IA…"):
+                requerimiento, error = extraer_productos_de_imagen(
+                    archivo.getvalue(), archivo.type)
+        else:
+            requerimiento, error = leer_requerimiento(archivo)
         if error:
             st.error(error)
             return
