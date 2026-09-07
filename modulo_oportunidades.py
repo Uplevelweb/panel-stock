@@ -42,12 +42,14 @@ RUTA_BODEGA = CARPETA / "bodega"
 # juntas y en un solo lugar para que la tabla de pantalla y el archivo que se
 # baja nunca se separen: si se agrega una columna, aparece en las dos.
 COLUMNAS_VISIBLES = ["nombre_unidad", "nombre_organismo", "region", "comuna",
-                     "gasto", "vendido", "parte", "proveedores", "situacion"]
+                     "gasto", "vendido", "parte", "proveedores", "situacion",
+                     "recomendacion"]
 TITULOS_COLUMNAS = {
     "nombre_unidad": "UNIDAD COMPRADORA", "nombre_organismo": "ORGANISMO",
-    "region": "REGIÓN", "comuna": "COMUNA", "gasto": "COMPRA",
-    "vendido": "LE VENDIÓ", "parte": "SU PARTE %", "proveedores": "PROVEEDORES",
-    "situacion": "SITUACIÓN",
+    "region": "REGIÓN", "comuna": "COMUNA", "gasto": "COMPRAN",
+    "vendido": "LE VENDIÓ POR EMERGENZA", "parte": "PARTICIPACIÓN",
+    "proveedores": "PROVEEDORES", "situacion": "SITUACIÓN",
+    "recomendacion": "QUÉ HACER",
 }
 
 # Debajo de esto una unidad no vale la pena mirarla: son compras sueltas.
@@ -470,7 +472,111 @@ def _clasificar(tabla: pd.DataFrame) -> pd.DataFrame:
     tabla = tabla.copy()
     tabla["situacion"] = tabla.apply(clasificar, axis=1)
     tabla["por_ganar"] = tabla["gasto"] - tabla["vendido"]
+    tabla["recomendacion"] = tabla.apply(_recomendar, axis=1)
     return tabla
+
+
+# Mercado con 3 proveedores o menos: entrar es mas facil, la plaza no esta
+# repartida. Mas que eso, hay que competir en precio antes de llamar.
+POCOS_PROVEEDORES = 3
+
+
+def _recomendar(fila) -> str:
+    """Una frase accionable por fila, con reglas y plantillas —sin IA por
+    fila—: se arma sola con lo que ya se calculo (gasto, vendido, parte,
+    proveedores), asi que no cuesta nada nuevo ni tiene limite de filas.
+
+    Pedido de Serling (07-09-2026): que la columna Situacion incite a
+    actuar —llamar, visitar, cotizar, re-contactar— en vez de solo
+    describir. Se empieza por reglas porque una IA por fila, con cientos
+    de unidades en pantalla, sale cara y lenta; si hace falta mas matiz
+    despues, esta funcion es el unico lugar que hay que tocar.
+    """
+    ganar = plata(fila["por_ganar"])
+    prov = int(fila["proveedores"])
+    parte_txt = f"{fila['parte']:.1f}%".replace(".", ",")
+
+    if fila["situacion"] == "Nunca le has vendido":
+        if prov <= POCOS_PROVEEDORES:
+            return (f"Mercado poco disputado ({prov} proveedor" +
+                     ("es" if prov != 1 else "") +
+                     f"): llama y cotiza esta semana. {ganar} sin competencia dura.")
+        return (f"Plaza competida ({prov} proveedores): revisa precio de "
+                f"mercado antes de cotizar. Hay {ganar} en juego.")
+
+    if fila["situacion"] == "Estás adentro con poco":
+        return (f"Te compra poco ({parte_txt}): agenda una revisita o "
+                f"llamada para subir participación. Quedan {ganar} sin ganar aquí.")
+
+    # Cliente firme.
+    if fila["parte"] < 50:
+        return (f"Cliente firme con espacio ({parte_txt}): ofrece más líneas "
+                f"del catálogo. Todavía compra {ganar} a otros proveedores.")
+    return (f"Cliente firme y bien cubierto ({parte_txt}): mantén el "
+            "contacto y prioriza otras unidades.")
+
+
+def _grafico_burbujas_comunas(vista: pd.DataFrame) -> None:
+    """Una burbuja por comuna: cuánto compran (eje X), cuánta participación
+    tienes ahí (eje Y) y el tamaño es cuántos proveedores compiten. Las
+    burbujas abajo a la derecha —compran mucho, participas poco— son las
+    que hay que mirar primero.
+
+    Pedido de Serling (07-09-2026): ver de un vistazo qué organismo compra
+    más y dónde falta participación, por comuna, sobre lo que quedó
+    filtrado en pantalla. Altair no agrega dependencia nueva: ya viene con
+    Streamlit (mismo criterio que `modulo_mercado._barras`).
+    """
+    if vista.empty:
+        return
+    import altair as alt
+
+    agregado = vista.groupby("comuna", observed=True).agg(
+        gasto=("gasto", "sum"),
+        vendido=("vendido", "sum"),
+        # El maximo, no la suma: `proveedores` ya es "distintos por unidad",
+        # sumarlo entre unidades contaria al mismo proveedor varias veces.
+        # Como tamaño de burbuja (una escala visual, no un total que se lea
+        # al peso) el maximo es una medida razonable de que tan repartida
+        # esta la comuna.
+        proveedores=("proveedores", "max"),
+        organismo_principal=("nombre_organismo",
+            lambda s: s.value_counts().idxmax() if len(s) else ""),
+    ).reset_index()
+    agregado = agregado[agregado["gasto"] > 0]
+    if agregado.empty:
+        return
+    agregado["participacion"] = (agregado["vendido"] / agregado["gasto"] * 100).round(1)
+    agregado["gasto_m"] = (agregado["gasto"] / 1e6).round(0)
+
+    st.markdown("**Dónde está la plata y dónde te falta participación**")
+    st.caption(
+        "Una burbuja por comuna, sobre lo que está filtrado arriba. Más a la "
+        "derecha = compran más. Más abajo = tienes menos participación ahí. "
+        "El tamaño es cuántos proveedores compiten.")
+
+    grafico = (
+        alt.Chart(agregado)
+        .mark_circle(opacity=0.75)
+        .encode(
+            x=alt.X("gasto_m:Q", title="Compran (millones de $)"),
+            y=alt.Y("participacion:Q", title="Tu participación (%)"),
+            size=alt.Size("proveedores:Q", title="Proveedores",
+                          scale=alt.Scale(range=[80, 1400])),
+            color=alt.Color("participacion:Q", title="Participación",
+                            scale=alt.Scale(scheme="redyellowgreen"), legend=None),
+            tooltip=[
+                alt.Tooltip("comuna:N", title="Comuna"),
+                alt.Tooltip("organismo_principal:N", title="Organismo que más compra ahí"),
+                alt.Tooltip("gasto_m:Q", title="Compran (M$)", format=",.0f"),
+                alt.Tooltip("participacion:Q", title="Tu participación (%)", format=",.1f"),
+                alt.Tooltip("proveedores:Q", title="Proveedores"),
+            ],
+        )
+        .properties(height=420)
+        .interactive()
+    )
+    st.altair_chart(grafico, use_container_width=True)
 
 
 def _nombre_del_rut(compras: pd.DataFrame, cuerpo: str) -> str:
@@ -737,7 +843,7 @@ def seccion_oportunidades() -> None:
         f'<div class="pie">{unidades_txt} unidades compran</div></div>'
         f'<div class="cifra"><div class="rotulo">Ventas actuales</div>'
         f'<div class="valor">{plata(resumen["vendido"])}</div>'
-        f'<div class="pie">Su parte: {parte_txt}</div></div>'
+        f'<div class="pie">Participación: {parte_txt}</div></div>'
         f'<div class="cifra ganar"><div class="rotulo">Potencial por ganar</div>'
         f'<div class="valor">{plata(por_ganar)}</div>'
         f'<div class="pie">Lo que compran y no te compran</div></div>'
@@ -946,12 +1052,15 @@ def seccion_oportunidades() -> None:
             "comuna": st.column_config.TextColumn("Comuna", width="small"),
             # Numeros como numeros, no como texto con $: si van como texto la
             # tabla ordena «11» entre «1» y «2».
-            "gasto": st.column_config.NumberColumn("Compra", format="localized", width="small"),
-            "vendido": st.column_config.NumberColumn("Le vendió", format="localized", width="small"),
-            "parte": st.column_config.NumberColumn("Su parte", format="%.1f%%", width="small"),
+            "gasto": st.column_config.NumberColumn("Compran", format="localized", width="small"),
+            "vendido": st.column_config.NumberColumn("Le vendió por Emergenza", format="localized", width="small"),
+            "parte": st.column_config.NumberColumn("Participación", format="%.1f%%", width="small"),
             "proveedores": st.column_config.NumberColumn("Prov.", width="small"),
             "situacion": st.column_config.TextColumn("Situación", width="medium"),
+            "recomendacion": st.column_config.TextColumn("Qué hacer", width="large"),
         })
+
+    _grafico_burbujas_comunas(vista)
 
     # ----------------------------------------------------------------------
     #  De la tabla a la cartera

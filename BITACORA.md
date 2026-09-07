@@ -1,3 +1,52 @@
+## 07-09-2026 · Columnas renombradas, "Qué hacer" por fila, y burbujas por comuna
+
+Pedido de Serling, seis puntos; se hicieron los cuatro que no necesitaban una
+propuesta de diseño aparte. Los otros dos quedan abajo, sin tocar código.
+
+**1. Columnas renombradas.** `COMPRA`→**COMPRAN**, `LE VENDIÓ`→**LE VENDIÓ POR
+EMERGENZA**, `SU PARTE %`→**PARTICIPACIÓN**. Van en `TITULOS_COLUMNAS` (la
+tabla y el Excel), en el `column_config` de la tabla en pantalla, y en la
+tarjeta «Ventas actuales» que decía «Su parte».
+
+**2. Vista de entrada «VISUAL V REGIÓN».** Se guardó directo en Supabase
+(tabla `vistas`), no a mano en la pantalla: RUT de Emergenza
+(`77.082.051-0`) + Región de Valparaíso, marcada `de_entrada`, para los tres
+correos con acceso (`serlingvera@gmail.com`, `svera@emergenza.cl`,
+`webuplevel@gmail.com`) — así se aplica sola sin importar con cuál entre.
+**El otro problema que describió —perder los filtros al cambiar de
+sección— ya estaba resuelto desde el 02-09-2026** (`COPIA_FILTROS`, ver esa
+fecha más abajo); no hacía falta nada nuevo ahí. Lo de «confirmar al
+apretar Atrás del navegador» no se hizo: un navegador no avisa eso salvo
+bloqueos que Streamlit no soporta bien, y el problema real que describía
+—perder el filtro— ya estaba cubierto.
+
+**3. Columna nueva «Qué hacer» (`recomendacion`).** Una frase por fila,
+armada con reglas —**sin IA por fila**, a propósito: con cientos de filas en
+pantalla, una consulta a un modelo por fila sale cara y lenta—. Usa lo que
+ya estaba calculado (proveedores, participación, cuánto falta por ganar)
+para sugerir la acción: llamar y cotizar si el mercado tiene pocos
+proveedores, revisar precio si está repartido, revisitar si compra poco,
+ofrecer más líneas si es cliente firme con espacio. **No toca `situacion`**:
+los botones Conquistar/Profundizar siguen filtrando exactamente igual que
+antes, por ese texto.
+
+**4. Gráfico de burbujas por comuna**, debajo de la tabla principal. Eje X
+cuánto compran, eje Y la participación de ahí, el tamaño de la burbuja son
+los proveedores que compiten, el color va de rojo (poca participación) a
+verde (mucha). Con Altair, que **no agrega dependencia**: ya viene con
+Streamlit, mismo criterio que `modulo_mercado._barras`.
+
+⚠️ **Quedan dos pedidos sin construir, a propósito.** Rediseñar
+Conquistar/Profundizar (renombrado a «Prioridad») con una comparación de
+mercado y la evolución del porcentaje de participación **en el tiempo**: hoy
+el sistema entero mira una sola ventana fija de 24 meses, no hay ninguna
+vista mes a mes para comparar contra. Es la parte más ambigua del pedido —
+seis puntos en un solo mensaje— y toca los dos bloques que hoy ya funcionan
+bien; se le presentó una propuesta concreta antes de escribir código, en
+vez de adivinar sobre un tablero comercial en uso.
+
+---
+
 ## 04-09-2026 · MI PRECIO en las dos tablas, cotizar desde abajo, y qué cuenta el OC
 
 **1. MI PRECIO se subió a la tabla principal.** Estaba solo en «Quién compra qué»: para saber
