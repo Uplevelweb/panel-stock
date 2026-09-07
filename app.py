@@ -2477,6 +2477,32 @@ def aplicar_estilos() -> None:
             font-size: 13px; color: rgba(255,255,255,.86); margin-top: 6px;
         }}
 
+        /* El ranking de Prioridad y Conquistar (07-09-2026): unas pocas
+           filas nombre + dato, dentro de la misma tarjeta de color. */
+        .camino .ranking {{ margin-top: 10px; }}
+        .camino .fila-rank {{
+            display: flex; justify-content: space-between; gap: 10px;
+            font-size: 12.5px; color: rgba(255,255,255,.92);
+            padding: 4px 0; border-top: 1px solid rgba(255,255,255,.14);
+        }}
+        .camino .fila-rank .nombre {{ font-weight: 600; }}
+        .camino .fila-rank .dato {{ flex-shrink: 0; color: rgba(255,255,255,.8); }}
+
+        /* La evolucion de participacion, debajo de Prioridad/Conquistar. */
+        .evolucion {{
+            border-radius: 12px; padding: 14px 16px; margin-top: 4px;
+            border: 1px solid {COLOR['borde']}; background: {COLOR['tarjeta']};
+        }}
+        .evolucion .rotulo {{
+            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
+            color: {COLOR['texto_suave']}; font-weight: 600;
+        }}
+        .evolucion .valor {{
+            font-size: 22px; font-weight: 700; color: {COLOR['texto']};
+            margin-top: 4px;
+        }}
+        .evolucion .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+
         /* ---------- LA BARRA DE STREAMLIT NO ES NUESTRA ----------
            Arriba a la derecha, Streamlit pone «Fork» y el icono de GitHub, que
            llevan al repositorio —que es publico—. En una demo el cliente puede

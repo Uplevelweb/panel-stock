@@ -23,6 +23,7 @@ los que ese rut ya vendio y se compara contra ese mismo mercado. Con Emergenza
 aparecieron siete convenios, dos de los cuales no estaban en la especificacion.
 Si el rut no registra ventas, se dejan elegir los convenios a mano.
 """
+import html
 from pathlib import Path
 
 import pandas as pd
@@ -236,6 +237,69 @@ def compras_de_mis_ids(sello: str, ids: tuple[str, ...], cuerpo: str,
     if not trozos:
         return pd.DataFrame()
     return pd.concat(trozos, ignore_index=True)
+
+
+@st.cache_data(max_entries=5,
+               show_spinner="Comparando cómo ha cambiado tu participación…")
+def evolucion_participacion(sello: str, convenios: tuple[str, ...], cuerpo: str,
+                            meses: int = 24) -> dict:
+    """Tu participación en la primera mitad de la ventana contra la segunda.
+
+    Pedido de Serling (07-09-2026): ver si la participación viene subiendo o
+    bajando. `resumen_de_ordenes` —la única lectura pesada de la bodega,
+    ver esa función— JUNTA los 24 meses a propósito y no guarda de qué mes
+    salió cada peso: leerlo de ahí no se puede sin romper la razón por la
+    que existe (evitar el `Oh no. Error running app` del 27-08-2026).
+
+    Por eso esto es una lectura APARTE y chica: tres columnas nada más
+    (`convenio_marco`, `total`, `rut_proveedor`), sin guardar el detalle —
+    igual que `compras_de_mis_ids`, que ya probó que leer así no pesa—, y
+    se descarta cada mes apenas se suma. No hay selector de fechas nuevo:
+    la ventana se parte sola por la mitad.
+    """
+    import alertador as _al
+    if not convenios:
+        return {}
+    carpeta = _al.BODEGA_OC
+    if not carpeta.exists():
+        return {}
+
+    from datetime import date, timedelta
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    archivos = [a for a in sorted(carpeta.glob("*.parquet")) if a.stem >= corte]
+    if len(archivos) < 2:
+        return {}
+    medio = len(archivos) // 2
+    mitades = {"antes": archivos[:medio], "ahora": archivos[medio:]}
+
+    conv = set(convenios)
+    resultado = {}
+    for nombre, trozo in mitades.items():
+        gasto = vendido = 0.0
+        for archivo in trozo:
+            try:
+                import pyarrow.parquet as pq
+                hay = set(pq.read_schema(archivo).names)
+                pedidas = [c for c in ("convenio_marco", "total", "rut_proveedor") if c in hay]
+                if len(pedidas) < 3:
+                    continue
+                mes = pd.read_parquet(archivo, columns=pedidas)
+            except Exception:
+                continue
+            mes = mes[mes["convenio_marco"].isin(conv)]
+            if mes.empty:
+                continue
+            gasto += float(mes["total"].sum())
+            limpio = (mes["rut_proveedor"].astype(str)
+                     .str.replace(".", "", regex=False)
+                     .str.replace("-", "", regex=False))
+            vendido += float(mes.loc[limpio.str.startswith(cuerpo, na=False), "total"].sum())
+            del mes
+        resultado[nombre] = {
+            "gasto": gasto, "vendido": vendido,
+            "parte": (vendido / gasto * 100) if gasto else 0.0,
+        }
+    return resultado
 
 
 def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
@@ -479,6 +543,16 @@ def _clasificar(tabla: pd.DataFrame) -> pd.DataFrame:
 # Mercado con 3 proveedores o menos: entrar es mas facil, la plaza no esta
 # repartida. Mas que eso, hay que competir en precio antes de llamar.
 POCOS_PROVEEDORES = 3
+
+# Cuantas filas entran en los rankings de Prioridad y Conquistar. Una
+# tarjeta no es una tabla: mas de esto y deja de leerse de un vistazo.
+TOP_RANKING = 6
+
+
+def _recortar(texto: str, largo: int) -> str:
+    """Nombre + "…" si no entra, para que una tarjeta angosta no lo parta."""
+    texto = str(texto or "")
+    return texto if len(texto) <= largo else texto[:largo - 1].rstrip() + "…"
 
 
 def _recomendar(fila) -> str:
@@ -850,54 +924,78 @@ def seccion_oportunidades() -> None:
         '</div>', unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
-    #  Los dos caminos
+    #  Prioridad y Conquistar
     # ----------------------------------------------------------------------
-    # ANTES ESTO ERAN TRES NUMEROS Y NADA MAS. «Nunca le has vendido: 1.718» se
-    # leia y no llevaba a ninguna parte: para trabajar esas 1.718 habia que
-    # bajar hasta los filtros, entender que «Situacion» era el que servia, y
-    # desmarcar la otra opcion a mano. Tres pasos para lo que se hace siempre.
+    # Rediseñado el 07-09-2026, pedido de Serling. Antes eran dos botones que
+    # solo filtraban por Situación («Conquistar» = nunca te compraron,
+    # «Profundizar» = te compran poco). Ahora:
     #
-    # Ahora son dos botones que dejan la tabla filtrada de un click. La idea es
-    # del boceto que mando Serling el 01-09-2026, y es buena: son los dos
-    # caminos que de verdad se toman —conquistar o profundizar— y merecen ser
-    # la decision visible de la pantalla, no una nota al pie.
+    #   PRIORIDAD (antes «Profundizar», ahora VA PRIMERO): ya no es un solo
+    #   filtro, es un ranking. Cruza cuanto hay por ganar con cuan facil es
+    #   entrar (menos proveedores compitiendo) sobre TODO lo que no es
+    #   cliente firme —tambien entran los «nunca le has vendido» con poca
+    #   competencia, que es la puerta mas facil de todas—.
     #
-    # SE ESCRIBE `op_situacion` Y SE VUELVE A CORRER. Escribirlo basta para que
-    # la tabla salga filtrada —el multiselect se dibuja mas abajo y nace con el
-    # valor puesto—, pero el boton ya se dibujo con el estado viejo y quedaba
-    # encendido aunque uno ya estuviera en ese camino. Un boton que se puede
-    # apretar y no hace nada es peor que no tenerlo. Con `rerun` los dos leen
-    # lo mismo. La corrida extra es barata: la bodega esta cacheada.
-    nunca = tabla[tabla["situacion"] == "Nunca le has vendido"]
-    poco = tabla[tabla["situacion"] == "Estás adentro con poco"]
-    puesto = st.session_state.get("op_situacion") or []
+    #   CONQUISTAR (VA SEGUNDO): deja de ser un numero suelto y pasa a ser
+    #   la comparacion que Serling pidio: quien compra mas, con tu
+    #   participacion al lado, para ver el mercado contra ti de un vistazo.
+    #
+    # Los botones ya no escriben `op_situacion`: escriben `op_unidad` y
+    # `op_organismo`, que son filtros que YA EXISTIAN (ver `FILTROS` mas
+    # abajo) — se reusa el mismo mecanismo en vez de inventar uno nuevo.
+    objetivo = tabla[tabla["situacion"] != "Cliente firme"].copy()
+    objetivo["prioridad"] = objetivo["por_ganar"] / (objetivo["proveedores"] + 1)
+    top_prioridad = objetivo.sort_values("prioridad", ascending=False).head(TOP_RANKING)
+    nombres_prioridad = sorted(top_prioridad["nombre_unidad"].unique())
 
-    camino_a, camino_b = st.columns(2, gap="medium")
-    with camino_a:
+    por_organismo = (tabla[tabla["nombre_organismo"] != ""]
+                     .groupby("nombre_organismo", observed=True)
+                     .agg(gasto=("gasto", "sum"), vendido=("vendido", "sum"))
+                     .reset_index())
+    por_organismo["parte"] = (por_organismo["vendido"] / por_organismo["gasto"]
+                              * 100).round(1)
+    top_organismos = por_organismo.sort_values("gasto", ascending=False).head(TOP_RANKING)
+    nombres_organismos = sorted(top_organismos["nombre_organismo"].unique())
+
+    puesto_unidad = st.session_state.get("op_unidad") or []
+    puesto_organismo = st.session_state.get("op_organismo") or []
+
+    col_prioridad, col_conquistar = st.columns(2, gap="medium")
+    with col_prioridad:
+        filas = "".join(
+            f'<div class="fila-rank"><span class="nombre">'
+            f'{html.escape(_recortar(f["nombre_unidad"], 34))}</span>'
+            f'<span class="dato">{plata(f["por_ganar"])}</span></div>'
+            for _, f in top_prioridad.iterrows())
         st.markdown(
             '<div class="camino a"><span class="letra">A</span>'
-            '<div class="titulo">Conquistar</div>'
-            f'<div class="cuanto">{len(nunca):,}'.replace(",", ".") + '</div>'
-            f'<div class="bajada">Compran {plata(nunca["gasto"].sum())} de lo '
-            'tuyo y <b>nunca te han comprado</b>. Ahí está la plata que hoy se '
-            'lleva otro.</div></div>', unsafe_allow_html=True)
-        if st.button("Ver solo estas", key="op_camino_a", type="primary",
-                     width="stretch", disabled=puesto == ["Nunca le has vendido"]):
-            st.session_state["op_situacion"] = ["Nunca le has vendido"]
+            '<div class="titulo">Prioridad</div>'
+            f'<div class="bajada">Las {len(top_prioridad)} unidades donde más '
+            'conviene actuar ya: mucho por ganar y poca competencia.</div>'
+            f'<div class="ranking">{filas}</div></div>', unsafe_allow_html=True)
+        if st.button("Ver estas en la tabla", key="op_ver_prioridad", type="primary",
+                     width="stretch", disabled=(sorted(puesto_unidad) == nombres_prioridad
+                                                 and bool(puesto_unidad))):
+            st.session_state["op_unidad"] = nombres_prioridad
             st.rerun()
 
-    with camino_b:
+    with col_conquistar:
+        filas = "".join(
+            f'<div class="fila-rank"><span class="nombre">'
+            f'{html.escape(_recortar(f["nombre_organismo"], 28))}</span>'
+            f'<span class="dato">{plata(f["gasto"])} · tú '
+            f'{f["parte"]:.0f}'.replace(".", ",") + '%</span></div>'
+            for _, f in top_organismos.iterrows())
         st.markdown(
             '<div class="camino b"><span class="letra">B</span>'
-            '<div class="titulo">Profundizar</div>'
-            f'<div class="cuanto">{len(poco):,}'.replace(",", ".") + '</div>'
-            f'<div class="bajada">Ya te compran, pero poco: '
-            f'{plata(poco["vendido"].sum())} de {plata(poco["gasto"].sum())}. '
-            'Acá no hay que abrir la puerta, ya está abierta.</div></div>',
-            unsafe_allow_html=True)
-        if st.button("Ver solo estas", key="op_camino_b", width="stretch",
-                     disabled=puesto == ["Estás adentro con poco"]):
-            st.session_state["op_situacion"] = ["Estás adentro con poco"]
+            '<div class="titulo">Conquistar</div>'
+            '<div class="bajada">Quién compra más, y cuánto de eso es tuyo — '
+            'el mercado contra tu participación.</div>'
+            f'<div class="ranking">{filas}</div></div>', unsafe_allow_html=True)
+        if st.button("Ver estos en la tabla", key="op_ver_conquistar", width="stretch",
+                     disabled=(sorted(puesto_organismo) == nombres_organismos
+                               and bool(puesto_organismo))):
+            st.session_state["op_organismo"] = nombres_organismos
             st.rerun()
 
     izquierda, derecha = st.columns([3, 1])
@@ -905,11 +1003,35 @@ def seccion_oportunidades() -> None:
         st.caption(f"En total hay **{plata(tabla['por_ganar'].sum())}** por ganar: "
                    "lo que compran estas unidades y hoy no te compran a ti.")
     with derecha:
-        if puesto and len(puesto) < 3:
-            if st.button("Ver las dos", key="op_camino_todo", width="stretch"):
-                st.session_state["op_situacion"] = [
-                    "Nunca le has vendido", "Estás adentro con poco"]
+        if puesto_unidad or puesto_organismo:
+            if st.button("Quitar estos filtros", key="op_quitar_ranking", width="stretch"):
+                st.session_state["op_unidad"] = []
+                st.session_state["op_organismo"] = []
                 st.rerun()
+
+    # ------------------------------------------------------------------
+    #  Evolución de la participación
+    # ------------------------------------------------------------------
+    # Compara la primera mitad de la ventana de 24 meses contra la segunda.
+    # Lectura aparte y liviana: ver `evolucion_participacion`.
+    if resumen.get("convenios"):
+        evolucion = evolucion_participacion(sello, tuple(resumen["convenios"]), cuerpo)
+        antes, ahora = evolucion.get("antes"), evolucion.get("ahora")
+        if antes and ahora and antes["gasto"] and ahora["gasto"]:
+            delta = ahora["parte"] - antes["parte"]
+            flecha = "▲" if delta > 0.05 else ("▼" if delta < -0.05 else "▶")
+            color = "#7ee0ab" if delta > 0.05 else ("#f0a3a3" if delta < -0.05 else "#c9d3e0")
+            antes_txt = f"{antes['parte']:.1f}%".replace(".", ",")
+            ahora_txt = f"{ahora['parte']:.1f}%".replace(".", ",")
+            delta_txt = f"{abs(delta):.1f} pp".replace(".", ",")
+            st.markdown(
+                '<div class="evolucion">'
+                '<div class="rotulo">CÓMO VIENE TU PARTICIPACIÓN</div>'
+                f'<div class="valor">{antes_txt} → {ahora_txt} '
+                f'<span style="color:{color}">{flecha} {delta_txt}</span></div>'
+                '<div class="pie">Primera mitad de los últimos 24 meses contra la '
+                'segunda, sobre estos mismos convenios.</div></div>',
+                unsafe_allow_html=True)
 
     st.divider()
 
