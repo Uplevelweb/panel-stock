@@ -912,6 +912,7 @@ def a_excel(tabla: pd.DataFrame, nombre_hoja: str = "Oportunidades") -> bytes:
                   "COMENTARIO": 70,
                   # Columnas del modulo de Mercado Publico.
                   "FECHA": 12, "ORDEN": 20, "ESTADO": 20, "UNIDAD": 34,
+                  "ORGANISMO": 34,
                   "CANTIDAD": 11, "PRECIO": 14, "TOTAL": 16,
                   "PROVEEDOR": 34, "RUT PROVEEDOR": 15}
         for i, col in enumerate(numerica.columns, start=1):
@@ -1955,6 +1956,10 @@ def filas_de_orden(orden: dict, nombres_unidad: dict[str, str]) -> list[dict]:
         "ESTADO": str(orden.get("Estado") or "").strip(),
         "UNIDAD": (str(comprador.get("NombreUnidad") or "").strip()
                    or nombres_unidad.get(unidad_del_codigo(codigo), "")),
+        # Pedido de Serling (07-09-2026): viene GRATIS dentro del mismo
+        # detalle que ya se pide para UNIDAD, no hace falta una consulta
+        # mas — `alertador.py` ya prueba que la API la trae en Comprador.
+        "ORGANISMO": str(comprador.get("NombreOrganismo") or "").strip(),
         "PROVEEDOR": str(proveedor.get("Nombre") or "").strip(),
         "RUT PROVEEDOR": str(proveedor.get("RutSucursal") or "").strip(),
     }
@@ -3122,7 +3127,16 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
     if lineas.empty:
         return
 
-    top = (lineas.groupby("UNIDAD")
+    # Pedido de Serling (07-09-2026): que aparezca tambien el organismo, no
+    # solo la unidad. Viene GRATIS en el mismo detalle que ya trae UNIDAD
+    # —ninguna consulta nueva a la API—; si alguna orden vieja no lo trae,
+    # queda en blanco en vez de romper el agrupamiento.
+    if "ORGANISMO" not in lineas.columns:
+        lineas = lineas.copy()
+        lineas["ORGANISMO"] = ""
+    lineas = lineas.fillna({"ORGANISMO": ""})
+
+    top = (lineas.groupby(["UNIDAD", "ORGANISMO"])
            .agg(MONTO=("TOTAL", "sum"), OC=("ORDEN", "nunique"), PRODUCTOS=("ID", "nunique"))
            .sort_values("MONTO", ascending=False).reset_index())
     top["MONTO"] = _numeros_de_columna(top["MONTO"])
@@ -3136,7 +3150,8 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
     st.dataframe(
         top, width="stretch", hide_index=True, height=ALTO_15_FILAS,
         column_config={
-            "UNIDAD": st.column_config.TextColumn("UNIDAD COMPRADORA", width=ancho_fijo(340)),
+            "UNIDAD": st.column_config.TextColumn("UNIDAD COMPRADORA", width=ancho_fijo(280)),
+            "ORGANISMO": st.column_config.TextColumn("ORGANISMO", width=ancho_fijo(260)),
             "MONTO": st.column_config.NumberColumn(format="localized", width=ancho_fijo(130)),
             "OC": st.column_config.NumberColumn(format="localized", width=ancho_fijo(70),
                                                 help="Órdenes de compra del período"),
@@ -3724,6 +3739,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                                                      help="Fecha de creación de la orden"),
                 "PRODUCTO": st.column_config.TextColumn(width="large"),
                 "UNIDAD": st.column_config.TextColumn(width="medium"),
+                "ORGANISMO": st.column_config.TextColumn(width="medium"),
                 "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
                                                          help="Quién ganó la venta"),
                 "CANTIDAD": st.column_config.NumberColumn(format="localized"),

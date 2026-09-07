@@ -43,13 +43,14 @@ RUTA_BODEGA = CARPETA / "bodega"
 # juntas y en un solo lugar para que la tabla de pantalla y el archivo que se
 # baja nunca se separen: si se agrega una columna, aparece en las dos.
 COLUMNAS_VISIBLES = ["nombre_unidad", "nombre_organismo", "region", "comuna",
-                     "gasto", "vendido", "parte", "proveedores", "situacion",
-                     "recomendacion"]
+                     "gasto", "vendido", "parte", "proveedores", "oc",
+                     "meses_compra", "situacion", "recomendacion"]
 TITULOS_COLUMNAS = {
     "nombre_unidad": "UNIDAD COMPRADORA", "nombre_organismo": "ORGANISMO",
     "region": "REGIÓN", "comuna": "COMUNA", "gasto": "COMPRAN",
     "vendido": "LE VENDIÓ POR EMERGENZA", "parte": "PARTICIPACIÓN",
-    "proveedores": "PROVEEDORES", "situacion": "SITUACIÓN",
+    "proveedores": "PROVEEDORES", "oc": "OC DEL PERÍODO",
+    "meses_compra": "MESES EN QUE COMPRA", "situacion": "SITUACIÓN",
     "recomendacion": "QUÉ HACER",
 }
 
@@ -57,6 +58,18 @@ TITULOS_COLUMNAS = {
 PISO_GASTO = 10_000_000
 # Sobre este porcentaje ya se considera cliente firme, no oportunidad.
 TECHO_CLIENTE = 15.0
+
+# El periodo que se analiza. 12 meses de partida —pedido de Serling
+# (07-09-2026)—: alcanza para ver un ciclo de estaciones sin ser tan chico
+# como para que una unidad que compra cada dos meses parezca inactiva.
+MESES_PERIODO = {"3 meses": 3, "6 meses": 6, "12 meses": 12, "24 meses": 24}
+MESES_PERIODO_DEFECTO = "12 meses"
+
+# Sobre esta cantidad de meses, el detalle real de OC y estacionalidad
+# (`detalle_ordenes_por_unidad`) no se calcula: leer la bodega CRUDA —no la
+# resumida— para una ventana grande es lo que ya tumbo la app publicada el
+# 27-08-2026. A 12 meses o menos se probo que no pesa (ver BITACORA.md).
+TECHO_MESES_DETALLE = 12
 
 
 # --------------------------------------------------------------------------
@@ -101,7 +114,7 @@ def _sello() -> str:
 
 
 @st.cache_data(show_spinner="Abriendo la bodega…")
-def cargar_compras(sello: str) -> pd.DataFrame:
+def cargar_compras(sello: str, meses: int = 12) -> pd.DataFrame:
     """LA UNICA CACHE DE LA BODEGA EN TODO EL PANEL. No hacer otra.
 
     Habia dos —esta y la de `modulo_alertas`— cargando las mismas filas por
@@ -113,8 +126,13 @@ def cargar_compras(sello: str) -> pd.DataFrame:
     El trabajo de verdad —leer mes a mes y resumir— vive en
     `alertador.resumen_de_ordenes`, que es la misma que usa el correo diario.
     Una sola manera de leer la bodega, un solo lugar donde arreglarla.
+
+    `meses` ya era un parametro de `resumen_de_ordenes`; antes esta funcion
+    lo dejaba fijo en 24 sin exponerlo. Pedido de Serling (07-09-2026): un
+    periodo elegible, para ver estacionalidad —que temporada del año compra
+    cada institucion—, con 12 meses de partida en vez de 24.
     """
-    return alertador.resumen_de_ordenes()
+    return alertador.resumen_de_ordenes(meses=meses)
 
 
 @st.cache_data(show_spinner=False)
@@ -300,6 +318,109 @@ def evolucion_participacion(sello: str, convenios: tuple[str, ...], cuerpo: str,
             "parte": (vendido / gasto * 100) if gasto else 0.0,
         }
     return resultado
+
+
+@st.cache_data(max_entries=5, show_spinner="Contando órdenes y meses de compra…")
+def _leer_detalle_crudo(sello: str, convenios: tuple[str, ...],
+                        meses: int) -> pd.DataFrame:
+    """Unidad, convenio, orden y mes de cada línea, sobre estos convenios.
+
+    LA UNICA LECTURA CRUDA DE ESTA PANTALLA. `detalle_ordenes_por_unidad` y
+    `oc_por_convenio` parten de acá para no leer la bodega dos veces —una
+    por unidad y otra por convenio— cuando es la misma información vista
+    de dos formas.
+
+    ⚠️ SOLO se llama con `meses <= TECHO_MESES_DETALLE`. Esto lee la bodega
+    CRUDA —una fila por línea de compra, sin resumir— que es la misma que
+    ya tumbó la app publicada el 27-08-2026 al leerla completa. A 12 meses
+    o menos, sobre los convenios de un solo RUT, se probó que no pesa (ver
+    BITACORA.md). A más meses, `mapa_del_rut` sigue con la versión liviana
+    de `resumen_de_ordenes` y estas columnas simplemente no se pintan — no
+    se sube la apuesta con una ventana más grande sin volver a medir antes.
+    """
+    if not convenios or meses > TECHO_MESES_DETALLE:
+        return pd.DataFrame()
+    carpeta = alertador.BODEGA_OC
+    if not carpeta.exists():
+        return pd.DataFrame()
+
+    from datetime import date, timedelta
+    corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
+    archivos = [a for a in sorted(carpeta.glob("*.parquet")) if a.stem >= corte]
+    if not archivos:
+        return pd.DataFrame()
+
+    conv = set(convenios)
+    trozos = []
+    for archivo in archivos:
+        try:
+            import pyarrow.parquet as pq
+            hay = set(pq.read_schema(archivo).names)
+            columna_fecha = "dia" if "dia" in hay else ("fecha" if "fecha" in hay else None)
+            pedidas = [c for c in ("unidad", "convenio_marco", "orden") if c in hay]
+            if len(pedidas) < 3 or not columna_fecha:
+                continue
+            mes = pd.read_parquet(archivo, columns=pedidas + [columna_fecha])
+        except Exception:
+            continue
+        mes = mes[mes["convenio_marco"].isin(conv)]
+        if mes.empty:
+            continue
+        # El mes de la FECHA real de la orden, no el del archivo: alcanza
+        # con los primeros 7 caracteres ("2026-08-01" -> "2026-08").
+        mes["_mes"] = mes[columna_fecha].astype(str).str.slice(0, 7)
+        trozos.append(mes[["unidad", "convenio_marco", "orden", "_mes"]])
+        del mes
+
+    if not trozos:
+        return pd.DataFrame()
+    return pd.concat(trozos, ignore_index=True)
+
+
+def detalle_ordenes_por_unidad(sello: str, convenios: tuple[str, ...],
+                               meses: int) -> pd.DataFrame:
+    """Por unidad: cuántas ÓRDENES DISTINTAS (no líneas) y en qué meses
+    compró, sobre estos convenios.
+
+    Pedido de Serling (07-09-2026): saber en qué meses compra cada unidad,
+    para entender su estacionalidad, y el número REAL de órdenes —no la
+    aproximación por líneas que trae `resumen_de_ordenes`, que ya viene
+    sumada mes a mes y no guarda ni el número de orden ni la fecha—.
+    """
+    todo = _leer_detalle_crudo(sello, convenios, meses)
+    if todo.empty:
+        return pd.DataFrame()
+    return (todo.groupby("unidad", observed=True)
+            .agg(oc=("orden", "nunique"),
+                 meses_activos=("_mes", lambda s: sorted(set(s.dropna()))))
+            .reset_index())
+
+
+def oc_por_convenio(sello: str, convenios: tuple[str, ...], meses: int) -> dict[str, int]:
+    """Cuántas órdenes distintas hubo por convenio, en el período elegido.
+
+    Pedido de Serling (07-09-2026): que el cuadro de convenios muestre la
+    cantidad de OC del filtro que se está usando, no solo el nombre.
+    """
+    todo = _leer_detalle_crudo(sello, convenios, meses)
+    if todo.empty:
+        return {}
+    return (todo.groupby("convenio_marco", observed=True)["orden"]
+            .nunique().to_dict())
+
+
+# Los meses del calendario, para pintar "ene, mar, jul" en vez de "2026-01,
+# 2026-03, 2026-07": mas corto y es lo que de verdad importa -la estacion-,
+# no el año exacto en que compro.
+MESES_CORTOS = {"01":"ene","02":"feb","03":"mar","04":"abr","05":"may","06":"jun",
+                "07":"jul","08":"ago","09":"sep","10":"oct","11":"nov","12":"dic"}
+
+
+def _meses_legibles(meses_activos) -> str:
+    """['2025-09','2026-01'] -> 'sep, ene'. Vacio si no hay nada."""
+    if not isinstance(meses_activos, (list, tuple)) or not meses_activos:
+        return ""
+    return ", ".join(MESES_CORTOS.get(m[5:7], m) for m in meses_activos)
 
 
 def mapa_por_ids(lineas: pd.DataFrame, unidades: pd.DataFrame,
@@ -590,66 +711,61 @@ def _recomendar(fila) -> str:
             "contacto y prioriza otras unidades.")
 
 
-def _grafico_burbujas_comunas(vista: pd.DataFrame) -> None:
-    """Una burbuja por comuna: cuánto compran (eje X), cuánta participación
-    tienes ahí (eje Y) y el tamaño es cuántos proveedores compiten. Las
-    burbujas abajo a la derecha —compran mucho, participas poco— son las
-    que hay que mirar primero.
+def _grafico_comunas(vista: pd.DataFrame) -> None:
+    """Barras horizontales por comuna: el total gris, y encima cuánto de
+    eso es tuyo, en naranjo. Se lee de un vistazo, sin leyenda ni clic.
 
-    Pedido de Serling (07-09-2026): ver de un vistazo qué organismo compra
-    más y dónde falta participación, por comuna, sobre lo que quedó
-    filtrado en pantalla. Altair no agrega dependencia nueva: ya viene con
-    Streamlit (mismo criterio que `modulo_mercado._barras`).
+    Rediseñado el 07-09-2026, pedido de Serling: las burbujas anteriores no
+    se entendían bien. Mismo criterio que `modulo_mercado._barras` —Altair,
+    sin dependencia nueva—, adaptado a dos barras superpuestas para que se
+    vea "cuánto compran" contra "cuánto es tuyo" en un solo vistazo.
     """
     if vista.empty:
         return
     import altair as alt
 
+    tiene_oc = "oc" in vista.columns and vista["oc"].notna().any()
     agregado = vista.groupby("comuna", observed=True).agg(
         gasto=("gasto", "sum"),
         vendido=("vendido", "sum"),
-        # El maximo, no la suma: `proveedores` ya es "distintos por unidad",
-        # sumarlo entre unidades contaria al mismo proveedor varias veces.
-        # Como tamaño de burbuja (una escala visual, no un total que se lea
-        # al peso) el maximo es una medida razonable de que tan repartida
-        # esta la comuna.
-        proveedores=("proveedores", "max"),
         organismo_principal=("nombre_organismo",
             lambda s: s.value_counts().idxmax() if len(s) else ""),
+        **({"oc": ("oc", "sum")} if tiene_oc else {}),
     ).reset_index()
     agregado = agregado[agregado["gasto"] > 0]
     if agregado.empty:
         return
     agregado["participacion"] = (agregado["vendido"] / agregado["gasto"] * 100).round(1)
-    agregado["gasto_m"] = (agregado["gasto"] / 1e6).round(0)
+    agregado["gasto_m"] = (agregado["gasto"] / 1e6).round(1)
+    agregado["vendido_m"] = (agregado["vendido"] / 1e6).round(1)
+    agregado = agregado.sort_values("gasto", ascending=False).head(20)
 
     st.markdown("**Dónde está la plata y dónde te falta participación**")
     st.caption(
-        "Una burbuja por comuna, sobre lo que está filtrado arriba. Más a la "
-        "derecha = compran más. Más abajo = tienes menos participación ahí. "
-        "El tamaño es cuántos proveedores compiten.")
+        "Una barra por comuna, sobre lo que está filtrado arriba: la gris es "
+        "todo lo que compran, la naranja es cuánto es tuyo. Ordenadas de "
+        "mayor a menor. Pasa el mouse para ver el detalle.")
 
-    grafico = (
-        alt.Chart(agregado)
-        .mark_circle(opacity=0.75)
-        .encode(
-            x=alt.X("gasto_m:Q", title="Compran (millones de $)"),
-            y=alt.Y("participacion:Q", title="Tu participación (%)"),
-            size=alt.Size("proveedores:Q", title="Proveedores",
-                          scale=alt.Scale(range=[80, 1400])),
-            color=alt.Color("participacion:Q", title="Participación",
-                            scale=alt.Scale(scheme="redyellowgreen"), legend=None),
-            tooltip=[
-                alt.Tooltip("comuna:N", title="Comuna"),
-                alt.Tooltip("organismo_principal:N", title="Organismo que más compra ahí"),
-                alt.Tooltip("gasto_m:Q", title="Compran (M$)", format=",.0f"),
-                alt.Tooltip("participacion:Q", title="Tu participación (%)", format=",.1f"),
-                alt.Tooltip("proveedores:Q", title="Proveedores"),
-            ],
-        )
-        .properties(height=420)
-        .interactive()
-    )
+    tooltip = [
+        alt.Tooltip("comuna:N", title="Comuna"),
+        alt.Tooltip("organismo_principal:N", title="Organismo que más compra ahí"),
+        alt.Tooltip("gasto_m:Q", title="Compran (M$)", format=",.1f"),
+        alt.Tooltip("vendido_m:Q", title="Tuyo (M$)", format=",.1f"),
+        alt.Tooltip("participacion:Q", title="Tu participación (%)", format=",.1f"),
+    ]
+    if tiene_oc:
+        tooltip.append(alt.Tooltip("oc:Q", title="OC del período", format=",.0f"))
+
+    eje_y = alt.Y("comuna:N", sort="-x", title=None,
+                  axis=alt.Axis(labelLimit=220, labelFontSize=12))
+    base = alt.Chart(agregado)
+    barra_total = base.mark_bar(color="#2b3a52", cornerRadiusEnd=3).encode(
+        y=eje_y, x=alt.X("gasto_m:Q", title="Millones de pesos"), tooltip=tooltip)
+    barra_tuyo = base.mark_bar(color="#f2994a", cornerRadiusEnd=3).encode(
+        y=eje_y, x="vendido_m:Q", tooltip=tooltip)
+
+    grafico = (barra_total + barra_tuyo).properties(
+        height=max(30 * len(agregado), 140))
     st.altair_chart(grafico, use_container_width=True)
 
 
@@ -752,8 +868,20 @@ def seccion_oportunidades() -> None:
         st.warning(f"El dígito verificador no calza: para {cuerpo} debería ser "
                    f"{dv_correcto(cuerpo)}, no {dv}. Se busca igual.")
 
+    # El periodo. Se dibuja ANTES de leer la bodega, porque decide con
+    # cuantos meses se lee. Mismo criterio de "default solo la primera vez"
+    # que `op_situacion`, para no pisar una vista guardada.
+    por_defecto_periodo = ({} if "op_periodo" in st.session_state
+                           else {"index": list(MESES_PERIODO).index(MESES_PERIODO_DEFECTO)})
+    periodo = st.radio(
+        "Período a analizar", options=list(MESES_PERIODO), horizontal=True,
+        key="op_periodo", **por_defecto_periodo,
+        help="Cuántos meses hacia atrás mirar. Sirve para comparar cómo compra "
+             "cada institución según la época del año, no solo un total fijo.")
+    meses = MESES_PERIODO[periodo]
+
     sello = _sello()
-    compras = cargar_compras(sello)
+    compras = cargar_compras(sello, meses)
     if compras.empty:
         st.error("La bodega está vacía. Todavía no hay datos que consultar.")
         return
@@ -797,11 +925,11 @@ def seccion_oportunidades() -> None:
                     "convenio_marco"])
 
     if forma == "Contra mis ID publicados":
-        lineas = compras_de_mis_ids(sello, tuple(sorted(mis_ids)), cuerpo)
+        lineas = compras_de_mis_ids(sello, tuple(sorted(mis_ids)), cuerpo, meses)
         tabla, resumen = mapa_por_ids(lineas, unidades, len(mis_ids))
         if resumen["sin_ventas"]:
             st.warning(
-                "Ninguno de tus ID aparece comprado en los últimos 24 meses. "
+                f"Ninguno de tus ID aparece comprado en los últimos {periodo}. "
                 "Puede ser que el archivo traiga los ID de otro convenio, o que "
                 "de verdad no se hayan comprado. Cambia arriba a «Según lo que "
                 "ya has vendido» para ver el mercado igual.")
@@ -824,6 +952,22 @@ def seccion_oportunidades() -> None:
 
         if resumen["nombre"]:
             st.success(f"**{resumen['nombre']}** · {len(resumen['convenios'])} convenios marco")
+
+    # ----------------------------------------------------------------------
+    #  OC real y meses de compra
+    # ----------------------------------------------------------------------
+    # Solo aparece con el período en 12 meses o menos: ver la nota de
+    # `TECHO_MESES_DETALLE` en `detalle_ordenes_por_unidad`. Con ventanas más
+    # grandes, "oc" y "meses_compra" quedan vacías —falla abierto, la tabla
+    # de siempre sigue funcionando igual—.
+    detalle = detalle_ordenes_por_unidad(sello, tuple(resumen.get("convenios") or []), meses)
+    if not detalle.empty:
+        tabla = tabla.merge(detalle, on="unidad", how="left")
+        tabla["oc"] = tabla["oc"].fillna(0).astype(int)
+        tabla["meses_compra"] = tabla["meses_activos"].apply(_meses_legibles)
+    else:
+        tabla["oc"] = pd.NA
+        tabla["meses_compra"] = ""
 
     # ----------------------------------------------------------------------
     #  La navegación
@@ -1012,10 +1156,10 @@ def seccion_oportunidades() -> None:
     # ------------------------------------------------------------------
     #  Evolución de la participación
     # ------------------------------------------------------------------
-    # Compara la primera mitad de la ventana de 24 meses contra la segunda.
+    # Compara la primera mitad del periodo elegido contra la segunda.
     # Lectura aparte y liviana: ver `evolucion_participacion`.
     if resumen.get("convenios"):
-        evolucion = evolucion_participacion(sello, tuple(resumen["convenios"]), cuerpo)
+        evolucion = evolucion_participacion(sello, tuple(resumen["convenios"]), cuerpo, meses)
         antes, ahora = evolucion.get("antes"), evolucion.get("ahora")
         if antes and ahora and antes["gasto"] and ahora["gasto"]:
             delta = ahora["parte"] - antes["parte"]
@@ -1029,7 +1173,7 @@ def seccion_oportunidades() -> None:
                 '<div class="rotulo">CÓMO VIENE TU PARTICIPACIÓN</div>'
                 f'<div class="valor">{antes_txt} → {ahora_txt} '
                 f'<span style="color:{color}">{flecha} {delta_txt}</span></div>'
-                '<div class="pie">Primera mitad de los últimos 24 meses contra la '
+                f'<div class="pie">Primera mitad de los últimos {periodo} contra la '
                 'segunda, sobre estos mismos convenios.</div></div>',
                 unsafe_allow_html=True)
 
@@ -1060,12 +1204,29 @@ def seccion_oportunidades() -> None:
     # desaparece pierde su valor —Streamlit borra el estado del widget que deja
     # de dibujarse— y ademas confunde: la persona lo eligio y ya no esta.
     # Apagado se ve, se entiende por que no sirve, y conserva lo elegido.
+    #
+    # Pedido de Serling (07-09-2026): que nunca se oculte el nombre del
+    # convenio (antes se veía el código pelado, «2239-16-LR24») y que se
+    # vea cuántas OC tiene cada uno en el período elegido. `nombres_convenios`
+    # es de `app.py` —import local para no crear un ciclo de imports, mismo
+    # criterio que `filas_seleccionadas` mas abajo—.
+    from app import nombres_convenios
+    nombres_cm = nombres_convenios(sello)
+    oc_cm = oc_por_convenio(sello, tuple(convenios_del_rut), meses)
+
+    def _con_nombre_y_oc(codigo: str) -> str:
+        etiqueta = nombres_cm.get(codigo, codigo)
+        oc = oc_cm.get(codigo)
+        return f"{etiqueta} ({oc:,} OC · {periodo})".replace(",", ".") if oc else etiqueta
+
     st.multiselect(
         "Convenio marco", key="op_convenios", options=convenios_del_rut,
         placeholder="Todos los tuyos", disabled=resumen["por_ids"],
+        format_func=_con_nombre_y_oc,
         help=("En «Contra mis ID publicados» el mercado lo definen tus "
               "productos, no el convenio." if resumen["por_ids"] else
-              "Deja vacío para mirar todos los convenios en los que vendes."))
+              "Deja vacío para mirar todos los convenios en los que vendes. "
+              "La cantidad de OC solo se calcula hasta 12 meses de período."))
 
     filtro_situacion, filtro_region = st.columns([2, 2])
     with filtro_situacion:
@@ -1178,11 +1339,19 @@ def seccion_oportunidades() -> None:
             "vendido": st.column_config.NumberColumn("Le vendió por Emergenza", format="localized", width="small"),
             "parte": st.column_config.NumberColumn("Participación", format="%.1f%%", width="small"),
             "proveedores": st.column_config.NumberColumn("Prov.", width="small"),
+            "oc": st.column_config.NumberColumn(
+                "OC", width="small", format="localized",
+                help="Órdenes de compra distintas en el período elegido arriba. "
+                     "Vacía si el período supera los 12 meses."),
+            "meses_compra": st.column_config.TextColumn(
+                "Meses en que compra", width="medium",
+                help="En qué meses del período tuvo compras — para ver estacionalidad. "
+                     "Vacía si el período supera los 12 meses."),
             "situacion": st.column_config.TextColumn("Situación", width="medium"),
             "recomendacion": st.column_config.TextColumn("Qué hacer", width="large"),
         })
 
-    _grafico_burbujas_comunas(vista)
+    _grafico_comunas(vista)
 
     # ----------------------------------------------------------------------
     #  De la tabla a la cartera

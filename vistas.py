@@ -45,6 +45,7 @@ CLAVE_SESION = "vistas_local"
 CAMPOS = {
     "op_rut": "",
     "op_forma": "Según lo que ya has vendido",
+    "op_periodo": "12 meses",
     "op_convenios": [],
     "op_situacion": [],
     "op_region": [],
