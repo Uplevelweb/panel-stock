@@ -1,3 +1,42 @@
+## 07-09-2026 (cuarta vuelta) · El Cotizador lee el requerimiento como foto
+
+Serling pidió poder adjuntar imágenes en el Cotizador — el archivo se
+subía pero no pasaba nada, porque `leer_requerimiento` solo sabe leer
+filas y columnas de una planilla, no una foto.
+
+**Primera parte del pedido (dejar subir el archivo) era fácil; entender
+qué hay en la foto no**, y ahí se le presentó la diferencia antes de
+construir: se puede aceptar el archivo sin más, o de verdad leerlo con
+IA. Eligió la lectura de verdad.
+
+**Cómo quedó:** el `file_uploader` de "Requerimiento que te enviaron"
+ahora acepta jpg/jpeg/png/webp además de Excel/CSV. Si lo que sube es una
+imagen, en vez de `leer_requerimiento` corre `extraer_productos_de_imagen`,
+que le manda la foto a la API de Claude (Anthropic) con visión y le pide
+de vuelta un JSON con código/producto/cantidad — **mismas tres columnas**
+que ya usa el resto del Cotizador (`cruzar_requerimiento` en adelante no
+nota la diferencia).
+
+⚠️ **El panel no tenía ninguna IA conectada hasta ahora.** Hace falta una
+clave nueva de la API de Claude, que ella carga a mano en los Secrets de
+Streamlit (`anthropic-para-copiar.txt`, gitignored, mismo criterio que
+`auth0-para-copiar.txt`). **Sin esa clave el panel sigue funcionando
+igual que siempre** con Excel y CSV — subir una foto sin la clave avisa
+claramente en vez de fallar en silencio.
+
+**Tiene un costo por uso** (una consulta a la API por foto). No se le
+puso techo diario en el código: si el uso crece, hay que agregarlo, mismo
+criterio que `TOPE_DIARIO` de Resend.
+
+⚠️ **No se pudo probar contra la API real** —no hay una clave de
+Anthropic configurada para probar en este entorno—. Sí se probó, contra
+datos simulados: el armado del pedido a la API, el parseo del JSON de
+vuelta (con y sin bloque de código markdown), y el aviso claro cuando no
+hay clave. Falta la prueba de punta a punta con una foto real, que
+Serling puede hacer apenas cargue su clave.
+
+---
+
 ## 07-09-2026 (tercera vuelta) · Período elegible, OC real, meses de compra y organismo en Mercado Público
 
 Nueve puntos en un solo mensaje. Se hicieron los que tenían una decisión
