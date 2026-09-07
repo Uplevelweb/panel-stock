@@ -1,3 +1,63 @@
+## 07-09-2026 (tercera vuelta) · Período elegible, OC real, meses de compra y organismo en Mercado Público
+
+Nueve puntos en un solo mensaje. Se hicieron los que tenían una decisión
+clara; se corrigió de paso un malentendido importante: **las cifras del
+mercado no eran falsas ni duplicadas** —eran exactas para una ventana fija
+de 24 meses, que simplemente no era ajustable—.
+
+**1. Selector de período (3 / 6 / 12 / 24 meses), 12 de partida.**
+`resumen_de_ordenes` YA aceptaba un parámetro `meses`; `cargar_compras` lo
+tenía fijo en 24 sin exponerlo. Ahora hay un `st.radio` arriba de todo, y
+`mercado`, `vendido`, `parte`, `proveedores` y la evolución se recalculan
+según lo elegido. Sirve para lo que pidió: comparar cómo compra una
+institución según la época del año.
+
+**2. OC real (órdenes distintas) y en qué meses compra cada unidad.**
+Serling insistió en que «es importante saber qué meses compra» y probó
+razonando que a 12 meses no debería pesar — y no pesó: **3 segundos**
+contra la bodega real. Nueva función `detalle_ordenes_por_unidad`, que lee
+la bodega CRUDA (con `orden` y `fecha`, que `resumen_de_ordenes` no
+guarda) pero **solo hasta 12 meses de período** (`TECHO_MESES_DETALLE`):
+sobre esa ventana, tres columnas por RUT no repite el riesgo de memoria
+del 27-08-2026; a más meses, las columnas quedan vacías en vez de
+arriesgar la app. `_leer_detalle_crudo` es la única lectura de esto, y
+tanto el conteo por unidad como el conteo por convenio (punto 4) parten
+de la misma para no leer la bodega dos veces.
+
+**3. El cuadro de Convenio marco ya no oculta el nombre**, y ahora
+muestra la cantidad de OC del período elegido al lado
+(«Alimentos 2024 (1.203 OC · 12 meses)»). El nombre sale de
+`app.nombres_convenios` (bodega/convenios.json); antes solo se veía el
+código pelado (`2239-16-LR24`).
+
+**4. El gráfico pasó de burbujas a barras horizontales.** No se
+entendían. Ahora es una barra gris (todo lo que compra la comuna) con una
+barra naranja encima (cuánto es de Emergenza) — se lee sin leyenda ni
+clic, con el mismo criterio de `modulo_mercado._barras`. Con OC en el
+tooltip cuando el período lo permite.
+
+**5. Organismo en Mercado Público, sin costo extra.** Se pensó que hacía
+falta una consulta nueva a la API y **no era cierto**: `Comprador` ya trae
+`NombreOrganismo` en el mismo detalle que se pide para `NombreUnidad` —
+`bodeguero_api_viejo.py.txt` ya lo probaba—. Se agregó a `filas_de_orden`,
+a la tabla «Quién compra más» (agrupada ahora por unidad Y organismo) y
+al detalle de órdenes, sin ninguna llamada adicional.
+
+**6. La guía «¿Primera vez?» ya no se abre sola.** Antes se abría en la
+primera pantalla de cada sesión y empujaba todo hacia abajo sin que nadie
+la pidiera. Ahora siempre empieza plegada, y el título cambió a
+«¿Primera vez? Pulsa aquí...».
+
+⚠️ **Quedaron sin tocar, a la espera de que confirme:**
+- **Que "CON STOCK" sea el filtro por defecto** en Mercado Público: hoy
+  empieza en "TODOS" **a propósito**, documentado desde el 01-09-2026 —
+  empezar en CON STOCK mostraba 7 de 54 productos y parecía una consulta
+  fallida. Se le preguntó si de verdad quiere invertir esa decisión.
+- **Qué campo adicional quiere desglosar** por organismo o por unidad
+  (pidió "algún campo más" sin especificar cuál).
+
+---
+
 ## 07-09-2026 · Columnas renombradas, "Qué hacer" por fila, y burbujas por comuna
 
 Pedido de Serling, seis puntos; se hicieron los cuatro que no necesitaban una
