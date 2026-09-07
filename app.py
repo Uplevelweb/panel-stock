@@ -2586,8 +2586,11 @@ def guia_de_entrada() -> None:
     verla todos los dias, y Streamlit recuerda si la cerro mientras dure la
     sesion.
     """
-    abierta = not st.session_state.get("guia_cerrada", False)
-    with st.expander("👉  ¿Primera vez? Esto hay en cada pestaña", expanded=abierta):
+    # Pedido de Serling (07-09-2026): antes se abria sola la primera vez de
+    # cada sesion, y en cada carga de la pantalla eso empujaba el resto hacia
+    # abajo sin que nadie la pidiera. Ahora nunca se abre sola: se pliega
+    # siempre, y se despliega solo al tocarla, como cualquier otro expander.
+    with st.expander("👉  ¿Primera vez? Pulsa aquí...", expanded=False):
         st.markdown(
             f"""
 <div style="line-height:1.75;font-size:0.97em">
