@@ -1,5 +1,13 @@
 ## 07-09-2026 (cuarta vuelta) · El Cotizador lee el requerimiento como foto
 
+⚠️ **Decidido el mismo día, después de construirlo: no se activa por
+ahora.** «No vale la pena, existen quienes coticen [a mano], y no
+contemplo el gasto — es de uso personal.» **No volver a proponer que
+cargue la clave de Anthropic** salvo que ella lo pida. El código queda
+tal cual, sin costo ni riesgo mientras no exista la clave: subir una foto
+sin ella sigue avisando con claridad, y Excel/CSV funciona exactamente
+igual que siempre.
+
 Serling pidió poder adjuntar imágenes en el Cotizador — el archivo se
 subía pero no pasaba nada, porque `leer_requerimiento` solo sabe leer
 filas y columnas de una planilla, no una foto.
