@@ -36,14 +36,55 @@ los proveedores que compiten, el color va de rojo (poca participación) a
 verde (mucha). Con Altair, que **no agrega dependencia**: ya viene con
 Streamlit, mismo criterio que `modulo_mercado._barras`.
 
-⚠️ **Quedan dos pedidos sin construir, a propósito.** Rediseñar
-Conquistar/Profundizar (renombrado a «Prioridad») con una comparación de
-mercado y la evolución del porcentaje de participación **en el tiempo**: hoy
-el sistema entero mira una sola ventana fija de 24 meses, no hay ninguna
-vista mes a mes para comparar contra. Es la parte más ambigua del pedido —
-seis puntos en un solo mensaje— y toca los dos bloques que hoy ya funcionan
-bien; se le presentó una propuesta concreta antes de escribir código, en
-vez de adivinar sobre un tablero comercial en uso.
+⚠️ **Quedaron dos pedidos sin construir en esta vuelta, a propósito**: el
+rediseño de Conquistar/Profundizar y la evolución de participación en el
+tiempo. Se le presentó una propuesta concreta antes de tocar esos dos
+bloques —que ya funcionaban bien— en vez de adivinar sobre un tablero
+comercial en uso. **Aprobada y construida la misma tarde**, ver la entrada
+de abajo.
+
+---
+
+## 07-09-2026 (segunda vuelta) · Prioridad reemplaza a Profundizar, y la evolución de participación
+
+Los dos pedidos que quedaron pendientes en la entrada de arriba, ya con la
+propuesta aprobada.
+
+**Profundizar pasa a llamarse Prioridad, y va PRIMERO** (antes Conquistar
+iba primero). Deja de ser un solo filtro por Situación y pasa a ser un
+ranking: cruza cuánto hay por ganar (`por_ganar`) con cuán fácil es entrar
+—menos proveedores compitiendo, `por_ganar / (proveedores + 1)`— sobre
+**todo lo que no es cliente firme**, no solo «adentro con poco». Una unidad
+que nunca ha comprado pero tiene solo dos proveedores queda arriba de una
+que compra el triple con quince proveedores encima: la puerta fácil pesa
+más que el número grande.
+
+**Conquistar pasa SEGUNDO** y deja de ser «nunca te han comprado: 801». Pidió
+Serling ver, en orden, quién compra más y cuánto de eso es de Emergenza —
+comparar el mercado contra nosotros de un vistazo—. Ahora son los
+organismos ordenados por gasto, con la participación de Emergenza al lado
+de cada uno.
+
+**Los botones ya no escriben `op_situacion`.** Escriben `op_unidad` y
+`op_organismo` —que son filtros que YA EXISTÍAN, ver `FILTROS`— con la
+lista de nombres del ranking. Se reusa el mismo mecanismo de siempre en
+vez de inventar uno nuevo: cero plomería adicional.
+
+**La evolución de participación** compara la primera mitad de los últimos
+24 meses contra la segunda, con una flecha y los puntos porcentuales de
+diferencia. ⚠️ **No se tocó `resumen_de_ordenes`**, la única lectura pesada
+de la bodega (la que ya tumbó la app el 27-08-2026): esa función junta los
+24 meses a propósito y no guarda de qué mes salió cada peso, y agregarle
+el mes de vuelta habría vuelto a arriesgar el techo de memoria. En cambio,
+`evolucion_participacion` es una lectura **aparte y chica** —tres columnas,
+nada de detalle guardado—, igual criterio que `compras_de_mis_ids`, que ya
+probó que leer así no pesa. Medido contra la bodega local: **0,3 segundos**.
+
+**Probado de punta a punta contra la bodega real** (RUT de Emergenza, no
+datos inventados) antes de subir: la tabla, el ranking de Prioridad, el de
+Conquistar y la evolución corrieron sin errores y con números que tienen
+sentido comercial (ej. la Oficina Nacional de Emergencia con $38.267 M por
+ganar quedó primera en Prioridad).
 
 ---
 
