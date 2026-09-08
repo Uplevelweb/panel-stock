@@ -2871,8 +2871,14 @@ def interruptor_de_tema() -> None:
         const url = new URL(app.location.href);
         const rut = {json.dumps(rut)};
         if (rut) {{ url.searchParams.set("rut", rut); }}
+        // Streamlit guarda sus propios valores con JSON.stringify (con las
+        // comillas adentro del string: `"Dark"`, no `Dark`). Sin el
+        // JSON.stringify de aca, Streamlit intenta JSON.parse(valor), truena
+        // silenciosamente y vuelve a "System" — que es lo que pasaba: el
+        // boton escribia el valor pero la app jamas lo tomaba por bueno.
         app.localStorage.setItem(
-            "stActiveTheme-" + url.pathname + "-v2", {json.dumps(destino)});
+            "stActiveTheme-" + url.pathname + "-v2",
+            JSON.stringify({json.dumps(destino)}));
         app.__saliendoAProposito = true;
         app.location.replace(url.toString());
         </script>
