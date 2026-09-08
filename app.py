@@ -251,7 +251,7 @@ CONSULTAS_QUE_DEMORAN = 120
 # La orden se llama "ORDEN" y no "OC" a proposito: en el panel de arriba "OC" es
 # CUANTAS ordenes hubo (un contador), no el numero de una orden.
 COLUMNAS_MP = [
-    "FECHA", "ORDEN", "ESTADO", "UNIDAD", "ID", "PRODUCTO",
+    "FECHA", "ORDEN", "ESTADO", "UNIDAD", "ORGANISMO", "ID", "PRODUCTO",
     "CANTIDAD", "PRECIO", "TOTAL", "PROVEEDOR", "RUT PROVEEDOR",
 ]
 COLUMNAS_NUMERICAS_MP = ["CANTIDAD", "PRECIO", "TOTAL"]
@@ -1722,6 +1722,8 @@ def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
         return pd.DataFrame(columns=COLUMNAS_MP)
 
     nombres = dict(zip(unidades["codigo_unidad"], unidades["nombre_unidad"]))
+    organismos = (dict(zip(unidades["codigo_unidad"], unidades["nombre_organismo"]))
+                  if "nombre_organismo" in unidades.columns else {})
     # Se filtra por el DIA DEL BARRIDO, no por la fecha de creacion: es lo mismo
     # que hace la consulta en vivo, que barre dias y despues deja filtrar por la
     # fecha real. Filtrando por creacion no salia nada, porque las ordenes que
@@ -1738,6 +1740,11 @@ def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
         "ORDEN": elegidas["orden"].astype(str),
         "ESTADO": elegidas["estado"].astype(str),
         "UNIDAD": [nombres.get(u, u) for u in elegidas["unidad"]],
+        # ⚠️ La bodega guarda el organismo como CODIGO (`7104`), no como
+        # nombre. Se traduce con el catalogo de unidades, igual que UNIDAD.
+        # Sin esta linea la columna llegaba vacia a «Quién compra más» cada
+        # vez que la consulta se leia de la bodega, que es casi siempre.
+        "ORGANISMO": [organismos.get(u, "") for u in elegidas["unidad"]],
         "ID": elegidas["id_producto"].astype(str),
         "PRODUCTO": elegidas["producto"].astype(str),
         "CANTIDAD": elegidas["cantidad"],
@@ -3569,9 +3576,12 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                    "así que no se pueden agrupar por producto.")
         return
 
-    # Arranca en TODOS, al reves que el panel de arriba: al abrir una institucion
-    # nueva lo primero que interesa es TODO lo que compra. Empezando en CON STOCK
-    # se veian 7 de 54 productos y parecia que la consulta habia fallado.
+    # Arranca en CON STOCK (pedido de Serling, 07-09-2026): lo primero que
+    # quiere ver es lo que ELLA puede vender, no todo lo que compra la
+    # institucion. Antes arrancaba en TODOS, porque con catalogos chicos se
+    # veian 7 de 54 productos y parecia consulta fallida; hoy su catalogo
+    # cubre casi todo (144 de 144 en la consulta del 07-09), asi que ese
+    # riesgo ya no pesa. Si vuelve a ver pocos, TODOS esta a un clic.
     # El convenio real solo viene con los datos de la bodega; en una consulta en
     # vivo no existe, y ahí se cae al rubro del catálogo de ella.
     por_convenio = COLUMNA_CONVENIO in productos.columns
@@ -3579,7 +3589,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     izquierda, derecha = st.columns([1, 1])
     with izquierda:
         estado = st.radio("Estado", ESTADOS_MP, horizontal=True, key="mp_estado",
-                          index=ESTADOS_MP.index("TODOS"),
+                          index=ESTADOS_MP.index("CON STOCK"),
                           help="CON STOCK son los ID que están en tu catálogo; "
                                "NO LO TENGO, los que no vendes.")
     with derecha:

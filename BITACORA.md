@@ -1,3 +1,60 @@
+## 08-09-2026 · Por qué la inscripción de alertas no manda nada, y un arreglo que nunca se subió
+
+**1. El ORGANISMO salía vacío porque el arreglo del 07-09 se quedó en la carpeta.**
+Serling lo vio vacío en «Quién compra más» y preguntó si le faltaba ejecutar algo. No: el
+código estaba escrito y documentado en su computador, pero **nunca se empujó al
+repositorio**, y el repositorio es lo que Streamlit despliega. Un día entero mirando una
+columna vacía que ya estaba arreglada. Es la misma regla de siempre y esta vez costó al
+revés: **preguntarle al repositorio, no a la carpeta** — y después de arreglar algo,
+comprobar que quedó ARRIBA, no solo guardado.
+
+Se subió hoy: el `ORGANISMO` traducido desde la bodega, y el filtro de Estado arrancando
+en CON STOCK.
+
+**2. La inscripción de alertas: por qué no llega nada.** Se inscribió con
+`uplevelproduccion@gmail.com` y no recibió ni bienvenida ni confirmación. Diagnóstico, con
+los datos a la vista:
+
+- **Ese correo YA estaba inscrito desde el 01-09 a las 00:03**, y ese día sí recibió su
+  bienvenida. `inscribir_alerta` hace `on conflict (email) do update`: con un correo que ya
+  existe **actualiza la fila en vez de crearla**, y el disparador que manda el primer correo
+  es `after insert`. Resultado: la página dice «Listo, quedaste inscrito» y no pasa nada,
+  nunca. Sin error. **Es la trampa que ya la confundió el 29-08 y sigue ahí.**
+- **El doble opt-in NO está instalado.** `confirmar_alerta` no existe en la base
+  —comprobado preguntándole a la API, contesta 404— y `inteligencia.uplevelweb.art/confirmar/`
+  también da 404. El SQL está escrito en `supabase-confirmacion-para-copiar.txt` y la página
+  en `deploy-project/inteligencia/confirmar/`, sin pegar y sin publicar.
+- **La página publicada es la de agosto**, la que promete «tu primera alerta sale en unos
+  minutos». La versión del 01-09 —la que habla de confirmar— tampoco se publicó.
+- **El reloj de respaldo de la bienvenida está apagado desde el 01-09 a las 00:00.** Hasta el
+  31-08 disparaba cada 5 minutos; desde entonces, cero corridas. La última fue justo la que
+  saludó a `uplevelproduccion`.
+- **Lo que SÍ funciona: el correo diario.** El 07-09 procesó los 4 inscritos y mandó 2
+  correos, uno a `serlingveral@gmail.com`, con su comprobante de Resend.
+
+⚠️ **`.github/workflows/bienvenida.yml` de la carpeta local NO se puede subir todavía.**
+Trae `confirmado_en=not.is.null` en la consulta del trabajo `mirar`, que es la versión para
+el doble opt-in. Esa columna **no existe en la base**, así que Supabase contestaría un error;
+y ese workflow trata cualquier respuesta sin `"id"` como «no hay nadie esperando». O sea:
+subirlo hoy mataría la bienvenida **en silencio**, sin una sola corrida fallida que lo
+delate. Va después del SQL de confirmación, nunca antes.
+
+**PENDIENTES que deja esto, en orden:**
+
+1. Serling pega `limpiar-lista-para-copiar.txt` (borrar los 3 inscritos de prueba y dejar
+   solo al superadmin). El permiso de la sesión deja LEER la base pero no BORRAR en
+   producción, así que ese paso es suyo.
+2. Con la lista limpia, inscribirse de nuevo: ahí se ve si el disparador instantáneo sigue
+   vivo.
+3. Decidir el doble opt-in: instalarlo entero (SQL + la llave de Resend en el baúl, que la
+   pega ella + publicar `/confirmar/` + publicar la página nueva) o dejarlo para después.
+4. Devolver el reloj de 5 minutos, que es la red de seguridad si el disparador falla.
+5. **Que inscribirse dos veces deje de mentir.** Hoy el que ya está inscrito ve «Listo,
+   quedaste inscrito» y no le llega nada. O la página dice la verdad («ya estabas inscrito,
+   te sigue llegando a las 8»), o el alta vuelve a mandar el primer correo.
+
+---
+
 ## 07-09-2026 (cuarta vuelta) · El Cotizador lee el requerimiento como foto
 
 ⚠️ **Decidido el mismo día, después de construirlo: no se activa por

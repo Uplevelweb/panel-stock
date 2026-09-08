@@ -223,6 +223,13 @@ mostrar `!/bodega/`, no una ruta de Windows.
 
 Streamlit redesplega solo en 1-2 minutos.
 
+⚠️ **Arreglar no es entregar: hay que comprobar que quedó ARRIBA.** El 07-09-2026 se
+arregló el `ORGANISMO` vacío, se probó contra los parquet y se documentó… y no se empujó.
+Serling pasó el día siguiente mirando la columna vacía y preguntando qué le faltaba
+ejecutar. El repositorio es lo que Streamlit despliega; la carpeta de trabajo no es nada.
+Antes de decir «listo»: `git log origin/main -1` y un `gh api` al archivo tocado.
+
+
 **El camino manual sigue sirviendo** si `gh` no está disponible: **Add file ▸ Upload
 files**, arrastrar el archivo con el mismo nombre, **Commit changes**. Para archivos
 dentro de carpetas (`.streamlit/`, `.github/`) es más simple **Create new file** y escribir
@@ -544,6 +551,23 @@ Comprobado el 28-08-2026 sobre tres paneles distintos (GitHub, Supabase, Auth0):
     El editor abre un diálogo de confirmación a mano y el SQL queda colgado sin
     ningún error visible: parece que corrió y no corrió. Se usa `create or
     replace trigger` en vez de borrar y volver a crear. Pasó el 30-08-2026.
+  - **Corregido el 04-09-2026: ese diálogo también sale con DELETE, y SÍ se
+    puede aceptar por JavaScript.** No es exclusivo de DROP. Después de apretar
+    Run se busca `[role="alertdialog"], [role="dialog"]` y dentro el botón que
+    dice **«Run query»**, y se le da `.click()`. Así se borraron las filas de
+    prueba de `agenda_dias` sin que Serling tocara nada. O sea que la regla no
+    es «no se puede», es **«hay que acordarse de confirmar»**: si no se
+    confirma, el SQL queda colgado y parece que corrió.
+    `create table if not exists` y `alter table ... enable row level security`
+    NO abren el diálogo; pasaron directo.
+  - ⚠️ **`window.monaco` puede tardar más de 35 segundos en aparecer.** Y no
+    sirve esperarlo con un bucle largo dentro de una sola llamada de
+    JavaScript: **se pasa del tope de 45 s del CDP y la llamada muere** («the
+    renderer may be frozen»), aunque la página esté perfectamente viva. Se
+    espera con llamadas de `wait` separadas —el tope por llamada es 10 s— y se
+    consulta `typeof window.monaco` en una llamada corta aparte. Al entrar se ve
+    la barra con el botón Run pero el editor todavía muestra dos ruedas girando:
+    esa pantalla no significa que esté roto, significa que falta esperar.
   - **La grilla de resultados no aparece en `innerText`.** Se lee del contenedor
     (`[role="grid"]`), o con una captura de pantalla.
   - **Probar contra producción sin ensuciarla:** `begin; ... rollback;` en la
@@ -1112,3 +1136,37 @@ días y medio— y en ese hueco nadie recibió su bienvenida. Lo despertó el
 disparador del alta de una inscripción nueva. **Vale la pena una alarma que
 avise cuando el reloj lleva más de una hora sin latir**; hoy no existe y el
 silencio no se nota hasta que alguien reclama.
+
+### 🏛️ Mercado Público: el ORGANISMO y el estado de partida (07-09-2026)
+
+**`ORGANISMO` salía vacío en «Quién compra más», y eran DOS fugas, no una:**
+
+1. **En la consulta viva** `armar_filas` sí ponía `ORGANISMO`, pero
+   `pd.DataFrame(filas, columns=COLUMNAS_MP)` **lo botaba**, porque
+   `COLUMNAS_MP` no lo listaba. Ya está agregado, después de `UNIDAD`.
+2. **Leyendo de la bodega** —que es el camino de casi siempre—
+   `compras_desde_bodega` nunca lo copiaba.
+
+⚠️ **La bodega guarda el organismo como CÓDIGO (`7104`), no como nombre.**
+Copiar `elegidas["organismo"]` tal cual habría puesto números en la tabla. Se
+traduce con `unidades["nombre_organismo"]`, igual que se hace con `UNIDAD`.
+Comprobado sobre `bodega/detalle/2026-08.parquet`: **2000 de 2000 unidades del
+mes traducen**, y el valor sirve de verdad —«Bienes y Servicios» pasa a decir
+«HOSPITAL PADRE ALBERTO HURTADO»—.
+
+**El filtro `Estado` arranca en CON STOCK** (pedido de ella). Antes arrancaba en
+`TODOS` a propósito, porque con catálogos chicos se veían 7 de 54 productos y
+parecía consulta fallida. Hoy su catálogo cubre casi todo (144 de 144 el
+07-09), así que ese riesgo ya no pesa. **Si algún día vuelve a ver muy pocos
+productos al abrir, esta es la causa** y `TODOS` está a un clic.
+
+**`Monto del período` NO es todo lo que compró la institución**: suma solo los
+productos que quedaron a la vista después de los filtros `Estado` y
+`Convenio Marco`. Por eso cambia al mover el estado. El período es el del
+selector de arriba, y los atajos terminan en **el último día de la bodega**, no
+en hoy.
+
+⚠️ **No se pudo comprobar en pantalla**: el `st.radio` de Estado solo aparece
+después de consultar, y el buscador de unidades no responde a la escritura
+automatizada. Se comprobó la transformación contra los parquet reales, que es
+donde estaba la falla. **Falta que Serling lo vea con una consulta suya.**
