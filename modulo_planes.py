@@ -70,6 +70,10 @@ MODULOS = {
     # desde su Gmail. A otro cliente no le sirve: son sus cuentas y su lista.
     "envios": {"nombre": "Envíos de Ofertas, Catálogo y Mailing",
                "que_es": "", "extra": True},
+    # El Asistente Diario (agenda.uplevelweb.art). Lee la planilla AVANZADA V
+    # REGIÓN de Emergenza: mismo criterio que mercado_publico/envios/cotizador,
+    # no le sirve a otro cliente todavía.
+    "agenda": {"nombre": "Agenda", "que_es": "", "extra": True},
 }
 
 

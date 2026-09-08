@@ -5541,8 +5541,16 @@ def main() -> None:
     #
     # Los dos extras de Emergenza NO se dibujan cerrados: leen su catalogo de
     # Drive, a otro cliente no le sirven y no estan a la venta.
-    orden = [("oportunidades", "🎯 Oportunidades"),
-             ("seguimiento", "📌 Seguimiento")]
+    # «Agenda» va PRIMERA de todas, antes que Oportunidades (08-09-2026,
+    # pedido de Serling): es el centro de mando del vendedor —qué visitar hoy—
+    # y quiere que sea lo primero que se ve al entrar a Inteligencia. Por eso
+    # se arma aparte y no dentro del `for` de abajo, que respeta el orden fijo
+    # de las demas.
+    orden = []
+    if puede(yo, "agenda"):
+        orden.append(("agenda", "🗓️ Agenda"))
+    orden.append(("oportunidades", "🎯 Oportunidades"))
+    orden.append(("seguimiento", "📌 Seguimiento"))
     for clave, etiqueta in (("mercado_publico", "🏛️ Mercado Público"),
                             # La puerta a los dos paneles de envio de Apps
                             # Script. Va al lado de Mercado Publico porque es
@@ -5566,6 +5574,10 @@ def main() -> None:
         candado(clave)
         return False
 
+    if "agenda" in pestanas:
+        with pestanas["agenda"]:
+            from modulo_agenda import seccion_agenda
+            seccion_agenda()
     with pestanas["oportunidades"]:
         if abierta("oportunidades"):
             # Vive en su propio archivo: no comparte nada con las otras y asi
