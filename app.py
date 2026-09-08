@@ -2419,6 +2419,13 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
 
 def aplicar_estilos() -> None:
     """Tipografia y tarjetas iguales a las del Panel Armada."""
+    # En modo oscuro las tarjetas ya se distinguen del fondo por el color
+    # (tarjeta mas clara que el fondo). En modo claro las dos son casi el
+    # mismo blanco/gris y sin nada mas se ven planas -"menos amigable",
+    # dijo Serling el 08-09-2026-. Una sombra suave les da el mismo relieve
+    # que ya tenian en oscuro, sin tocar ningun color.
+    SOMBRA = ("0 1px 3px rgba(12,44,87,.08)" if modo_de_la_vista() == "claro"
+              else "none")
     st.markdown(
         f"""
         <style>
@@ -2438,6 +2445,7 @@ def aplicar_estilos() -> None:
         }}
         /* Tarjetas: mismo azul pizarra que el panel de Apps Script */
         [data-testid="stVerticalBlockBorderWrapper"]:has(> div > div > [data-testid="stVerticalBlock"]) {{
+            box-shadow: {SOMBRA};
             background: {COLOR['tarjeta']};
             border: 1px solid {COLOR['borde']};
             border-radius: 12px;
@@ -2527,6 +2535,7 @@ def aplicar_estilos() -> None:
             background: {COLOR['tarjeta']};
             border: 1px solid {COLOR['borde']};
             border-radius: 12px;
+            box-shadow: {SOMBRA};
             padding: 11px 16px;
             margin: 4px 0 14px;
         }}
@@ -2542,6 +2551,7 @@ def aplicar_estilos() -> None:
         .cifra {{
             flex: 1 1 190px; border-radius: 12px; padding: 14px 16px;
             border: 1px solid {COLOR['borde']}; background: {COLOR['tarjeta']};
+            box-shadow: {SOMBRA};
         }}
         .cifra .rotulo {{
             font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
@@ -2565,6 +2575,7 @@ def aplicar_estilos() -> None:
         .camino {{
             border-radius: 12px; padding: 15px 17px 13px;
             border: 1px solid transparent; height: 100%;
+            box-shadow: {SOMBRA};
             cursor: pointer;
         }}
         /* ---------- LA TARJETA ENTERA ES EL BOTON (08-09-2026) ----------
@@ -2617,12 +2628,15 @@ def aplicar_estilos() -> None:
         .camino {{ background: {COLOR['tarjeta']}; border-color: {COLOR['borde']}; }}
         .camino.a {{ border-top: 3px solid #d9741f; }}
         .camino.b {{ border-top: 3px solid #2f6bb0; }}
+        /* La letra A/B en su propio color de acento -no gris sobre gris-,
+           mismo criterio que el filo superior de la tarjeta (08-09-2026:
+           en modo claro casi no se notaba). */
         .camino .letra {{
             float: right; font-size: 12px; font-weight: 700;
-            color: {COLOR['texto_suave']};
-            border: 1px solid {COLOR['borde']};
             border-radius: 6px; padding: 1px 7px;
         }}
+        .camino.a .letra {{ color: #d9741f; background: rgba(217,116,31,.14); }}
+        .camino.b .letra {{ color: #2f6bb0; background: rgba(47,107,176,.14); }}
         .camino .titulo {{
             font-size: 19px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
         }}
@@ -2652,6 +2666,7 @@ def aplicar_estilos() -> None:
         .evolucion {{
             border-radius: 12px; padding: 14px 16px; margin-top: 4px;
             border: 1px solid {COLOR['borde']}; background: {COLOR['tarjeta']};
+            box-shadow: {SOMBRA};
         }}
         .evolucion .rotulo {{
             font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
@@ -2816,7 +2831,14 @@ def avisar_antes_de_salir(hay_resultados: bool) -> None:
     st.iframe(
         """
         <script>
-        const app = window.parent;
+        // window.top y no window.parent: Streamlit Cloud a veces envuelve la
+        // app en mas de un iframe (por ejemplo, para quien entra como
+        // invitado con acceso restringido, no solo para el dueno viendo su
+        // propia app). window.parent asume un solo nivel; window.top es
+        // siempre la ventana de verdad, sin importar cuantos niveles haya.
+        // Comprobado el 08-09-2026: con window.parent el boton escribia bien
+        // pero no siempre recargaba para quien no era el dueno.
+        const app = window.top;
         if (!app.__avisoDeSalida) {
             app.__avisoDeSalida = true;
             app.addEventListener("beforeunload", (evento) => {
@@ -2867,7 +2889,14 @@ def interruptor_de_tema() -> None:
     st.iframe(
         f"""
         <script>
-        const app = window.parent;
+        // window.top y no window.parent: Streamlit Cloud a veces envuelve la
+        // app en mas de un iframe (por ejemplo, para quien entra como
+        // invitado con acceso restringido, no solo para el dueno viendo su
+        // propia app). window.parent asume un solo nivel; window.top es
+        // siempre la ventana de verdad, sin importar cuantos niveles haya.
+        // Comprobado el 08-09-2026: con window.parent el boton escribia bien
+        // pero no siempre recargaba para quien no era el dueno.
+        const app = window.top;
         const url = new URL(app.location.href);
         const rut = {json.dumps(rut)};
         if (rut) {{ url.searchParams.set("rut", rut); }}
