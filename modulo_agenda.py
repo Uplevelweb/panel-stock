@@ -27,7 +27,6 @@ la Agenda deja de ser un iframe y pasa a ser una redirección de verdad, ahí s�
 habría que agregar esa confirmación.
 """
 import streamlit as st
-import streamlit.components.v1 as components
 
 URL_AGENDA = "https://agenda.uplevelweb.art/"
 
@@ -45,7 +44,16 @@ def seccion_agenda() -> None:
                         help="Por si el recuadro de abajo no carga bien en tu "
                              "pantalla, o prefieres verla más grande.")
 
-    # 800px: suficiente para ver el día sin scroll doble (el de la pagina y el
-    # del iframe). `scrolling=True` deja que la Agenda se desplace por dentro
-    # si el contenido no entra.
-    components.iframe(URL_AGENDA, height=800, scrolling=True)
+    # `st.components.v1.iframe` depende de que la página de adentro le avise
+    # su alto por `postMessage` (como hacen los componentes de Streamlit); la
+    # Agenda es una página cualquiera y nunca manda ese aviso, así que el
+    # marco quedaba en 0x0 (comprobado el 08-09-2026). Un <iframe> de HTML
+    # normal, con alto fijo en el estilo, no depende de eso.
+    # 800px: suficiente para ver el día sin scroll doble (el de la página y el
+    # del iframe). El iframe se desplaza por dentro si el contenido no entra.
+    st.markdown(
+        f'<iframe src="{URL_AGENDA}" width="100%" height="800" '
+        f'style="border:1px solid rgba(128,128,128,.25);border-radius:12px;" '
+        f'loading="lazy"></iframe>',
+        unsafe_allow_html=True,
+    )
