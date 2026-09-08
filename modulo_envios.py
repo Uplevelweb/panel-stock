@@ -58,8 +58,14 @@ PANELES = [
         "cuenta": "serlingvera@gmail.com",
         "contactos": 27,
         "alcance": "Solo la pestaña Armada",
+        # 08-09-2026: URL actualizada por Serling. Al implementar el arreglo
+        # de shoa.cl (CONFIG.DOMINIOS_SIN_ADJUNTO) se creo una implementacion
+        # NUEVA en vez de una version nueva de la existente, asi que cambio
+        # la URL. La anterior (…AKfycbzc5VFwOYb9A5AxBgwYga2R61WA-
+        # AxJ4ccBvuAFFbRqRSIH40Gw7uOXJjlGPaEQiG1X) sigue activa pero corre el
+        # codigo VIEJO, sin el arreglo: no usarla.
         "url": ("https://script.google.com/macros/s/"
-                "AKfycbzc5VFwOYb9A5AxBgwYga2R61WA-AxJ4ccBvuAFFbRqRSIH40Gw7uOXJjlGPaEQiG1X/exec"),
+                "AKfycbxJ9laKSlIk2Bj9XqzfVxzsfTpldPfZY9Us9pMw-YVI_EI6XYoP5hTWDDzzqhooQKYG/exec"),
         "titulo_en_pantalla": "Panel Armada",
     },
 ]
