@@ -127,6 +127,41 @@ def _supabase() -> tuple[str, str]:
         return "", ""
 
 
+def _llamar_supabase(ruta: str, cuerpo=None, metodo: str = "GET"):
+    """GET/PATCH genérico contra PostgREST, para el panel de superadmin de abajo.
+
+    Separado de `guardar_en_supabase` (que arma su propio `llamar` por dentro)
+    porque este lo usan dos operaciones sueltas —listar y activar/desactivar—
+    y no todo el alta con su filtro.
+    """
+    import urllib.request
+
+    url, clave = _supabase()
+    if not url or not clave:
+        raise RuntimeError("Faltan las credenciales de Supabase en los secretos.")
+    cabeceras = {
+        "apikey": clave, "Authorization": f"Bearer {clave}",
+        "Content-Type": "application/json",
+    }
+    peticion = urllib.request.Request(
+        f"{url}/rest/v1/{ruta}",
+        data=json.dumps(cuerpo).encode("utf-8") if cuerpo is not None else None,
+        method=metodo, headers=cabeceras)
+    with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+        texto = respuesta.read().decode("utf-8")
+        return json.loads(texto) if texto.strip() else []
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def listar_suscriptores(_sello: str) -> pd.DataFrame:
+    """Quién recibe la alerta hoy. `_sello` solo sirve para poder refrescar
+    a mano (cambiando el valor invalida la caché); no se usa adentro.
+    """
+    filas = _llamar_supabase(
+        "suscriptores?select=id,email,nombre,empresa,activo&order=email.asc")
+    return pd.DataFrame(filas)
+
+
 def guardar_en_supabase(config: dict) -> tuple[bool, str]:
     """Da de alta al suscriptor y deja su filtro. Devuelve (salio bien, aviso)."""
     import urllib.error
@@ -531,6 +566,73 @@ def seccion_alertas():
                     file_name="alertas_config.json", mime="application/json",
                     help="Sirve para probar el correo en el computador mientras "
                          "no estén las credenciales de Supabase.")
+
+    _panel_superadmin_suscriptores()
+
+
+def _panel_superadmin_suscriptores() -> None:
+    """Quién está suscrito hoy, y para desactivar a alguien sin borrarlo.
+
+    Solo lo ve quien entró con rol `superadmin` (Uplevel) — pedido de Serling
+    el 08-09-2026: «como super admin poder incluir a qué cliente o email
+    nuevo le lleguen las alertas». Para AGREGAR uno nuevo no hace falta nada
+    aparte: el formulario de arriba (`email`, key `al_email`) ya acepta
+    cualquier correo, no solo el de quien está mirando — «una cuenta, un
+    correo» (27-08-2026) dice que cada suscripción es de un correo, no que
+    tenga que ser el propio. Lo que faltaba era VER la lista completa y poder
+    apagar a alguien; eso es lo que agrega este panel.
+    """
+    from modulo_cuentas import es_soporte
+    yo = st.session_state.get("yo", {})
+    if not es_soporte(yo):
+        return
+
+    st.divider()
+    with st.expander("🛟 Suscriptores de la alerta (solo Uplevel)"):
+        st.caption(
+            "Para agregar un cliente nuevo: escribe su correo arriba, en "
+            "**«Correo registrado»**, configura su filtro y aprieta "
+            "**Activar la alerta**. Acá se ve a todos los que ya están y se "
+            "puede apagar a alguien sin borrar su historial.")
+        refrescar = st.button("🔄 Refrescar lista", key="al_refrescar_susc")
+        sello_lista = str(refrescar)  # cambia al apretar, invalida la caché
+        try:
+            suscriptores = listar_suscriptores(sello_lista)
+        except Exception as error:
+            st.error(f"No se pudo leer Supabase: {error}")
+            return
+
+        if suscriptores.empty:
+            st.info("Todavía no hay nadie suscrito.")
+            return
+
+        st.dataframe(
+            suscriptores[["email", "nombre", "empresa", "activo"]],
+            hide_index=True, width="stretch",
+            column_config={
+                "email": st.column_config.TextColumn("Correo", width="medium"),
+                "nombre": st.column_config.TextColumn("Nombre", width="small"),
+                "empresa": st.column_config.TextColumn("Empresa", width="small"),
+                "activo": st.column_config.CheckboxColumn("Activo", width="small"),
+            })
+
+        st.caption(f"{len(suscriptores)} suscriptor(es) · "
+                   f"{int(suscriptores['activo'].sum())} activo(s).")
+
+        apagar = st.selectbox(
+            "Desactivar a alguien (deja de recibir la alerta, sin borrar su ficha)",
+            options=[""] + list(suscriptores.loc[suscriptores["activo"], "email"]),
+            key="al_apagar_email")
+        if apagar and st.button("Desactivar", key="al_apagar_boton"):
+            fila = suscriptores[suscriptores["email"] == apagar].iloc[0]
+            try:
+                _llamar_supabase(f"suscriptores?id=eq.{fila['id']}",
+                                 {"activo": False}, metodo="PATCH")
+                st.success(f"{apagar} quedó desactivado.")
+                listar_suscriptores.clear()
+                st.rerun()
+            except Exception as error:
+                st.error(f"No se pudo desactivar: {error}")
 
 
 # --------------------------------------------------------------------------

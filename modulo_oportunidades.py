@@ -1106,10 +1106,16 @@ def seccion_oportunidades() -> None:
 
     col_prioridad, col_conquistar = st.columns(2, gap="medium")
     with col_prioridad:
+        # 08-09-2026, pedido de Serling: nombre completo (antes se cortaba a 34
+        # caracteres) y, junto al potencial por ganar, cuánto compra la unidad
+        # en total por el convenio filtrado arriba — da la magnitud del
+        # cliente, no solo lo que falta por conquistar.
         filas = "".join(
             f'<div class="fila-rank"><span class="nombre">'
-            f'{html.escape(_recortar(f["nombre_unidad"], 34))}</span>'
-            f'<span class="dato">{plata(f["por_ganar"])}</span></div>'
+            f'{html.escape(str(f["nombre_unidad"] or ""))}</span>'
+            f'<span class="dato">{plata(f["por_ganar"])} por ganar'
+            f'<span class="via">Compra total: {plata(f["gasto"])}</span>'
+            f'</span></div>'
             for _, f in top_prioridad.iterrows())
         st.markdown(
             '<div class="camino a"><span class="letra">A</span>'

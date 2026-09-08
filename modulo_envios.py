@@ -45,8 +45,12 @@ PANELES = [
         "cuenta": "svera@emergenza.cl",
         "contactos": 224,
         "alcance": "Todas las instituciones menos Armada",
+        # 08-09-2026: URL actualizada por Serling. La anterior
+        # (…AKfycbzf9b0csN17coRdlvnshmyrQ9uGDZb_9Yld0sLwxjyAZxCC7wu7hLRPEh2KYsSJGM53)
+        # sigue existiendo como otra implementacion activa del mismo proyecto de
+        # Apps Script, pero ya no es la que ella usa a diario.
         "url": ("https://script.google.com/a/macros/emergenza.cl/s/"
-                "AKfycbzf9b0csN17coRdlvnshmyrQ9uGDZb_9Yld0sLwxjyAZxCC7wu7hLRPEh2KYsSJGM53/exec"),
+                "AKfycbwFB5HEb3-_3RCBW2vMyBGJIBHTv0m9cid7TINVQ3l_YYLSotlqk6oMAMr2wGnL-ZDqDg/exec"),
         "titulo_en_pantalla": "Panel de Catálogo y Ofertas",
     },
     {
@@ -62,7 +66,10 @@ PANELES = [
 
 
 def seccion_envios(usuario: dict) -> None:
-    st.subheader("Envíos de Ofertas, Catálogo y Mailing")
+    # Renombrado el 08-09-2026 a pedido de Serling. Sigue siendo la misma
+    # puerta a los dos paneles de Apps Script; solo cambió el nombre de la
+    # pestaña (antes «Envíos de Ofertas, Catálogo y Mailing»).
+    st.subheader("Email Catálogo y Ofertas")
     st.caption(
         "Desde acá salen todos los envíos. Los dos paneles mandan desde tu "
         "propio Gmail, con tu firma y tu dirección: por eso siguen en Google y "

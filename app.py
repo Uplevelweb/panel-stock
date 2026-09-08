@@ -108,13 +108,30 @@ warnings.filterwarnings(
 
 # La app en si es producto de Uplevel y lleva la marca de Uplevel.
 RUTA_LOGO_UPLEVEL = CARPETA / "logo-uplevel.png"
-# Version cuadrada del logo: el original es horizontal (400x225) y como
-# favicon o icono de celular sale aplastado.
-RUTA_ICONO = CARPETA / "icono.png"
+# El favicon y el icono del celular usan el mismo logo de Uplevel del
+# encabezado (ya es un lienzo cuadrado de 500x500, no sale aplastado).
+# 08-09-2026, pedido de Serling: antes RUTA_ICONO apuntaba a `icono.png`,
+# que quedo del origen del proyecto como panel de Comercial Emergenza y
+# lleva el logo de Emergenza, no el de Uplevel.
+RUTA_ICONO = RUTA_LOGO_UPLEVEL
 
 # Paleta tomada del Panel Armada (emergenza-mailer/Index.html) para que los
 # dos paneles se vean como un mismo sistema.
-COLOR = {
+# ---------------------------------------------------------------- LOS COLORES
+# Dos paletas, una por modo (08-09-2026, pedido de Serling). El codigo las pide
+# siempre igual —COLOR['tarjeta']— y sale la del modo en que esta mirando QUIEN
+# TIENE ESA PANTALLA ABIERTA, que no tiene por que ser el mismo de otra persona
+# conectada al mismo tiempo.
+#
+# Por eso `COLOR` no es un diccionario normal al que se le cambien los valores
+# al empezar cada corrida: todas las sesiones comparten el mismo proceso de
+# Python y se pisarian los colores entre ellas. Es un diccionario que RESUELVE
+# cada consulta contra el modo de quien pregunta. Ver `modo_de_la_vista`.
+#
+# Los colores de Streamlit —fondo de la pagina, botones, tablas— NO se definen
+# aca sino en .streamlit/config.toml, que trae los mismos dos juegos en
+# [theme.light] y [theme.dark]. Si se cambia uno hay que cambiar el otro.
+PALETA_OSCURA = {
     "fondo": "#0c2c57",
     "tarjeta": "#123a6e",
     "borde": "#1e4d87",
@@ -125,7 +142,79 @@ COLOR = {
     # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
     "rojo": "#f18c3f",
     "blanco": "#FFFFFF",
+    "titulo": "#0c2c57",
+    "subtitulo": "#5A7089",
+    "flecha": "#3f5a7d",
+    "verde_fondo": "#10432f",
+    "verde_borde": "#1c6b4a",
+    "verde_texto": "#7ee0ab",
+    "verde_rotulo": "#9fd9bd",
+    "baja": "#f0a3a3",
+    "igual": "#c9d3e0",
 }
+PALETA_CLARA = {
+    "fondo": "#F2F6FB",
+    "tarjeta": "#FFFFFF",
+    "borde": "#D3DFEC",
+    "texto": "#0c2c57",
+    "texto_suave": "#5A7089",
+    # El mismo naranjo, un punto mas oscuro: el #f18c3f sobre blanco no alcanza
+    # el contraste para leerse. Es el unico color de marca que cambia de tono.
+    "rojo": "#d9741f",
+    "blanco": "#FFFFFF",
+    "titulo": "#0c2c57",
+    "subtitulo": "#5A7089",
+    "flecha": "#9AAEC6",
+    "verde_fondo": "#E7F6EE",
+    "verde_borde": "#A8DCC0",
+    "verde_texto": "#12694A",
+    "verde_rotulo": "#3E8C6C",
+    "baja": "#C0392B",
+    "igual": "#5A7089",
+}
+
+
+def modo_de_la_vista() -> str:
+    """«claro» u «oscuro», segun como esta mirando esta persona.
+
+    Lo decide el navegador y Streamlit lo cuenta en `st.context.theme`: puede
+    venir del boton de la app —que lo deja guardado— o, si nunca lo toco, del
+    modo en que este el telefono o el PC. Ante cualquier duda, oscuro, que es
+    como estuvo la app desde que existe.
+    """
+    try:
+        tema = st.context.theme
+        tipo = getattr(tema, "type", None)
+        if tipo is None and isinstance(tema, dict):
+            tipo = tema.get("type")
+    except Exception:
+        tipo = None
+    return "claro" if tipo == "light" else "oscuro"
+
+
+class _Colores(dict):
+    """Se comporta como la paleta del modo activo, sin copiarla a ningun lado."""
+
+    def _vigente(self) -> dict:
+        return PALETA_CLARA if modo_de_la_vista() == "claro" else PALETA_OSCURA
+
+    def __getitem__(self, clave):
+        return self._vigente()[clave]
+
+    def get(self, clave, por_defecto=None):
+        return self._vigente().get(clave, por_defecto)
+
+    def items(self):
+        return self._vigente().items()
+
+    def values(self):
+        return self._vigente().values()
+
+
+# Se construye sobre la oscura para que `in`, `len` y `keys` respondan aunque
+# no haya nadie mirando (las pruebas, por ejemplo). Las dos tienen las mismas
+# llaves; si se agrega una a una, hay que agregarla a la otra.
+COLOR = _Colores(PALETA_OSCURA)
 TIPOGRAFIA = 'Tahoma, Geneva, Verdana, "DejaVu Sans", sans-serif'
 
 # Columnas de la tabla final, en este orden. Todo lo demas se descarta.
@@ -2391,6 +2480,12 @@ def aplicar_estilos() -> None:
         .aire-antes-del-boton {{
             height: 90px;
         }}
+        /* El boton de modo claro/oscuro va pegado bajo la cabecera, como una
+           barra de herramientas, no como un boton mas de la pantalla. */
+        .st-key-fila_tema {{ margin-top: -10px; margin-bottom: 2px; }}
+        .st-key-fila_tema .stButton > button {{
+            font-size: 13px; padding: 2px 14px; min-height: 32px;
+        }}
         /* En el celular, los margenes se comen la pantalla. */
         @media (max-width: 640px) {{
             [data-testid="stMainBlockContainer"] {{
@@ -2411,10 +2506,10 @@ def aplicar_estilos() -> None:
         .cabecera img {{ width: 62px; flex: none; }}
         .cabecera-texto {{ line-height: 1.15; text-align: center; }}
         .titulo-panel {{
-            color: #0c2c57; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
+            color: {COLOR['titulo']}; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
-            color: #5A7089; font-size: 12.5px; margin-top: 2px;
+            color: {COLOR['subtitulo']}; font-size: 12.5px; margin-top: 2px;
         }}
         /* ---------- LA FORMA VISUAL DEL BOCETO (02-09-2026) ----------
            Serling mando un boceto y de el se tomaron primero las ideas —el
@@ -2436,7 +2531,7 @@ def aplicar_estilos() -> None:
             margin: 4px 0 14px;
         }}
         .cinta-pasos .paso {{ font-size: 15px; white-space: nowrap; }}
-        .cinta-pasos .flecha {{ color: #3f5a7d; padding: 0 12px; }}
+        .cinta-pasos .flecha {{ color: {COLOR['flecha']}; padding: 0 12px; }}
         .cinta-pasos .que-es {{
             color: {COLOR['texto_suave']}; font-size: 13px;
             margin-left: auto; padding-left: 14px;
@@ -2459,34 +2554,81 @@ def aplicar_estilos() -> None:
         .cifra .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
         /* La tercera es la que importa: lo que hay por ganar. Va en verde
            porque es lo unico de la fila que es una oportunidad y no un hecho. */
-        .cifra.ganar {{ background: #10432f; border-color: #1c6b4a; }}
-        .cifra.ganar .valor {{ color: #7ee0ab; }}
-        .cifra.ganar .rotulo {{ color: #9fd9bd; }}
+        .cifra.ganar {{
+            background: {COLOR['verde_fondo']}; border-color: {COLOR['verde_borde']};
+        }}
+        .cifra.ganar .valor {{ color: {COLOR['verde_texto']}; }}
+        .cifra.ganar .rotulo {{ color: {COLOR['verde_rotulo']}; }}
 
         /* Los dos caminos. La letra A/B es del boceto y sirve: nombra la
            decision para poder hablar de ella («vamos por la A»). */
         .camino {{
             border-radius: 12px; padding: 15px 17px 13px;
             border: 1px solid transparent; height: 100%;
-            /* El boton va justo debajo y es parte de la misma tarjeta: sin
-               esto Streamlit mete su separacion y el boton queda suelto, como
-               si mandara a otra cosa. */
-            margin-bottom: -6px;
+            cursor: pointer;
         }}
-        .camino.a {{ background: #7a3d0e; border-color: #b8641f; }}
-        .camino.b {{ background: #123a6e; border-color: #2f6bb0; }}
+        /* ---------- LA TARJETA ENTERA ES EL BOTON (08-09-2026) ----------
+           Serling lo pidio asi: «que toda la ventana, por ejemplo prioridad,
+           sea el boton para ver la tabla». Antes el boton iba debajo de la
+           tarjeta y habia que apuntarle.
+
+           No se puede meter un boton de Streamlit DENTRO de un bloque de HTML
+           propio, asi que se hace al reves: el boton de verdad se estira sobre
+           toda la tarjeta y se deja invisible. Sigue siendo un boton de
+           Streamlit —se pulsa, se navega con el teclado, se puede deshabilitar—
+           pero lo que se ve, y lo que recibe el dedo en el telefono, es la
+           tarjeta completa. La linea «Pulsa esta tarjeta...» de abajo esta para
+           que se note que se puede pulsar: un color plano no lo dice.
+
+           OJO: depende de la clase `st-key-op_camino_a`, que Streamlit le pone
+           al contenedor por su `key`. Si se renombra la key alla, hay que
+           renombrarla aca. */
+        .st-key-op_camino_a, .st-key-op_camino_b {{ position: relative; }}
+        .st-key-op_camino_a .stButton, .st-key-op_camino_b .stButton {{
+            position: absolute; inset: 0; margin: 0;
+        }}
+        .st-key-op_camino_a .stButton > button,
+        .st-key-op_camino_b .stButton > button {{
+            width: 100%; height: 100%; opacity: 0;
+        }}
+        /* Con el filtro ya puesto el boton queda deshabilitado: la tarjeta deja
+           de ofrecerse y el dedo no espera nada. */
+        .st-key-op_camino_a:has(button:disabled) .camino,
+        .st-key-op_camino_b:has(button:disabled) .camino {{ cursor: default; }}
+        .st-key-op_camino_a:hover:not(:has(button:disabled)) .camino,
+        .st-key-op_camino_b:hover:not(:has(button:disabled)) .camino {{
+            box-shadow: 0 2px 10px rgba(0,0,0,.12);
+        }}
+        /* Invisible el boton, el recuadro de foco del teclado tambien lo seria:
+           se dibuja sobre la tarjeta. */
+        .st-key-op_camino_a:has(button:focus-visible) .camino,
+        .st-key-op_camino_b:has(button:focus-visible) .camino {{
+            outline: 2px solid {COLOR['rojo']}; outline-offset: 2px;
+        }}
+        .camino .pulsar {{
+            margin-top: 11px; padding-top: 9px; font-size: 12.5px; font-weight: 600;
+            color: {COLOR['texto_suave']};
+            border-top: 1px solid {COLOR['borde']};
+        }}
+        /* Fondo blanco/tarjeta, igual que el resto del panel (08-09-2026,
+           pedido de Serling: el naranjo y el azul solidos desentonaban con
+           el tema claro). La identidad A/B queda en el borde superior, no
+           en el relleno entero. */
+        .camino {{ background: {COLOR['tarjeta']}; border-color: {COLOR['borde']}; }}
+        .camino.a {{ border-top: 3px solid #d9741f; }}
+        .camino.b {{ border-top: 3px solid #2f6bb0; }}
         .camino .letra {{
             float: right; font-size: 12px; font-weight: 700;
-            color: rgba(255,255,255,.55);
-            border: 1px solid rgba(255,255,255,.35);
+            color: {COLOR['texto_suave']};
+            border: 1px solid {COLOR['borde']};
             border-radius: 6px; padding: 1px 7px;
         }}
         .camino .titulo {{
-            font-size: 19px; font-weight: 700; color: #fff; line-height: 1.15;
+            font-size: 19px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
         }}
-        .camino .cuanto {{ font-size: 32px; font-weight: 800; color: #fff; line-height: 1.05; }}
+        .camino .cuanto {{ font-size: 32px; font-weight: 800; color: {COLOR['texto']}; line-height: 1.05; }}
         .camino .bajada {{
-            font-size: 13px; color: rgba(255,255,255,.86); margin-top: 6px;
+            font-size: 13px; color: {COLOR['texto_suave']}; margin-top: 6px;
         }}
 
         /* El ranking de Prioridad y Conquistar (07-09-2026): unas pocas
@@ -2494,11 +2636,17 @@ def aplicar_estilos() -> None:
         .camino .ranking {{ margin-top: 10px; }}
         .camino .fila-rank {{
             display: flex; justify-content: space-between; gap: 10px;
-            font-size: 12.5px; color: rgba(255,255,255,.92);
-            padding: 4px 0; border-top: 1px solid rgba(255,255,255,.14);
+            font-size: 12.5px; color: {COLOR['texto']};
+            padding: 4px 0; border-top: 1px solid {COLOR['borde']};
         }}
         .camino .fila-rank .nombre {{ font-weight: 600; }}
-        .camino .fila-rank .dato {{ flex-shrink: 0; color: rgba(255,255,255,.8); }}
+        .camino .fila-rank .dato {{ flex-shrink: 0; color: {COLOR['texto_suave']}; text-align: right; }}
+        /* Por que convenio marco compra esa unidad, en chico bajo su nombre
+           (08-09-2026). Es lo que dice de que catalogo cotizarle. */
+        .camino .fila-rank .via {{
+            display: block; font-weight: 400; font-size: 11.5px;
+            color: {COLOR['texto_suave']}; margin-top: 1px;
+        }}
 
         /* La evolucion de participacion, debajo de Prioridad/Conquistar. */
         .evolucion {{
@@ -2560,6 +2708,27 @@ def aplicar_estilos() -> None:
             [data-testid="stDataFrame"] {{ max-height: 400px; }}
             /* Y las columnas de metricas dejan de apretujarse de a cuatro. */
             [data-testid="stMetricValue"] {{ font-size: 1.35rem; }}
+
+            /* ---------- LAS TARJETAS EN EL TELEFONO (08-09-2026) ----------
+               Streamlit ya apila las columnas solo cuando la pantalla es
+               angosta: las dos tarjetas quedan una sobre otra sin que haya que
+               pedirselo. Lo que no ajusta es el tamaño de lo que va adentro,
+               pensado para media pantalla de escritorio; con diez filas por
+               tarjeta, sin esto hay que hacer zoom para leer los nombres. */
+            .cifras-diag {{ gap: 8px; }}
+            .cifra {{ flex: 1 1 100%; padding: 11px 13px; }}
+            .cifra .valor {{ font-size: 23px; }}
+            .camino {{ padding: 13px 14px 11px; }}
+            .camino .titulo {{ font-size: 17px; }}
+            .camino .cuanto {{ font-size: 27px; }}
+            .camino .bajada {{ font-size: 12.5px; }}
+            .camino .fila-rank {{ font-size: 12px; padding: 5px 0; }}
+            .camino .fila-rank .via {{ font-size: 11px; }}
+            .cinta-pasos {{ font-size: 13px; padding: 9px 12px; }}
+            .cinta-pasos .paso {{ font-size: 13px; }}
+            .cinta-pasos .flecha {{ padding: 0 7px; }}
+            .cinta-pasos .que-es {{ margin-left: 0; padding-left: 0; }}
+            .evolucion .valor {{ font-size: 19px; }}
         }}
         </style>
         """,
@@ -2651,10 +2820,61 @@ def avisar_antes_de_salir(hay_resultados: bool) -> None:
         if (!app.__avisoDeSalida) {
             app.__avisoDeSalida = true;
             app.addEventListener("beforeunload", (evento) => {
+                // Cuando la recarga la pide la propia app —el boton de modo
+                // claro/oscuro— no se pregunta nada: no es un descuido.
+                if (app.__saliendoAProposito) { return; }
                 evento.preventDefault();
                 evento.returnValue = "";
             });
         }
+        </script>
+        """,
+        height=1,
+    )
+
+
+def interruptor_de_tema() -> None:
+    """El boton de modo claro / modo oscuro.
+
+    QUIEN NO TOCA NADA NO TIENE QUE TOCAR NADA: la app sale clara u oscura
+    segun como este el telefono o el PC de quien la abre. Eso lo resuelve
+    .streamlit/config.toml, que trae las dos paletas, y no hace falta este
+    boton para que funcione.
+
+    El boton es para forzarlo. Y tiene un precio que conviene saber: Streamlit
+    NO deja cambiar el tema desde Python —el modo lo guarda el navegador y se
+    lee UNA sola vez, al abrir la pagina—, asi que el boton escribe esa
+    preferencia y recarga. Recargar empieza una sesion nueva: la identificacion
+    aguanta (va en una galleta del navegador) pero los filtros de la pantalla
+    no. Por eso el RUT viaja en la direccion y vuelve solo del otro lado; ver
+    `seccion_oportunidades`.
+    """
+    modo = modo_de_la_vista()
+    destino = "Light" if modo == "oscuro" else "Dark"
+    etiqueta = "☀️ Modo claro" if modo == "oscuro" else "🌙 Modo oscuro"
+    with st.container(key="fila_tema"):
+        _, derecha = st.columns([1, 0.22])
+        with derecha:
+            pulsado = st.button(
+                etiqueta, key="boton_tema", width="stretch",
+                help="Cambia el fondo de toda la app. Queda recordado en este "
+                     "navegador. La pantalla se recarga para aplicarlo.")
+    if not pulsado:
+        return
+    rut = str(st.session_state.get("op_rut", "") or "")
+    # `json.dumps` y no comillas a mano: deja el texto listo para JavaScript
+    # aunque el RUT venga con algo raro escrito.
+    st.iframe(
+        f"""
+        <script>
+        const app = window.parent;
+        const url = new URL(app.location.href);
+        const rut = {json.dumps(rut)};
+        if (rut) {{ url.searchParams.set("rut", rut); }}
+        app.localStorage.setItem(
+            "stActiveTheme-" + url.pathname + "-v2", {json.dumps(destino)});
+        app.__saliendoAProposito = true;
+        app.location.replace(url.toString());
         </script>
         """,
         height=1,
@@ -5234,6 +5454,7 @@ def main() -> None:
     aplicar_estilos()
     icono_del_movil()
     cabecera()
+    interruptor_de_tema()
 
     # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
     # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
@@ -5287,8 +5508,13 @@ def main() -> None:
     #
     # OJO si se vuelve a cambiar el orden: las pruebas buscan las tablas POR SUS
     # COLUMNAS, no por su posicion. `app.dataframe[-1]` ya se rompio una vez asi.
-    # «Mi equipo» va AL FINAL a proposito: es configuracion, no trabajo diario,
-    # y se abre una vez cada mucho. Las cuatro de antes no cambian de posicion.
+    #
+    # Orden pedido por Serling el 08-09-2026: Oportunidades, Seguimiento,
+    # Mercado Publico, Email Catalogo y Ofertas, Modulo Cotizador, Mi equipo,
+    # Alertas. «Email Catalogo y Ofertas» queda pegada a la derecha de
+    # Mercado Publico a proposito: es el otro extra de Emergenza que usa sus
+    # cuentas de Gmail y su lista de contactos, y antes se llamaba «Envios de
+    # Ofertas, Catalogo y Mailing» (mismo modulo, `modulo_envios.py`).
     #
     # «Soporte» solo aparece si quien entro es de Uplevel. No es seguridad —la
     # pantalla igual comprueba el rol adentro— sino no ponerle delante una
@@ -5310,18 +5536,18 @@ def main() -> None:
     # Los dos extras de Emergenza NO se dibujan cerrados: leen su catalogo de
     # Drive, a otro cliente no le sirven y no estan a la venta.
     orden = [("oportunidades", "🎯 Oportunidades"),
-             ("seguimiento", "📌 Seguimiento"),
-             ("alertas", "🔔 Alertas")]
+             ("seguimiento", "📌 Seguimiento")]
     for clave, etiqueta in (("mercado_publico", "🏛️ Mercado Público"),
-                            ("cotizador", "🧾 Módulo Cotizador"),
                             # La puerta a los dos paneles de envio de Apps
-                            # Script. Va al lado de los otros dos extras de
-                            # Emergenza porque es de la misma clase: usa sus
-                            # cuentas de Gmail y su lista de contactos.
-                            ("envios", "📧 Envíos de Ofertas, Catálogo y Mailing")):
+                            # Script. Va al lado de Mercado Publico porque es
+                            # de la misma clase: usa sus cuentas de Gmail y su
+                            # lista de contactos.
+                            ("envios", "📧 Email Catálogo y Ofertas"),
+                            ("cotizador", "🧾 Módulo Cotizador")):
         if puede(yo, clave):
             orden.append((clave, etiqueta))
     orden.append(("equipo", "👥 Mi equipo"))
+    orden.append(("alertas", "🔔 Alertas"))
     if es_soporte(yo):
         orden.append(("soporte", "🛟 Soporte"))
 
