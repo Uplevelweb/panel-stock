@@ -7,14 +7,29 @@
 # y Emergenza es su cliente, no al reves. La marca de Emergenza se conserva
 # donde corresponde: el PDF y el correo de cotizacion que ella le manda a la
 # institucion.
+#
+# 08-09-2026: se agregan [theme.light] y [theme.dark] — antes solo existia
+# el bloque plano de arriba (equivalente a "dark"), asi que el boton
+# "Modo claro" de app.py (`interruptor_de_tema`) cambiaba los colores
+# propios (las tarjetas HTML, via PALETA_CLARA) pero los widgets nativos de
+# Streamlit —botones, tablas, inputs— seguian con el tema oscuro por dentro,
+# porque Streamlit solo sabe elegir entre temas que esten nombrados aqui.
+# Los valores de [theme.light] son los mismos de PALETA_CLARA en app.py: si
+# se cambia un color hay que cambiarlo en los dos lugares.
 [theme]
-base = "dark"
+font = "sans-serif"
+# Un 15% mas grande que el 13 que tenia (27-08-2026: costaba leerlo). Se hace
+# aqui y no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
+baseFontSize = 15
+
+[theme.dark]
 primaryColor = "#f18c3f"
 backgroundColor = "#0c2c57"
 secondaryBackgroundColor = "#123a6e"
 textColor = "#EAF1F8"
-font = "sans-serif"
 
-# Un 15% mas grande que el 13 que tenia (27-08-2026: costaba leerlo). Se hace
-# aqui y no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
-baseFontSize = 15
+[theme.light]
+primaryColor = "#d9741f"
+backgroundColor = "#F2F6FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0c2c57"
