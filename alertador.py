@@ -243,6 +243,13 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
         "filtros(rubros,regiones,monto_minimo,frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
         "&activo=eq.true"
+        # Si tiene un plan pagado y esta atrasado (al_dia=false), no recibe el
+        # correo -salvo que haya un override manual puesto-. A quien esta en
+        # prueba gratis (plan vacio) esto no le toca nada: al_dia por omision
+        # es true. Mismo criterio de acceso que usa el bot de WhatsApp
+        # (bot_identificar_cliente): coalesce(override_acceso, al_dia).
+        # Pedido de Serling el 12-09-2026.
+        "&or=(override_acceso.eq.true,and(override_acceso.is.null,al_dia.eq.true))"
     )
     peticion = urllib.request.Request(consulta, headers={
         "apikey": clave,
