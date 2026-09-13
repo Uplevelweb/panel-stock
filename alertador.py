@@ -115,6 +115,10 @@ FONDO = "#f5f7fa"
 # cambiar ni una medida del correo.
 LOGO = "https://uplevelweb.art/logo-correo.png"
 PANEL = "https://panel-stock-uplevel.streamlit.app"
+# A donde manda el aviso de fin de prueba de Territorio (no es el Panel: la
+# mayoria de los suscriptores no tiene acceso a el). Pedido de Serling
+# 12-09-2026.
+CONTRATAR = "https://inteligencia.uplevelweb.art"
 
 # Palabras que aparecen en todas las licitaciones y no distinguen nada.
 VACIAS = {
@@ -532,6 +536,35 @@ def dias_de_prueba(suscriptores: list[dict]) -> dict:
         except ValueError:
             continue
         salida[fila.get("email")] = (fin - hoy).days
+    return salida
+
+
+def dias_de_prueba_territorio(suscriptores: list[dict]) -> dict:
+    """{correo: dias que le quedan de la prueba gratis de TERRITORIO}.
+
+    A diferencia de dias_de_prueba() -que mira el acceso al Panel: 14 dias,
+    y solo si dejo RUT-, esta cuenta el plazo que se promete en el bot de
+    WhatsApp y en la web: 7 dias desde que se inscribio, para cualquiera,
+    tenga o no RUT. Sin esto, quien se inscribia solo con palabras clave
+    (sin RUT) no tenia NINGUN aviso de fin de prueba, nunca. Pedido de
+    Serling el 12-09-2026: "los 7 dias prometidos, para todos".
+
+    No depende de ninguna tabla aparte -usa fecha_consentimiento, que ya
+    viene en la misma consulta de siempre-, asi que nunca falla por falta
+    de columnas ni gasta una consulta extra.
+    """
+    hoy = date.today()
+    salida = {}
+    for s in suscriptores:
+        correo = s.get("email")
+        cuando = s.get("fecha_consentimiento")
+        if not correo or not cuando:
+            continue
+        try:
+            inicio = datetime.fromisoformat(str(cuando)[:19]).date()
+        except ValueError:
+            continue
+        salida[correo] = 7 - (hoy - inicio).days
     return salida
 
 
@@ -1957,17 +1990,19 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         if quedan >= 1:
             verbo, dia = ("queda", "día") if quedan == 1 else ("quedan", "días")
             encabezado = f"Te {verbo} {quedan} {dia} de prueba"
-            cuerpo = ("Después el panel queda con lo que incluya tu plan. "
-                      "<strong>Este correo te sigue llegando igual.</strong>")
+            cuerpo = ("Contrata un plan para que estas alertas sigan llegando "
+                      "sin interrupción. <strong>Este correo te sigue llegando "
+                      "igual mientras decides.</strong>")
         elif quedan == 0:
             encabezado = "Hoy es el último día de tu prueba"
-            cuerpo = ("Mañana el panel queda con lo que incluya tu plan. "
-                      "<strong>Este correo te sigue llegando igual.</strong>")
+            cuerpo = ("Mañana necesitas un plan activo para seguir recibiendo "
+                      "tus alertas. <strong>Este correo te sigue llegando igual "
+                      "mientras decides.</strong>")
         else:
-            encabezado = "Tu prueba terminó"
-            cuerpo = ("Al entrar al panel te pedimos un dato y la extendemos, "
-                      "o escríbenos y lo vemos. <strong>Este correo te sigue "
-                      "llegando igual.</strong>")
+            encabezado = "Tu prueba gratis ya terminó"
+            cuerpo = ("Escríbenos por WhatsApp para contratar un plan y no "
+                      "perderte ninguna oportunidad. <strong>Este correo te "
+                      "sigue llegando igual mientras tanto.</strong>")
         bloque_prueba = f"""
   <tr>
     <td style="padding:14px 30px 4px;">
@@ -1980,8 +2015,8 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
           <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;margin-bottom:8px;">
             {cuerpo}
           </div>
-          <a href="{PANEL}" style="color:{MARINO};font-size:13px;font-weight:700;
-             text-decoration:none;">Entrar al panel &rsaquo;</a>
+          <a href="{CONTRATAR}" style="color:{MARINO};font-size:13px;font-weight:700;
+             text-decoration:none;">Ver planes y contratar &rsaquo;</a>
         </td></tr>
       </table>
     </td>
@@ -2173,9 +2208,12 @@ def main():
 
     print(f"{len(suscriptores)} suscriptor(es) activo(s)\n")
 
-    # Cuanto le queda de prueba a cada uno, para avisarlo en el correo.
-    # En la bienvenida no hace falta: recien empieza.
-    prueba = {} if args.bienvenidas else dias_de_prueba(suscriptores)
+    # Cuanto le queda de prueba a cada uno, para avisarlo en el correo. Los
+    # 7 dias prometidos en el bot y en la web, para cualquiera -tenga o no
+    # RUT-, no los 14 del acceso al Panel (dias_de_prueba(), que solo cubre
+    # a quien tiene cuenta ahi). En la bienvenida no hace falta: recien
+    # empieza. Pedido de Serling el 12-09-2026.
+    prueba = {} if args.bienvenidas else dias_de_prueba_territorio(suscriptores)
 
     # Se pregunta antes de cargar la bodega: si nadie espera su primer
     # correo, la corrida termina en segundos y no gasta nada.
