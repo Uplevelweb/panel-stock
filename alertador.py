@@ -118,7 +118,7 @@ PANEL = "https://panel-stock-uplevel.streamlit.app"
 # A donde manda el aviso de fin de prueba de Territorio (no es el Panel: la
 # mayoria de los suscriptores no tiene acceso a el). Pedido de Serling
 # 12-09-2026.
-CONTRATAR = "https://inteligencia.uplevelweb.art"
+CONTRATAR = "https://territorio.uplevelweb.art"
 
 # Palabras que aparecen en todas las licitaciones y no distinguen nada.
 VACIAS = {
