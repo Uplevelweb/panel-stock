@@ -247,6 +247,14 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
         "filtros(rubros,regiones,monto_minimo,frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
         "&activo=eq.true"
+        # Sin confirmar el correo, nada de nada: ni bienvenida ni diario.
+        # Hasta el 14-09-2026 esta consulta no lo exigia, asi que alguien
+        # podia inscribirse con un correo mal escrito -o ajeno- y de todas
+        # formas empezar a recibir el boletin diario sin haber tocado el
+        # enlace de confirmacion. El opt-in solo protegia el primer correo
+        # de bienvenida. Pedido de Serling el 14-09-2026: quien no confirma
+        # no recibe nada, ni ese dia ni ningun otro.
+        "&confirmado_en=not.is.null"
         # Si tiene un plan pagado y esta atrasado (al_dia=false), no recibe el
         # correo -salvo que haya un override manual puesto-. A quien esta en
         # prueba gratis (plan vacio) esto no le toca nada: al_dia por omision
