@@ -202,7 +202,15 @@ def _buscar_usuario(email: str) -> dict | None:
 
 def quien_soy() -> dict:
     """Quién entró y qué puede ver. Nunca revienta y nunca deja a nadie fuera."""
-    email = correo_de_quien_entro()
+    return _quien_es(correo_de_quien_entro())
+
+
+def _quien_es(email: str) -> dict:
+    """El mismo `quien_soy`, pero recibiendo el correo en vez de leerlo de
+    `st.user`. Separado el 15-09-2026 para que el camino del ticket (ver
+    `_verificar_ticket`/`puerta`) pueda usar la misma ficha sin pasar por
+    Auth0 -el correo, ahi, sale de la base, no de la sesion de Streamlit-.
+    """
     if not email:
         return dict(SIN_RESTRICCION, motivo="la app no identifica usuarios")
 
@@ -311,6 +319,22 @@ def _llaves_de_emergencia() -> set[str]:
     return {str(c).strip().lower() for c in lista if str(c).strip()}
 
 
+def _verificar_ticket(ticket: str) -> str:
+    """Cambia un ticket de Territorio por un correo, o "" si no sirve.
+
+    El ticket lo genera `panel_entrar_oportunidades` en la MISMA base de
+    Supabase (Territorio y Oportunidades comparten proyecto) cuando alguien
+    con sesion de super admin en Territorio hace clic en "Panel de
+    Oportunidades". Dura 10 minutos y es de un solo uso -se consume en la
+    propia funcion de Supabase, no aca-.
+    """
+    if not ticket:
+        return ""
+    resultado = _pedir("rpc/verificar_ticket_oportunidades", metodo="POST",
+                       cuerpo={"p_ticket": ticket})
+    return str(resultado).strip().lower() if resultado else ""
+
+
 def _portada(titulo: str, bajada: str) -> None:
     """La pantalla que se ve sin haber entrado. Sobria y en una columna."""
     izquierda, centro, derecha = st.columns([1, 2, 1])
@@ -333,8 +357,43 @@ def puerta() -> dict:
     Y para que «cerrado» no signifique «nadie puede arreglarlo», queda la
     llave de emergencia de los secretos.
     """
+    # 15-09-2026: entrada por TICKET desde el panel de Territorio -camino
+    # propio, sin Auth0-. Un clic alla genera un ticket de un solo uso (10
+    # min) que llega por la URL; se cambia por el correo del super admin y
+    # de ahi en mas sigue el mismo camino de siempre (`_quien_es`). Se
+    # guarda en `session_state` para que sobreviva a los reruns de
+    # Streamlit dentro de la misma pestaña -sin eso, cada clic perderia la
+    # sesion, porque Streamlit vuelve a correr el script entero-.
+    ticket = st.query_params.get("ticket")
+    if ticket and not st.session_state.get("_correo_ticket"):
+        correo_ticket = _verificar_ticket(ticket)
+        st.query_params.clear()
+        if correo_ticket:
+            st.session_state["_correo_ticket"] = correo_ticket
+        else:
+            _portada("Ese enlace ya no sirve",
+                     "Venció (dura 10 minutos) o ya se usó. Vuelve a hacer "
+                     "clic en \"Panel de Oportunidades\" desde tu panel de "
+                     "Territorio.")
+            st.stop()
+
+    if st.session_state.get("_correo_ticket"):
+        yo = _quien_es(st.session_state["_correo_ticket"])
+        if yo.get("identificado"):
+            return yo
+        _portada("No pudimos identificarte",
+                 "Vuelve a entrar desde tu panel de Territorio.")
+        st.stop()
+
     if not hay_login():
-        return quien_soy()          # todavia manda la lista de Streamlit
+        # Sin ticket y sin Auth0: ya no existe la lista de Streamlit que
+        # decidia quien entra -se saco a proposito, pedido de Serling el
+        # 15-09-2026, para no depender de un tercero-. La unica puerta real
+        # que queda es el panel de Territorio.
+        _portada("Entra desde tu panel de Territorio",
+                 "Este panel ya no se abre solo. Ve a "
+                 "territorio.uplevelweb.art/panel/ y entra desde ahí.")
+        st.stop()
 
     if not _entro():
         _portada("Uplevel Inteligencia",
