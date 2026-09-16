@@ -247,14 +247,6 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
         "filtros(rubros,regiones,monto_minimo,frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
         "&activo=eq.true"
-        # Sin confirmar el correo, nada de nada: ni bienvenida ni diario.
-        # Hasta el 14-09-2026 esta consulta no lo exigia, asi que alguien
-        # podia inscribirse con un correo mal escrito -o ajeno- y de todas
-        # formas empezar a recibir el boletin diario sin haber tocado el
-        # enlace de confirmacion. El opt-in solo protegia el primer correo
-        # de bienvenida. Pedido de Serling el 14-09-2026: quien no confirma
-        # no recibe nada, ni ese dia ni ningun otro.
-        "&confirmado_en=not.is.null"
         # Si tiene un plan pagado y esta atrasado (al_dia=false), no recibe el
         # correo -salvo que haya un override manual puesto-. A quien esta en
         # prueba gratis (plan vacio) esto no le toca nada: al_dia por omision
@@ -656,6 +648,56 @@ def terminos_del_rut(rut: str, oc: pd.DataFrame) -> tuple[set[str], list[str]]:
     return bolsa, list(convenios)
 
 
+def catalogo_publicado() -> dict[str, list[dict]]:
+    """
+    Lo que cada RUT tiene publicado HOY en Convenio Marco, segun el dato
+    abierto y oficial de ChileCompra -no lo que vendio antes, lo que TIENE
+    PUBLICADO-. Lo llena `catalogo_convenio_marco.py`, una vez por semana.
+
+    Una sola consulta para todos los suscriptores, igual que `configuracion`.
+    Falla abierto: sin tabla o sin Supabase, vuelve vacio y cada suscriptor
+    sigue con lo que ya tenia antes de esto (su historial de ventas, o nada).
+    """
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave):
+        return {}
+    try:
+        consulta = (f"{url}/rest/v1/convenio_marco_publicado"
+                    "?select=rut_proveedor,convenio_marco,producto")
+        peticion = urllib.request.Request(consulta, headers={
+            "apikey": clave,
+            "Authorization": f"Bearer {clave}",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+            filas = json.loads(respuesta.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+    por_rut: dict[str, list[dict]] = {}
+    for fila in filas:
+        por_rut.setdefault(fila["rut_proveedor"], []).append(fila)
+    return por_rut
+
+
+def terminos_del_catalogo(filas: list[dict]) -> tuple[set[str], list[str]]:
+    """
+    Las palabras que describen lo que ese RUT tiene publicado, con la misma
+    regla que `terminos_del_rut`: solo las que se repiten en 3 o mas
+    productos, para que un producto suelto no meta ruido.
+    """
+    if not filas:
+        return set(), []
+    convenios = convenios_de(pd.Series([f.get("convenio_marco") for f in filas]))
+    veces: dict[str, int] = {}
+    for fila in filas:
+        for termino in palabras(fila.get("producto") or ""):
+            veces[termino] = veces.get(termino, 0) + 1
+    bolsa = {t for t, n in veces.items() if n >= 3}
+    return bolsa, list(convenios)
+
+
 def quitar_palabras_de_todos(bolsa: set[str], universo: list[dict], techo: float = 0.12) -> set[str]:
     """
     Saca de la bolsa las palabras que aparecen en casi todo.
@@ -679,16 +721,33 @@ def quitar_palabras_de_todos(bolsa: set[str], universo: list[dict], techo: float
     return {t for t in bolsa if veces.get(t, 0) <= limite}
 
 
-def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame) -> tuple[set[str], list[str], str]:
+def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame,
+                       catalogo: dict[str, list[dict]] | None = None) -> tuple[set[str], list[str], str]:
     """
-    Junta las tres maneras en una sola bolsa.
+    Junta las maneras en una sola bolsa.
     Devuelve (terminos, convenios, de donde salieron) para poder explicarlo.
+
+    EL RUT TIENE DOS FUENTES POSIBLES Y NUNCA SE MEZCLAN (pedido de Serling,
+    16-09-2026: «solo una para no cruzar informacion»). Si ChileCompra dice
+    que ese RUT tiene Convenio Marco publicado HOY, se usa ESO -es el dato
+    mas exacto que existe, lo mantiene ChileCompra, no nosotros-. Solo si el
+    RUT no aparece ahi -no es proveedor adjudicado, o le compran a traves de
+    otro- se cae al historial de lo que ya vendio, que es mas ancho pero mas
+    adivinado.
     """
     bolsa: set[str] = set()
     convenios: list[str] = []
     origen = []
 
-    if suscriptor.get("rut_proveedor"):
+    rut = solo_digitos_rut(suscriptor.get("rut_proveedor") or "")
+    filas_catalogo = (catalogo or {}).get(rut) if rut else None
+
+    if filas_catalogo:
+        del_catalogo, convenios = terminos_del_catalogo(filas_catalogo)
+        if del_catalogo:
+            bolsa |= del_catalogo
+            origen.append(f"catalogo oficial ({len(filas_catalogo)} productos)")
+    elif suscriptor.get("rut_proveedor"):
         del_rut, convenios = terminos_del_rut(suscriptor["rut_proveedor"], oc)
         if del_rut:
             bolsa |= del_rut
@@ -2247,6 +2306,10 @@ def main():
     print(f"  {lineas:,} lineas en {len(oc):,} filas\n".replace(",", "."))
     print("[tiempo] bodega: %.0f s" % (time.perf_counter() - marca))
 
+    catalogo = catalogo_publicado()
+    if catalogo:
+        print(f"Catalogo oficial de Convenio Marco: {len(catalogo)} RUT con productos publicados\n")
+
     # --- la bolsa de cada uno, ANTES de pedir nada ---
     # La union de todas sirve para descartar de una sola pasada lo que no le
     # interesa a nadie, que es la enorme mayoria. Sin eso habria que pedir el
@@ -2255,7 +2318,7 @@ def main():
     bolsas: dict[str, tuple] = {}
     union: set[str] = set()
     for suscriptor in suscriptores:
-        bolsa, convenios, origen = bolsa_de_terminos(suscriptor, oc)
+        bolsa, convenios, origen = bolsa_de_terminos(suscriptor, oc, catalogo)
         bolsas[suscriptor["email"]] = (bolsa, convenios, origen)
         union |= bolsa
     print(f"Bolsa comun de todos los suscriptores: {len(union)} terminos\n")
