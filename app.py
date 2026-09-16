@@ -5646,10 +5646,17 @@ def main() -> None:
             catalogo = cargar_unidades(_sello())
             if catalogo.empty:
                 regiones_posibles, comunas_posibles = [], []
+                organismos_posibles, unidades_posibles = [], []
             else:
                 regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
                 comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
-            seccion_equipo(yo, regiones_posibles, comunas_posibles)
+                # 15-09-2026, pedido de Serling: ademas de region/comuna, se
+                # puede asignar un cliente (organismo) o una unidad de compra
+                # puntual. Mismo catalogo de siempre, sin leer nada de mas.
+                organismos_posibles = sorted({str(o) for o in catalogo["nombre_organismo"] if str(o).strip()})
+                unidades_posibles = sorted({str(u) for u in catalogo["nombre_unidad"] if str(u).strip()})
+            seccion_equipo(yo, regiones_posibles, comunas_posibles,
+                          organismos_posibles, unidades_posibles)
     if "soporte" in pestanas:
         with pestanas["soporte"]:
             from modulo_cuentas import seccion_soporte
