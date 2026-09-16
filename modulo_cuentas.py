@@ -88,6 +88,8 @@ SIN_RESTRICCION = {
     "rut": "",
     "regiones": [],
     "comunas": [],
+    "organismos": [],
+    "unidades": [],
     # `soporte` ve todos los modulos. Es a proposito: si no se supo el plan
     # —consulta caida, cuenta vieja sin la columna— es mucho peor dejar a un
     # cliente que paga sin su pestaña que mostrarle de mas por un rato.
@@ -189,12 +191,18 @@ def _buscar_usuario(email: str) -> dict | None:
     # PostgREST responde error y se vuelve a preguntar por lo minimo. Asi no
     # importa el orden en que se hagan las cosas: sin las columnas el panel
     # funciona igual, solo que sin muro de prueba ni modulos extra.
-    base = ("usuarios?select=email,nombre,rol,regiones,comunas,activo,cuenta_id,"
-            "cuentas(nombre,rut,activa,plan{mas})"
+    base = ("usuarios?select=email,nombre,rol,regiones,comunas{territorio}"
+            ",activo,cuenta_id,cuentas(nombre,rut,activa,plan{mas})"
             f"&email={urllib.parse.quote('eq.' + email)}&limit=1")
-    filas = _pedir(base.format(mas=",hasta,extensiones,modulos_extra"))
+    filas = _pedir(base.format(mas=",hasta,extensiones,modulos_extra",
+                               territorio=",organismos,unidades"))
     if filas is None:
-        filas = _pedir(base.format(mas=""))
+        filas = _pedir(base.format(mas="", territorio=",organismos,unidades"))
+    if filas is None:
+        # `organismos`/`unidades` -pedido de Serling el 15-09-2026- todavia
+        # no existen: se pregunta sin ellas, igual que ya pasaba con el muro
+        # de prueba antes de pegar su SQL.
+        filas = _pedir(base.format(mas="", territorio=""))
     if filas is None:
         return None
     return filas[0] if filas else {}
@@ -259,6 +267,8 @@ def _quien_es(email: str) -> dict:
         "rut": empresa.get("rut") or "",
         "regiones": list(ficha.get("regiones") or []),
         "comunas": list(ficha.get("comunas") or []),
+        "organismos": list(ficha.get("organismos") or []),
+        "unidades": list(ficha.get("unidades") or []),
         # El plan decide que pestañas se dibujan. Vive en la cuenta, no en el
         # usuario: los comerciales de una empresa ven lo mismo que su jefe.
         "plan": str(empresa.get("plan") or "soporte"),
@@ -461,23 +471,40 @@ def tiene_territorio(usuario: dict) -> bool:
     """
     if usuario.get("rol") in ("admin", "superadmin"):
         return False
-    return bool(usuario.get("regiones") or usuario.get("comunas"))
+    return bool(usuario.get("regiones") or usuario.get("comunas")
+                or usuario.get("organismos") or usuario.get("unidades"))
 
 
 def filtrar_por_territorio(tabla: pd.DataFrame, usuario: dict,
                            columna_region: str = "region",
-                           columna_comuna: str = "comuna") -> pd.DataFrame:
+                           columna_comuna: str = "comuna",
+                           columna_organismo: str = "organismo",
+                           columna_unidad: str = "unidad") -> pd.DataFrame:
     """Deja solo las filas que le tocan a esa persona.
 
     UN SOLO LUGAR PARA ESTA REGLA, a proposito. Repartida por las pantallas,
     tarde o temprano una se olvida y ahi el comercial de Antofagasta ve la
     cartera de Santiago sin que nadie se entere.
 
-    Si tiene comunas asignadas mandan las comunas —es el caso de partir la
-    Region Metropolitana entre dos personas— y si no, las regiones.
+    Orden de lo mas especifico a lo mas amplio -manda lo primero que tenga
+    algo asignado-: unidades de compra exactas > organismos (clientes) >
+    comunas exactas > regiones. Pedido de Serling el 15-09-2026: antes solo
+    se podia repartir por region/comuna; ahora tambien por cliente puntual
+    o unidad compradora puntual, para el caso de "esta cuenta puntual es
+    tuya" sin importar en que comuna quede.
     """
     if tabla.empty or not tiene_territorio(usuario):
         return tabla
+
+    unidades = {str(u).strip().lower() for u in usuario.get("unidades") or []}
+    if unidades and columna_unidad in tabla.columns:
+        suyas = tabla[columna_unidad].astype(str).str.strip().str.lower()
+        return tabla[suyas.isin(unidades)]
+
+    organismos = {str(o).strip().lower() for o in usuario.get("organismos") or []}
+    if organismos and columna_organismo in tabla.columns:
+        suyas = tabla[columna_organismo].astype(str).str.strip().str.lower()
+        return tabla[suyas.isin(organismos)]
 
     comunas = {str(c).strip().lower() for c in usuario.get("comunas") or []}
     if comunas and columna_comuna in tabla.columns:
@@ -501,6 +528,10 @@ def resumen_de_territorio(usuario: dict) -> str:
         return "todas las cuentas (soporte Uplevel)"
     if usuario.get("rol") == "admin":
         return "toda la empresa"
+    if usuario.get("unidades"):
+        return f"{len(usuario['unidades'])} unidades de compra"
+    if usuario.get("organismos"):
+        return f"{len(usuario['organismos'])} clientes"
     if usuario.get("comunas"):
         return f"{len(usuario['comunas'])} comunas"
     if usuario.get("regiones"):
@@ -512,7 +543,9 @@ def resumen_de_territorio(usuario: dict) -> str:
 #  La pantalla del admin
 # --------------------------------------------------------------------------
 def _guardar_usuario(cuenta_id: str, email: str, nombre: str, rol: str,
-                     regiones: list, comunas: list, creado_por: str) -> tuple[bool, str]:
+                     regiones: list, comunas: list, creado_por: str,
+                     organismos: list | None = None,
+                     unidades: list | None = None) -> tuple[bool, str]:
     """Da de alta o actualiza a una persona del equipo."""
     email = str(email).strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
@@ -539,6 +572,8 @@ def _guardar_usuario(cuenta_id: str, email: str, nombre: str, rol: str,
         "rol": rol,
         "regiones": regiones or [],
         "comunas": comunas or [],
+        "organismos": organismos or [],
+        "unidades": unidades or [],
         "activo": True,
         "creado_por": creado_por,
     }], extra={"Prefer": "return=representation,resolution=merge-duplicates"})
@@ -574,7 +609,9 @@ def _cambiar_estado(email: str, activo: bool) -> bool:
 
 
 def seccion_equipo(usuario: dict, regiones_posibles: list[str],
-                   comunas_posibles: list[str]) -> None:
+                   comunas_posibles: list[str],
+                   organismos_posibles: list[str] | None = None,
+                   unidades_posibles: list[str] | None = None) -> None:
     """La pantalla donde el admin arma su equipo. Solo la ve el admin."""
     st.subheader("Mi equipo")
 
@@ -617,18 +654,37 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
 
     st.caption(f"Empresa **{usuario['empresa']}** · RUT {usuario['rut']}")
 
-    filas = _pedir(f"usuarios?select=email,nombre,rol,regiones,comunas,activo"
+    filas = _pedir(f"usuarios?select=email,nombre,rol,regiones,comunas,"
+                   f"organismos,unidades,activo"
                    f"&cuenta_id=eq.{usuario['cuenta_id']}&order=rol,email")
+    con_territorio_nuevo = filas is not None
+    if filas is None:
+        # `organismos`/`unidades` todavia no existen -SQL sin pegar-: se
+        # pregunta sin ellas, mismo patron defensivo que `_buscar_usuario`.
+        filas = _pedir(f"usuarios?select=email,nombre,rol,regiones,comunas,activo"
+                       f"&cuenta_id=eq.{usuario['cuenta_id']}&order=rol,email")
     if filas is None:
         st.error("No se pudo leer el equipo. Revisa las credenciales de Supabase.")
         return
 
     equipo = pd.DataFrame(filas)
+    if not con_territorio_nuevo:
+        equipo["organismos"] = [[] for _ in range(len(equipo))]
+        equipo["unidades"] = [[] for _ in range(len(equipo))]
     if not equipo.empty:
         vista = equipo.copy()
+        def _describir_territorio(u, o, c, r):
+            if u:
+                return f"{len(u)} unidades de compra"
+            if o:
+                return f"{len(o)} clientes"
+            if c:
+                return f"{len(c)} comunas"
+            return ", ".join(r) if r else "toda la empresa"
         vista["territorio"] = [
-            f"{len(c)} comunas" if c else (", ".join(r) if r else "toda la empresa")
-            for r, c in zip(vista["regiones"], vista["comunas"])]
+            _describir_territorio(u, o, c, r)
+            for u, o, c, r in zip(vista["unidades"], vista["organismos"],
+                                   vista["comunas"], vista["regiones"])]
         vista["estado"] = ["activo" if a else "desactivado" for a in vista["activo"]]
         st.dataframe(
             vista[["email", "nombre", "rol", "territorio", "estado"]],
@@ -669,11 +725,21 @@ def seccion_equipo(usuario: dict, regiones_posibles: list[str],
             "…o comunas exactas", options=comunas_posibles,
             help="Solo si hay que partir una región entre dos personas. Si "
                  "pones comunas, mandan las comunas y se ignoran las regiones.")
+        elegidos_organismos = st.multiselect(
+            "…o clientes puntuales (organismos)", options=organismos_posibles or [],
+            help="Para asignar una cuenta puntual sin importar en qué comuna "
+                 "quede. Si pones clientes, mandan por sobre comunas y regiones.")
+        elegidas_unidades = st.multiselect(
+            "…o unidades de compra exactas", options=unidades_posibles or [],
+            help="Lo más específico de todo: una unidad compradora puntual "
+                 "dentro de un organismo grande. Si pones unidades, mandan "
+                 "por sobre todo lo demás.")
 
         if st.form_submit_button("Guardar", type="primary"):
             bien, aviso = _guardar_usuario(
                 usuario["cuenta_id"], correo, nombre, rol,
-                elegidas_regiones, elegidas_comunas, usuario["email"])
+                elegidas_regiones, elegidas_comunas, usuario["email"],
+                elegidos_organismos, elegidas_unidades)
             if bien:
                 _buscar_usuario.clear()
                 if es_correo_personal(correo):
