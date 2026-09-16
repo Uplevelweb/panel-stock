@@ -1,0 +1,39 @@
+# Baja el catalogo OFICIAL de Convenio Marco de ChileCompra y guarda solo lo
+# que corresponde a los RUT de los suscriptores de Territorio.
+#
+# ChileCompra actualiza su dato los martes; esto corre los miercoles a las
+# 05:00 UTC (02:00 en Chile), un dia despues, para no pedirlo a medio subir.
+# No gasta el TICKET_MP: es un archivo publico, no la API con cupo diario.
+
+name: Catalogo Convenio Marco
+
+on:
+  schedule:
+    - cron: "0 5 * * 3"   # miercoles 02:00 Chile
+  workflow_dispatch:        # y tambien a mano, con el boton "Run workflow"
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        # pyarrow tambien, porque el script importa alertador.py (para
+        # reusar configuracion() y solo_digitos_rut()) y ese modulo lee
+        # parquet.
+        run: pip install pandas pyarrow
+
+      - name: Actualizar el catalogo
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python catalogo_convenio_marco.py
