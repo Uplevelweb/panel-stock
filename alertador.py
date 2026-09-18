@@ -2856,12 +2856,12 @@ def main():
                 if args.bienvenidas:
                     marcar_bienvenida(suscriptor)
 
-                # WhatsApp para plan Premium, Y TAMBIEN durante los 7 dias
-                # de prueba gratis de Territorio (pedido de Serling,
-                # 17-09-2026): sin probarlo, nadie elige Premium por sobre
-                # Plus. El costo por Meta es de centavos (~10-20 CLP el
-                # mensaje), asi que regalarlo en la prueba no pesa, y el
-                # dato de "quedan" ya se calculo arriba para el banner del
+                # WhatsApp para planes Plus y Premium, Y TAMBIEN durante los
+                # 7 dias de prueba gratis de Territorio (pedido de Serling,
+                # 17-09-2026): sin probarlo, nadie sube de Inicio (solo
+                # correo) a Plus. El costo por Meta es de centavos (~10-20
+                # CLP el mensaje), asi que regalarlo en la prueba no pesa, y
+                # el dato de "quedan" ya se calculo arriba para el banner del
                 # correo -no se vuelve a consultar nada nuevo-.
                 #
                 # SOLO si dejo RUT (sin RUT no hay cuenta que consultar: ver
@@ -2872,12 +2872,20 @@ def main():
                         quedan_prueba = prueba.get(suscriptor.get("email"))
                         en_prueba = quedan_prueba is not None and quedan_prueba >= 0
                         cuenta = cuenta_de_rut(suscriptor["rut_empresa"])
-                        es_premium = bool(cuenta and cuenta.get("plan") == "premium")
-                        if cuenta and cuenta.get("telefono") and (es_premium or en_prueba):
+                        # WhatsApp diario es de Plus para arriba (pedido de
+                        # Serling, 17-09-2026): asi el plan Inicio ($19.990,
+                        # solo correo) tiene un motivo concreto para subir a
+                        # Plus ($49.990), y Premium (desde $159.990) sigue
+                        # siendo el salto siguiente por lo demas que ya trae
+                        # -plataforma Territorio, envio masivo, horas de
+                        # atencion-, no por el WhatsApp en si.
+                        tiene_whatsapp_diario = bool(
+                            cuenta and cuenta.get("plan") in ("plus", "premium"))
+                        if cuenta and cuenta.get("telefono") and (tiene_whatsapp_diario or en_prueba):
                             enviar_whatsapp_resumen(
                                 cuenta["telefono"], suscriptor.get("nombre"), len(elegidas))
                     except Exception as error:
-                        print(f"   no se pudo evaluar el whatsapp premium: {error}")
+                        print(f"   no se pudo evaluar el whatsapp plus/premium: {error}")
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
