@@ -2479,13 +2479,18 @@ def enlace(op: dict) -> str:
 #  esta aprobada todavia, o si falta el telefono, no se manda nada y el
 #  correo (que es lo principal) sale igual.
 #
-#  LA PLANTILLA A SOMETER EN META (WhatsApp Manager > Cuenta > Plantillas):
+#  LA PLANTILLA SOMETIDA EN META (WhatsApp Manager > Cuenta > Plantillas),
+#  ya enviada a revision el 17-09-2026, estado "En revision":
 #    Nombre:    alerta_oportunidades_diaria
-#    Categoria: UTILITY  (no Marketing: no vende nada, avisa de su cuenta)
-#    Idioma:    Español
-#    Cuerpo:    "Hola {{1}}, hoy encontramos {{2}} oportunidad(es) de
-#                Mercado Público que calzan con tu negocio. Revisa el
+#    Categoria: UTILITY (aceptada por el clasificador de Meta)
+#    Idioma:    Español (Chile)
+#    Cuerpo:    "Hola {{1}}: tu resumen diario de Territorio ya esta listo,
+#                con {{2}} oportunidad(es) nueva(s) en tu cuenta. Revisa el
 #                detalle en tu correo o en tu panel de Territorio."
+#  Nota: la primera redaccion ("hoy encontramos {{2}} oportunidad(es) que
+#  calzan con tu negocio...") la marco Meta como posible Marketing porque
+#  sonaba a promocion; se reescribio como aviso de estado de cuenta y asi
+#  quedo aceptada en Utilidad, que es mucho mas barata por mensaje.
 #  Los nombres de variable y el orden de {{1}}/{{2}} tienen que calzar
 #  EXACTO con `parametros` mas abajo, o Meta la rechaza en el envio.
 # ======================================================================
