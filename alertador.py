@@ -51,6 +51,8 @@ Necesita en el entorno: TICKET_MP, RESEND_API_KEY y, si la configuracion vive
 en Supabase, SUPABASE_URL y SUPABASE_SECRET_KEY.
 """
 import argparse
+import base64
+import io
 import json
 import os
 import re
@@ -62,6 +64,10 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 import pandas as pd
 
@@ -2183,8 +2189,220 @@ def destinatarios(suscriptor: dict) -> list[str]:
     return [x for x in lista if "@" in x][:50]
 
 
-def enviar(a_quienes: list[str], asunto: str, html: str) -> bool:
-    """Un correo por Resend, a uno o varios. Devuelve si salio."""
+# ======================================================================
+#  EL ADJUNTO: las oportunidades de hoy, en el MISMO formato exacto de
+#  la plantilla de seguimiento que se regala en Territorio (columnas,
+#  colores y hoja Resumen identicos a generar_plantilla_seguimiento.py).
+#  Pedido de Serling (17-09-2026): el cliente configura su rubro UNA vez
+#  al registrarse, y de ahi en adelante recibe este archivo cada dia con
+#  todo lo de hoy ya cargado. Lo que haga con el -copiarlo a su propia
+#  planilla, descartar filas- es enteramente suyo; no se automatiza.
+# ======================================================================
+
+XLS_MARINO = "0C2C57"
+XLS_MARINO_HONDO = "081F3E"
+XLS_NARANJO = "F18C3F"
+XLS_BLANCO = "FFFFFF"
+XLS_GRIS_TEXTO = "425A76"
+
+XLS_ETAPAS = ["Por revisar", "Siguiendo", "Ofertando", "Ganada", "Perdida", "Descartada"]
+XLS_COLOR_ETAPA = {
+    "Por revisar": "D9E4F5",
+    "Siguiendo": "FCEBD5",
+    "Ofertando": "FBD9B0",
+    "Ganada": "D7F0E2",
+    "Perdida": "F6D6D2",
+    "Descartada": "E4E7EC",
+}
+
+
+def construir_adjunto_seguimiento_xlsx(elegidas: list[dict], bolsa: set[str]) -> bytes:
+    """Arma el .xlsx de hoy, mismo formato que plantilla_seguimiento_territorio.xlsx.
+
+    Cada oportunidad elegida para ESTE suscriptor entra como una fila, ya en
+    "Por revisar". La columna Rubro lleva las palabras que hicieron calzar la
+    oportunidad (por_que_calzo): es lo mas parecido a "por que esto es tuyo"
+    que hay disponible, sin inventar un dato que la API no entrega.
+
+    "Publicada" queda en blanco a proposito: ni la API de licitaciones ni la
+    de compras agiles entregan la fecha de publicacion de cada oportunidad
+    (ver bitacora), y la columna existe para que el formato calce con el de
+    la plantilla madre, no para forzar un dato que no se tiene.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Seguimiento"
+
+    columnas = [
+        ("N° de proceso", 16), ("Institución / Comprador", 30), ("Rubro", 22),
+        ("Tipo", 14), ("Publicada", 13), ("Cierra", 13),
+        ("Monto estimado", 16), ("Estado", 14), ("Observaciones", 45),
+    ]
+
+    ws.merge_cells("A1:I1")
+    ws["A1"] = "Territorio · Oportunidades de hoy"
+    ws["A1"].font = Font(name="Calibri", size=14, bold=True, color=XLS_BLANCO)
+    ws["A1"].fill = PatternFill("solid", fgColor=XLS_MARINO)
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:I2")
+    ws["A2"].fill = PatternFill("solid", fgColor=XLS_NARANJO)
+    ws.row_dimensions[2].height = 4
+
+    ws.merge_cells("A3:I3")
+    ws["A3"] = ("Esto es lo que llegó en tu correo de hoy, en el mismo formato de tu "
+                "plantilla de seguimiento. Cópialo a tu planilla real y sigue tu avance ahí.")
+    ws["A3"].font = Font(name="Calibri", size=10, italic=True, color=XLS_GRIS_TEXTO)
+    ws["A3"].alignment = Alignment(horizontal="left", vertical="center", indent=1, wrap_text=True)
+    ws.row_dimensions[3].height = 30
+
+    col = 1
+    for etapa, color in XLS_COLOR_ETAPA.items():
+        celda = ws.cell(row=4, column=col, value=etapa)
+        celda.fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+        celda.font = Font(name="Calibri", size=9, bold=True, color=XLS_MARINO_HONDO)
+        celda.alignment = Alignment(horizontal="center", vertical="center")
+        col += 1
+    ws.cell(row=4, column=9, value="↑ el color se pone solo").font = Font(
+        name="Calibri", size=9, italic=True, color=XLS_GRIS_TEXTO)
+    ws.cell(row=4, column=9).alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[4].height = 20
+
+    fila_encabezado = 5
+    for i, (nombre, ancho) in enumerate(columnas, start=1):
+        celda = ws.cell(row=fila_encabezado, column=i, value=nombre)
+        celda.font = Font(name="Calibri", size=10.5, bold=True, color=XLS_BLANCO)
+        celda.fill = PatternFill("solid", fgColor=XLS_MARINO_HONDO)
+        celda.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(i)].width = ancho
+    ws.row_dimensions[fila_encabezado].height = 32
+
+    borde_fino = Border(*(Side(style="thin", color="D8DEE6") for _ in range(4)))
+    primera_fila_datos = fila_encabezado + 1
+
+    filas = []
+    for op in elegidas:
+        tipo = "Licitación" if op.get("tipo") == "licitacion" else "Compra Ágil"
+        cierre = op.get("cierre") or ""
+        cierre_fecha = None
+        if cierre:
+            try:
+                cierre_fecha = datetime.strptime(cierre[:10], "%Y-%m-%d").date()
+            except ValueError:
+                cierre_fecha = None
+        observaciones = (op.get("enlace") or enlace(op) or "")
+        filas.append([
+            op.get("codigo") or "",
+            op.get("organismo") or op.get("nombre_unidad") or "",
+            por_que_calzo(op, bolsa) or "",
+            tipo,
+            None,  # Publicada: no disponible en la API, ver docstring.
+            cierre_fecha or cierre,
+            float(op.get("monto") or 0) or None,
+            "Por revisar",
+            observaciones,
+        ])
+
+    ultima_fila_tabla = primera_fila_datos + max(len(filas), 1) + 20
+
+    for offset, fila in enumerate(filas):
+        r = primera_fila_datos + offset
+        for c, valor in enumerate(fila, start=1):
+            celda = ws.cell(row=r, column=c, value=valor)
+            celda.border = borde_fino
+            celda.alignment = Alignment(vertical="center", wrap_text=(c == 9))
+            if c in (5, 6) and isinstance(valor, date):
+                celda.number_format = "DD-MM-YYYY"
+            if c == 7 and valor is not None:
+                celda.number_format = '$#,##0'
+            if c == 9:
+                celda.font = Font(name="Calibri", size=10, color=XLS_GRIS_TEXTO)
+
+    for r in range(primera_fila_datos + len(filas), ultima_fila_tabla + 1):
+        for c in range(1, 10):
+            celda = ws.cell(row=r, column=c)
+            celda.border = borde_fino
+            if c in (5, 6):
+                celda.number_format = "DD-MM-YYYY"
+            if c == 7:
+                celda.number_format = '$#,##0'
+
+    ws.freeze_panes = f"A{primera_fila_datos}"
+    ws.sheet_view.showGridLines = False
+
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.formatting.rule import CellIsRule
+
+    rango_tipo = f"D{primera_fila_datos}:D{ultima_fila_tabla}"
+    dv_tipo = DataValidation(type="list", formula1='"Licitación,Compra Ágil,Convenio Marco"', allow_blank=True)
+    ws.add_data_validation(dv_tipo)
+    dv_tipo.add(rango_tipo)
+
+    rango_estado = f"H{primera_fila_datos}:H{ultima_fila_tabla}"
+    dv_estado = DataValidation(type="list", formula1=f'"{",".join(XLS_ETAPAS)}"', allow_blank=True)
+    ws.add_data_validation(dv_estado)
+    dv_estado.add(rango_estado)
+
+    for etapa, color in XLS_COLOR_ETAPA.items():
+        ws.conditional_formatting.add(
+            rango_estado,
+            CellIsRule(operator="equal", formula=[f'"{etapa}"'],
+                       fill=PatternFill(start_color=color, end_color=color, fill_type="solid")))
+
+    # --- Hoja 2: Resumen, identica en formula a la plantilla madre ---
+    rs = wb.create_sheet("Resumen")
+    rs.sheet_view.showGridLines = False
+    for col_letra, ancho in zip("ABCDE", [26, 16, 16, 16, 40]):
+        rs.column_dimensions[col_letra].width = ancho
+
+    rs.merge_cells("A1:E1")
+    rs["A1"] = "Territorio · Resumen de hoy"
+    rs["A1"].font = Font(name="Calibri", size=14, bold=True, color=XLS_BLANCO)
+    rs["A1"].fill = PatternFill("solid", fgColor=XLS_MARINO)
+    rs["A1"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    rs.row_dimensions[1].height = 28
+
+    rs.merge_cells("A2:E2")
+    rs["A2"].fill = PatternFill("solid", fgColor=XLS_NARANJO)
+    rs.row_dimensions[2].height = 4
+
+    rango_datos = f"Seguimiento!$H${primera_fila_datos}:$H${ultima_fila_tabla}"
+    rango_monto = f"Seguimiento!$G${primera_fila_datos}:$G${ultima_fila_tabla}"
+
+    fila_tabla = 5
+    for c, titulo in enumerate(["Etapa", "Cantidad", "Monto asociado"], start=1):
+        rs.cell(row=fila_tabla, column=c, value=titulo).font = Font(bold=True, color=XLS_BLANCO)
+        rs.cell(row=fila_tabla, column=c).fill = PatternFill("solid", fgColor=XLS_MARINO_HONDO)
+        rs.cell(row=fila_tabla, column=c).alignment = Alignment(horizontal="center")
+
+    for i, etapa in enumerate(XLS_ETAPAS):
+        r = fila_tabla + 1 + i
+        rs.cell(row=r, column=1, value=etapa)
+        rs.cell(row=r, column=1).fill = PatternFill("solid", fgColor=XLS_COLOR_ETAPA[etapa])
+        rs.cell(row=r, column=2, value=f'=COUNTIF({rango_datos},A{r})').alignment = Alignment(horizontal="center")
+        rs.cell(row=r, column=3, value=f'=SUMIF({rango_datos},A{r},{rango_monto})').number_format = '$#,##0'
+
+    r_total = fila_tabla + 1 + len(XLS_ETAPAS)
+    rs.cell(row=r_total, column=1, value="Total").font = Font(bold=True)
+    rs.cell(row=r_total, column=2, value=f"=SUM(B{fila_tabla+1}:B{r_total-1})").font = Font(bold=True)
+    rs.cell(row=r_total, column=2).alignment = Alignment(horizontal="center")
+    rs.cell(row=r_total, column=3, value=f"=SUM(C{fila_tabla+1}:C{r_total-1})").font = Font(bold=True)
+    rs.cell(row=r_total, column=3).number_format = '$#,##0'
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def enviar(a_quienes: list[str], asunto: str, html: str,
+          adjunto: tuple[str, bytes] | None = None) -> bool:
+    """Un correo por Resend, a uno o varios. Devuelve si salio.
+
+    `adjunto` es (nombre_de_archivo, contenido_en_bytes); Resend lo pide en
+    base64 dentro de `attachments`. Opcional: sin el, el correo sale igual
+    que siempre.
+    """
     clave = os.environ.get("RESEND_API_KEY", "").strip()
     if not clave:
         print("  falta RESEND_API_KEY")
@@ -2193,12 +2411,20 @@ def enviar(a_quienes: list[str], asunto: str, html: str) -> bool:
         print("  no hay a quien enviarlo")
         return False
 
-    cuerpo = json.dumps({
+    mensaje = {
         "from": "Uplevel Alertas <alertas@uplevelweb.art>",
         "to": a_quienes,
         "subject": asunto,
         "html": html,
-    }).encode("utf-8")
+    }
+    if adjunto:
+        nombre_archivo, contenido = adjunto
+        mensaje["attachments"] = [{
+            "filename": nombre_archivo,
+            "content": base64.b64encode(contenido).decode("ascii"),
+        }]
+
+    cuerpo = json.dumps(mensaje).encode("utf-8")
 
     # EL User-Agent NO ES DECORATIVO: sin el, Cloudflare —que protege a
     # Resend— responde «403 · error code: 1010», que significa «tu navegador
@@ -2482,7 +2708,17 @@ def main():
                 continue
             a_quienes = destinatarios(suscriptor)
             print(f"   va a: {', '.join(a_quienes)}")
-            if enviar(a_quienes, asunto, html):
+            # El adjunto es el mismo formato de la plantilla de seguimiento,
+            # ya cargado con lo de hoy. Falla abierto: si algo revienta
+            # armando el Excel, el correo sale igual, solo que sin el
+            # adjunto -no vale la pena perder la alerta por eso-.
+            adjunto = None
+            try:
+                xlsx = construir_adjunto_seguimiento_xlsx(elegidas, bolsa)
+                adjunto = (f"Oportunidades de hoy - {datetime.now():%d-%m-%Y}.xlsx", xlsx)
+            except Exception as error:
+                print(f"   no se pudo armar el adjunto xlsx: {error}")
+            if enviar(a_quienes, asunto, html, adjunto=adjunto):
                 enviados_hoy += 1
                 # Se anota DESPUES de que salio, nunca antes: si el envio
                 # falla, esas oportunidades tienen que poder salir manana.
