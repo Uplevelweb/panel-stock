@@ -2851,14 +2851,24 @@ def main():
                 if args.bienvenidas:
                     marcar_bienvenida(suscriptor)
 
-                # WhatsApp SOLO para plan Premium, y SOLO si dejo RUT (sin
-                # RUT no hay cuenta que consultar: ver alta-automatica).
-                # Nunca puede tumbar el correo, que ya salio: por eso va
-                # DESPUES y en su propio try.
+                # WhatsApp para plan Premium, Y TAMBIEN durante los 7 dias
+                # de prueba gratis de Territorio (pedido de Serling,
+                # 17-09-2026): sin probarlo, nadie elige Premium por sobre
+                # Plus. El costo por Meta es de centavos (~10-20 CLP el
+                # mensaje), asi que regalarlo en la prueba no pesa, y el
+                # dato de "quedan" ya se calculo arriba para el banner del
+                # correo -no se vuelve a consultar nada nuevo-.
+                #
+                # SOLO si dejo RUT (sin RUT no hay cuenta que consultar: ver
+                # alta-automatica). Nunca puede tumbar el correo, que ya
+                # salio: por eso va DESPUES y en su propio try.
                 if suscriptor.get("rut_empresa"):
                     try:
+                        quedan_prueba = prueba.get(suscriptor.get("email"))
+                        en_prueba = quedan_prueba is not None and quedan_prueba >= 0
                         cuenta = cuenta_de_rut(suscriptor["rut_empresa"])
-                        if cuenta and cuenta.get("plan") == "premium" and cuenta.get("telefono"):
+                        es_premium = bool(cuenta and cuenta.get("plan") == "premium")
+                        if cuenta and cuenta.get("telefono") and (es_premium or en_prueba):
                             enviar_whatsapp_resumen(
                                 cuenta["telefono"], suscriptor.get("nombre"), len(elegidas))
                     except Exception as error:
