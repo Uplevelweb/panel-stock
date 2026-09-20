@@ -250,6 +250,7 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
     consulta = (
         f"{url}/rest/v1/suscriptores"
         "?select=id,email,nombre,empresa,rut_empresa,token_baja,fecha_consentimiento,"
+        "plan,al_dia,telefono_contacto,prueba_vence,"
         "filtros(rubros,regiones,monto_minimo,frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
         "&activo=eq.true"
@@ -280,6 +281,10 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
             "rut_empresa": fila.get("rut_empresa"),
             "token_baja": fila.get("token_baja"),
             "fecha_consentimiento": (fila.get("fecha_consentimiento") or "")[:10],
+            "plan": fila.get("plan") or "",
+            "al_dia": fila.get("al_dia"),
+            "telefono_contacto": fila.get("telefono_contacto") or "",
+            "prueba_vence": fila.get("prueba_vence"),
             "rut_proveedor": f.get("rut_proveedor") or "",
             "correos_envio": f.get("correos_envio") or [],
             "hora_envio": int(f.get("hora_envio") or 8),
@@ -2129,7 +2134,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
           <img src="{LOGO}" alt="Uplevel" width="34" height="34"
                style="display:block;border:0;"></td>
         <td style="padding-left:12px;color:#ffffff;font-size:18px;
-                   font-weight:700;letter-spacing:.01em;">Uplevel Inteligencia</td>
+                   font-weight:700;letter-spacing:.01em;">Territorio · Sistema Inteligente de Alertas</td>
       </tr></table>
     </td>
   </tr>
@@ -2155,6 +2160,8 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
         actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
         ágiles y trato directo.<br><br>
+        <strong>No respondas este correo</strong>, nadie lo lee. ¿Necesitas soporte?
+        <a href="https://wa.me/56967329214?text=Necesito%20soporte" style="color:{MARINO};font-weight:600;">Escríbenos por WhatsApp</a>.<br><br>
         Uplevel · {rut} · Santiago, Chile<br>
         Recibes este correo porque te suscribiste{' el ' + desde if desde else ''}.<br>
         <a href="https://uplevelweb.art/baja?t={token}" style="color:{MARINO};">Cancelar suscripción</a> ·
@@ -2449,6 +2456,79 @@ def enviar(a_quienes: list[str], asunto: str, html: str,
         return False
 
 
+# --- La alerta por WhatsApp, ademas del correo (19-09-2026) -------------
+# Pedido de Serling: "si ofrecemos WhatsApp en los 7 dias de prueba y en
+# Plus/Premium, tiene que existir de verdad". El envio real -la plantilla
+# aprobada de Meta- vive en el bot (deploy-project/whatsapp-bot/server.js,
+# endpoint /tareas/enviar-alerta-whatsapp); esto solo decide QUIEN es
+# elegible hoy y le pide al bot que mande.
+def whatsapp_elegible(suscriptor: dict) -> bool:
+    """Plus/Premium activo y al dia (beneficio permanente), o dentro de la
+    prueba gratis -hasta prueba_vence, tope duro de 15 dias desde que
+    confirmo aunque Serling haya dado la excepcion de una segunda prueba."""
+    if not suscriptor.get("telefono_contacto"):
+        return False
+
+    plan = (suscriptor.get("plan") or "").lower()
+    if plan in ("plus", "premium") and suscriptor.get("al_dia") is not False:
+        return True
+
+    vence = suscriptor.get("prueba_vence")
+    if vence:
+        try:
+            limite = datetime.fromisoformat(str(vence).replace("Z", "+00:00"))
+            return datetime.now(timezone.utc) <= limite
+        except ValueError:
+            pass
+
+    # Respaldo si la columna aun no se lleno para esta fila (antes del
+    # 19-09-2026, o si prueba-15-dias-tope-para-copiar.txt no se ha pegado
+    # todavia): los 7 dias de siempre desde que se inscribio.
+    cuando = suscriptor.get("fecha_consentimiento")
+    if cuando:
+        try:
+            inicio = datetime.fromisoformat(str(cuando)[:10])
+            return (datetime.now() - inicio).days < 7
+        except ValueError:
+            pass
+    return False
+
+
+def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int | None) -> None:
+    """Le pide al bot que mande la plantilla de WhatsApp con el resumen de
+    hoy. No hace caer el correo si esto falla: es un canal aparte."""
+    bot_url = os.environ.get("WHATSAPP_BOT_URL", "https://territorio-whatsapp-bot.onrender.com").strip()
+    clave = os.environ.get("TAREA_CLAVE", "").strip()
+    if not clave:
+        print("   [whatsapp] falta TAREA_CLAVE en el entorno, no se manda")
+        return
+
+    telefono = "".join(c for c in suscriptor.get("telefono_contacto", "") if c.isdigit())
+    if not telefono:
+        return
+
+    primera = elegidas[0]
+    nombre = (suscriptor.get("nombre") or "").split(" ")[0] or "Hola"
+    parametros = [
+        nombre,
+        str(len(elegidas)),
+        primera.get("nombre") or primera.get("descripcion") or "una oportunidad",
+    ]
+
+    cuerpo = json.dumps({"telefono": telefono, "parametros": parametros}).encode("utf-8")
+    peticion = urllib.request.Request(
+        f"{bot_url}/tareas/enviar-alerta-whatsapp?clave={urllib.parse.quote(clave)}",
+        data=cuerpo, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(peticion, timeout=30):
+            print(f"   [whatsapp] alerta mandada a {telefono}")
+    except urllib.error.HTTPError as error:
+        print(f"   [whatsapp] no salio ({error.code}): {error.read().decode('utf-8')[:200]}")
+    except urllib.error.URLError as error:
+        print(f"   [whatsapp] no se pudo contactar al bot: {error}")
+
+
 # ======================================================================
 #  EL PROGRAMA
 # ======================================================================
@@ -2457,134 +2537,6 @@ def enlace(op: dict) -> str:
     if op["tipo"] == "compra_agil":
         return f"https://www.mercadopublico.cl/CompraAgil/Cotizacion/{op['codigo']}"
     return f"http://www.mercadopublico.cl/fichaLicitacion.html?idLicitacion={op['codigo']}"
-
-
-# ======================================================================
-#  ALERTA POR WHATSAPP (17-09-2026) — solo plan Premium.
-#
-#  El correo diario ya hace todo el trabajo pesado (buscar, filtrar,
-#  armar el xlsx); esto solo le suma un WhatsApp corto al mismo suscriptor
-#  cuando la CUENTA de su empresa (no el suscriptor de alertas, que es otra
-#  tabla) tiene plan 'premium' en Supabase. El match es por RUT, con la
-#  MISMA normalizacion (solo digitos) que usa el disparador del alta
-#  (avisar_alta_de_suscriptor, en alta-automatica-para-copiar.txt) -sin
-#  igual normalizacion, "77.711.959-1" y "777119591" no calzan nunca.
-#
-#  ES UN MENSAJE DE PLANTILLA, no un texto libre. WhatsApp exige plantilla
-#  APROBADA por Meta para escribirle primero a alguien que no te escribio
-#  en las ultimas 24 horas -que es siempre el caso de un aviso automatico
-#  de la manana-. Sin la plantilla aprobada, esta funcion va a fallar con
-#  un 400 (o un `Codigo`/`error` de Meta) hasta que Serling la someta y
-#  Meta la apruebe UNA vez, en su WhatsApp Manager. Falla abierto: si no
-#  esta aprobada todavia, o si falta el telefono, no se manda nada y el
-#  correo (que es lo principal) sale igual.
-#
-#  LA PLANTILLA SOMETIDA EN META (WhatsApp Manager > Cuenta > Plantillas),
-#  ya enviada a revision el 17-09-2026, estado "En revision":
-#    Nombre:    alerta_oportunidades_diaria
-#    Categoria: UTILITY (aceptada por el clasificador de Meta)
-#    Idioma:    Español (Chile)
-#    Cuerpo:    "Hola {{1}}: tu resumen diario de Territorio ya esta listo,
-#                con {{2}} oportunidad(es) nueva(s) en tu cuenta. Revisa el
-#                detalle en tu correo o en tu panel de Territorio."
-#  Nota: la primera redaccion ("hoy encontramos {{2}} oportunidad(es) que
-#  calzan con tu negocio...") la marco Meta como posible Marketing porque
-#  sonaba a promocion; se reescribio como aviso de estado de cuenta y asi
-#  quedo aceptada en Utilidad, que es mucho mas barata por mensaje.
-#  Los nombres de variable y el orden de {{1}}/{{2}} tienen que calzar
-#  EXACTO con `parametros` mas abajo, o Meta la rechaza en el envio.
-# ======================================================================
-
-NOMBRE_PLANTILLA_WHATSAPP = "alerta_oportunidades_diaria"
-
-
-def cuenta_de_rut(rut: str) -> dict | None:
-    """La cuenta (plan, telefono) de esa empresa, o None si no tiene o no
-    se pudo consultar. Misma normalizacion de RUT que el disparador SQL
-    del alta: solo digitos y K, en mayuscula.
-    """
-    digitos = re.sub(r"[^0-9kK]", "", str(rut or "")).upper()
-    if not digitos:
-        return None
-
-    url = os.environ.get("SUPABASE_URL", "").strip()
-    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-    if not (url and clave):
-        return None
-
-    # El filtro se hace TRAYENDO todas las cuentas activas y comparando
-    # aca: Postgrest no deja aplicar regexp_replace del lado del servidor
-    # sin una funcion propia, y son pocas cuentas (no miles) para traerlas
-    # enteras. Si esto crece mucho, conviene una funcion RPC en Supabase.
-    consulta = f"{url}/rest/v1/cuentas?select=rut,plan,telefono,activa&activa=eq.true"
-    peticion = urllib.request.Request(consulta, headers={
-        "apikey": clave, "Authorization": f"Bearer {clave}", "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(peticion, timeout=60) as respuesta:
-            filas = json.loads(respuesta.read().decode("utf-8"))
-    except Exception as error:
-        print(f"   no se pudo consultar cuentas: {type(error).__name__}")
-        return None
-
-    for fila in filas:
-        if re.sub(r"[^0-9kK]", "", str(fila.get("rut") or "")).upper() == digitos:
-            return fila
-    return None
-
-
-def enviar_whatsapp_resumen(telefono: str, nombre: str, cuantas: int) -> bool:
-    """Un WhatsApp corto por Meta Cloud API, con la plantilla de arriba.
-
-    `telefono` en cualquier formato con digitos (se limpia aca); Meta pide
-    el numero completo con codigo de pais, sin '+' y sin espacios.
-    """
-    token = os.environ.get("META_WHATSAPP_TOKEN", "").strip()
-    id_telefono = os.environ.get("META_PHONE_NUMBER_ID", "").strip()
-    if not (token and id_telefono):
-        print("   falta META_WHATSAPP_TOKEN o META_PHONE_NUMBER_ID")
-        return False
-
-    destino = re.sub(r"\D", "", str(telefono or ""))
-    if not destino:
-        print("   sin telefono, no se manda WhatsApp")
-        return False
-
-    primer_nombre = str(nombre or "").split()[0] if nombre else "hola"
-    cuerpo = json.dumps({
-        "messaging_product": "whatsapp",
-        "to": destino,
-        "type": "template",
-        "template": {
-            "name": NOMBRE_PLANTILLA_WHATSAPP,
-            "language": {"code": "es"},
-            "components": [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": primer_nombre},
-                    {"type": "text", "text": str(cuantas)},
-                ],
-            }],
-        },
-    }).encode("utf-8")
-
-    peticion = urllib.request.Request(
-        f"https://graph.facebook.com/v20.0/{id_telefono}/messages",
-        data=cuerpo, method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        })
-    try:
-        with urllib.request.urlopen(peticion, timeout=30) as respuesta:
-            print(f"   whatsapp enviado: {json.loads(respuesta.read())}")
-            return True
-    except urllib.error.HTTPError as error:
-        # El motivo mas probable el primer tiempo: la plantilla todavia no
-        # esta aprobada por Meta. Se imprime completo para poder verlo en
-        # el registro de la corrida, sin que tumbe el correo.
-        print(f"   no se pudo mandar el whatsapp ({error.code}): "
-              f"{error.read().decode('utf-8')[:300]}")
-        return False
 
 
 def main():
@@ -2855,37 +2807,10 @@ def main():
                 # el correo no sale, esta persona sigue esperando el suyo.
                 if args.bienvenidas:
                     marcar_bienvenida(suscriptor)
-
-                # WhatsApp para planes Plus y Premium, Y TAMBIEN durante los
-                # 7 dias de prueba gratis de Territorio (pedido de Serling,
-                # 17-09-2026): sin probarlo, nadie sube de Inicio (solo
-                # correo) a Plus. El costo por Meta es de centavos (~10-20
-                # CLP el mensaje), asi que regalarlo en la prueba no pesa, y
-                # el dato de "quedan" ya se calculo arriba para el banner del
-                # correo -no se vuelve a consultar nada nuevo-.
-                #
-                # SOLO si dejo RUT (sin RUT no hay cuenta que consultar: ver
-                # alta-automatica). Nunca puede tumbar el correo, que ya
-                # salio: por eso va DESPUES y en su propio try.
-                if suscriptor.get("rut_empresa"):
-                    try:
-                        quedan_prueba = prueba.get(suscriptor.get("email"))
-                        en_prueba = quedan_prueba is not None and quedan_prueba >= 0
-                        cuenta = cuenta_de_rut(suscriptor["rut_empresa"])
-                        # WhatsApp diario es de Plus para arriba (pedido de
-                        # Serling, 17-09-2026): asi el plan Inicio ($19.990,
-                        # solo correo) tiene un motivo concreto para subir a
-                        # Plus ($49.990), y Premium (desde $159.990) sigue
-                        # siendo el salto siguiente por lo demas que ya trae
-                        # -plataforma Territorio, envio masivo, horas de
-                        # atencion-, no por el WhatsApp en si.
-                        tiene_whatsapp_diario = bool(
-                            cuenta and cuenta.get("plan") in ("plus", "premium"))
-                        if cuenta and cuenta.get("telefono") and (tiene_whatsapp_diario or en_prueba):
-                            enviar_whatsapp_resumen(
-                                cuenta["telefono"], suscriptor.get("nombre"), len(elegidas))
-                    except Exception as error:
-                        print(f"   no se pudo evaluar el whatsapp plus/premium: {error}")
+                # WhatsApp es un canal aparte del correo: si falla, no le
+                # quita nada a lo de arriba, que ya salio.
+                if whatsapp_elegible(suscriptor):
+                    enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")))
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
