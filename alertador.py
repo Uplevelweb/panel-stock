@@ -1601,7 +1601,7 @@ def encabezado_grupo(titulo: str, bajada: str) -> str:
     """El titulo que separa un tipo de oportunidad del otro."""
     return f"""
   <tr>
-    <td style="padding:22px 30px 4px;">
+    <td class="pad30" style="padding:22px 30px 4px;">
       <div style="color:{MARINO};font-size:15px;font-weight:700;
                   letter-spacing:.04em;text-transform:uppercase;">
         {titulo}
@@ -1622,6 +1622,25 @@ def tarjeta(op: dict) -> str:
 
     donde = " · ".join(x for x in (op.get("nombre_unidad") or op.get("organismo"),
                                    op.get("comuna") or op.get("region")) if x)
+
+    # Ficha corta con etiqueta, mismo par "etiqueta / valor" que ya usa la
+    # tarjeta de referencia de la web (20-09-2026, pedido de Serling: que el
+    # correo muestre el N° de proceso y el comprador, no solo el titulo).
+    # "Publicada" y "multas al organismo" NO se agregan: ninguna de las dos
+    # APIs de Mercado Publico las entrega (ver docstring del adjunto xlsx,
+    # mas abajo) -esa tarjeta de la web esta marcada "(ejemplo)", es una
+    # maqueta con datos de muestra, no datos reales.
+    def fila_ficha(etiqueta, valor):
+        return (f'<tr><td style="padding:2px 0;color:{TEXTO_SUAVE};font-size:12px;">{etiqueta}</td>'
+                f'<td align="right" style="padding:2px 0;color:{TEXTO};font-size:12.5px;'
+                f'font-weight:600;">{valor}</td></tr>')
+
+    filas_ficha = [fila_ficha("N° de proceso", op["codigo"])]
+    if donde:
+        filas_ficha.append(fila_ficha("Comprador", donde[:60]))
+    filas_ficha.append(fila_ficha("Cierra", op['cierre'] or 'sin fecha'))
+    ficha = ('<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+             'style="margin-bottom:12px;">' + "".join(filas_ficha) + '</table>')
 
     # ------------------------------------------------------------------
     #  LO QUE LA BODEGA SABE DE ESTE COMPRADOR
@@ -1774,7 +1793,7 @@ def tarjeta(op: dict) -> str:
 
     return f"""
   <tr>
-    <td style="padding:10px 30px;">
+    <td class="pad30" style="padding:10px 30px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:16px 18px;">
@@ -1784,9 +1803,7 @@ def tarjeta(op: dict) -> str:
           <div style="color:{MARINO};font-size:16px;font-weight:600;line-height:1.35;margin-bottom:6px;">
             {op['nombre'][:150]}
           </div>
-          <div style="color:{TEXTO_SUAVE};font-size:13px;margin-bottom:12px;">
-            {donde} · cierra {op['cierre'] or 'sin fecha'}
-          </div>
+          {ficha}
 {aviso_visita}
           {detalle}{monto}
           <a href="{op['enlace']}"
@@ -2019,7 +2036,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         if solo_digitos_rut(suscriptor.get("rut_empresa") or ""):
             bloque_panel = f"""
   <tr>
-    <td style="padding:4px 30px 22px;">
+    <td class="pad30" style="padding:4px 30px 22px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#f6f8fb;border:1px solid {BORDE};border-radius:12px;">
         <tr><td style="padding:18px 20px;">
@@ -2045,7 +2062,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         else:
             bloque_panel = f"""
   <tr>
-    <td style="padding:4px 30px 22px;">
+    <td class="pad30" style="padding:4px 30px 22px;">
       <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;
                   border-left:3px solid {NARANJO};padding-left:13px;">
         <strong style="color:{TEXTO};">Dinos el RUT de tu empresa</strong> y estas
@@ -2083,7 +2100,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                       "sigue llegando igual mientras tanto.</strong>")
         bloque_prueba = f"""
   <tr>
-    <td style="padding:14px 30px 4px;">
+    <td class="pad30" style="padding:14px 30px 4px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#fff6ee;border:1px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:14px 18px;">
@@ -2106,12 +2123,19 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 
     return f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body,table,td{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
+  @media only screen and (max-width:480px){{
+    .pad30{{padding-left:16px !important;padding-right:16px !important}}
+  }}
+</style>
+</head>
 <body style="margin:0;padding:0;background:{FONDO};">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 6px;">
 <tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" border="0"
-       style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;
+<table width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;
               font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
 
   <!-- LA CABECERA VA MARINA, Y EL LOGO SOBRE UNA PLACA BLANCA.
