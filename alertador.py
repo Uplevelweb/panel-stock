@@ -1601,7 +1601,7 @@ def encabezado_grupo(titulo: str, bajada: str) -> str:
     """El titulo que separa un tipo de oportunidad del otro."""
     return f"""
   <tr>
-    <td class="pad30" style="padding:22px 18px 4px;">
+    <td class="pad30" style="padding:22px 10px 4px;">
       <div style="color:{MARINO};font-size:15px;font-weight:700;
                   letter-spacing:.04em;text-transform:uppercase;">
         {titulo}
@@ -1793,10 +1793,10 @@ def tarjeta(op: dict) -> str:
 
     return f"""
   <tr>
-    <td class="pad30" style="padding:10px 18px;">
+    <td class="pad30" style="padding:10px 10px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:12px;">
-        <tr><td style="padding:16px 18px;">
+        <tr><td style="padding:14px 12px;">
           <div style="color:{NARANJO};font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:8px;">
             PRIORIDAD {clase} · {valor}
           </div>
@@ -2036,7 +2036,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         if solo_digitos_rut(suscriptor.get("rut_empresa") or ""):
             bloque_panel = f"""
   <tr>
-    <td class="pad30" style="padding:4px 18px 22px;">
+    <td class="pad30" style="padding:4px 10px 22px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#f6f8fb;border:1px solid {BORDE};border-radius:12px;">
         <tr><td style="padding:18px 20px;">
@@ -2062,7 +2062,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         else:
             bloque_panel = f"""
   <tr>
-    <td class="pad30" style="padding:4px 18px 22px;">
+    <td class="pad30" style="padding:4px 10px 22px;">
       <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;
                   border-left:3px solid {NARANJO};padding-left:13px;">
         <strong style="color:{TEXTO};">Dinos el RUT de tu empresa</strong> y estas
@@ -2100,7 +2100,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                       "sigue llegando igual mientras tanto.</strong>")
         bloque_prueba = f"""
   <tr>
-    <td class="pad30" style="padding:14px 18px 4px;">
+    <td class="pad30" style="padding:14px 10px 4px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#fff6ee;border:1px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:14px 18px;">
@@ -2126,13 +2126,10 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   body,table,td{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
-  @media only screen and (min-width:481px){{
-    .pad30{{padding-left:30px !important;padding-right:30px !important}}
-  }}
 </style>
 </head>
 <body style="margin:0;padding:0;background:{FONDO};">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 6px;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 4px;">
 <tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" border="0"
        style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;
@@ -2165,7 +2162,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   <tr><td style="height:3px;background:{NARANJO};font-size:0;line-height:0;">&nbsp;</td></tr>
 
   <tr>
-    <td style="padding:22px 18px 6px;">
+    <td style="padding:22px 10px 6px;">
       <div style="color:{TEXTO};font-size:20px;font-weight:700;margin-bottom:4px;">
         {titulo}
       </div>
@@ -2179,7 +2176,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 {bloque_puertas}
 {tarjetas}
   <tr>
-    <td style="padding:20px 18px 24px;border-top:1px solid {BORDE};">
+    <td style="padding:20px 10px 24px;border-top:1px solid {BORDE};">
       <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
         Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
         actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
