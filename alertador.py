@@ -2052,8 +2052,8 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
              color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
              padding:11px 22px;border-radius:999px;">Entrar al panel</a>
           <div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:11px;">
-            Entra con este mismo correo. La primera vez elige
-            <strong>«Sign up»</strong> y defines tu contraseña.
+            Entra con este mismo correo. No hay contraseña: eliges
+            <strong>Google</strong> o un código que te llega al correo.
           </div>
         </td></tr>
       </table>
