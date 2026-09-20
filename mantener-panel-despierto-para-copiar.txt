@@ -1,0 +1,73 @@
+========================================================================
+ QUE EL PANEL NO SE DUERMA NUNCA
+ Para que cualquier cliente entre directo, sin la pantalla "Zzzz".
+========================================================================
+
+EL PROBLEMA
+-----------
+El plan gratis de Streamlit apaga el panel solo cuando nadie lo visita
+por un rato. La primera persona que entra despues se encuentra la
+pantalla "Zzzz" y tiene que apretar un boton y esperar 30-60 segundos.
+Para vender el SaaS eso no sirve: cualquier cliente tiene que entrar
+directo a SU panel, sin saber que existe ese boton.
+
+Streamlit Community Cloud (el plan gratis) NO tiene un plan pago que
+apague este comportamiento: es del hosting gratuito, no del panel.
+
+LA SOLUCION: EL MISMO RELOJ QUE YA USAN LOS CORREOS
+----------------------------------------------------
+Un "reloj" en Supabase (pg_cron, ya instalado y funcionando -ver
+`reloj-supabase-para-copiar.txt`) visita el panel cada 10 minutos.
+Con visitas constantes, el panel nunca junta suficiente rato sin trafico
+como para dormirse.
+
+NO se uso un workflow de GitHub Actions para esto a proposito: ya esta
+comprobado en este mismo repositorio que el reloj de GitHub ("schedule:")
+llega con horas de atraso en repositorios publicos (ver la cabecera de
+`reloj-supabase-para-copiar.txt`). Un reloj que tiene que ser puntual
+cada 10 minutos no puede depender de eso.
+
+*** YA QUEDO HECHO EL 20-09-2026. ***
+Se conserva este archivo como referencia, para apagarlo o cambiar el
+tiempo entre visitas mas adelante.
+
+- - - - - - - - - - - - - - -  CORTAR AQUI  - - - - - - - - - - - - - - -
+
+select cron.schedule(
+  'mantener_panel_despierto',
+  '*/10 * * * *',
+  $job$select net.http_get(url := 'https://panel-stock-uplevel.streamlit.app/')$job$
+);
+
+- - - - - - - - - - - - - - -  HASTA AQUI  - - - - - - - - - - - - - - - -
+
+COMPROBAR
+---------
+Ver que el reloj quedo puesto:
+
+  select jobname, schedule, active from cron.job
+   where jobname = 'mantener_panel_despierto';
+
+Ver que las visitas estan llegando (despues de unos 10-20 minutos):
+
+  select status_code, created from net._http_response
+   order by created desc limit 5;
+
+Tiene que decir 200. Si dice otra cosa, revisar que la direccion del
+panel no haya cambiado.
+
+SI HAY QUE APAGARLO
+--------------------
+  select cron.unschedule('mantener_panel_despierto');
+
+QUE NO ARREGLA ESTO
+--------------------
+Esto mantiene el CONTENEDOR despierto, no acelera la primera carga de
+cada sesion nueva ni evita que Streamlit se reinicie solo tras un cambio
+de codigo (ahi vuelve a tardar un rato, una sola vez). Tampoco evita un
+corte real de Streamlit Community Cloud si su servicio cae. Para una
+garantia de verdad de "siempre arriba" -con contrato de disponibilidad-
+la salida es otro hosting pago que no duerma por diseno (el mismo tipo
+de servicio donde ya vive el bot de WhatsApp, en Render). Eso es un
+cambio de infraestructura mas grande: se propone aparte si el reloj de
+10 minutos no alcanza para vender con confianza.
