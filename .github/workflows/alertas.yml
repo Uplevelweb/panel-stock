@@ -46,7 +46,7 @@ on:
         description: "Turno al que mandar. Vacio = a todos"
         required: false
         type: choice
-        options: ["", "8", "13", "18"]
+        options: ["", "8", "15"]
         default: ""
 
 jobs:
