@@ -1002,7 +1002,7 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
         proveedores = sorted(prov.get(u, {}).items(), key=lambda x: -x[1])
         salida[u] = {
             "via": via.get(u, {}),
-            "proveedores": proveedores[:10],
+            "proveedores": proveedores[:5],
             "rubro": dict(sorted(rubro.get(u, {}).items(), key=lambda x: -x[1])[:6]),
             "total": sum(via.get(u, {}).values()),
         }
@@ -1797,7 +1797,7 @@ def tarjeta(op: dict) -> str:
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:12px;">
         <tr><td style="padding:14px 12px;">
-          <div style="color:{MARINO};font-size:16px;font-weight:600;line-height:1.35;margin-bottom:6px;">
+          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.4;margin-bottom:8px;">
             {op['nombre'][:150]}
           </div>
           {ficha}
