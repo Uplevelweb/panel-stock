@@ -74,6 +74,8 @@ MODULOS = {
     # REGIÓN de Emergenza: mismo criterio que mercado_publico/envios/cotizador,
     # no le sirve a otro cliente todavía.
     "agenda": {"nombre": "Agenda", "que_es": "", "extra": True},
+    "envios_enviar": {"nombre": "Envíos: puede enviar (no solo ver)",
+                       "que_es": "", "extra": True},
 }
 
 
