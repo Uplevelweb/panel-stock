@@ -17,6 +17,12 @@
 # Los valores de [theme.light] son los mismos de PALETA_CLARA en app.py: si
 # se cambia un color hay que cambiarlo en los dos lugares.
 [theme]
+# 24-09-2026, pedido de Serling: sin preferencia guardada en el navegador,
+# la app seguia el modo del sistema operativo (a veces oscuro). Con "base"
+# fijo, cualquiera que entre por primera vez -o sin cookie- la ve clara. El
+# boton de interruptor_de_tema() sigue dejando forzar oscuro para quien lo
+# prefiera; eso no lo toca esta linea.
+base = "light"
 font = "sans-serif"
 # Un 15% mas grande que el 13 que tenia (27-08-2026: costaba leerlo). Se hace
 # aqui y no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
