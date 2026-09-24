@@ -36,6 +36,7 @@ import pandas as pd
 import streamlit as st
 
 import cartera
+from modulo_planes import puede
 
 # Las dos Web App publicadas. Se distinguen a simple vista: la de la empresa
 # lleva `/a/macros/emergenza.cl/` y la personal no.
@@ -81,6 +82,14 @@ def seccion_envios(usuario: dict) -> None:
         "propio Gmail, con tu firma y tu dirección: por eso siguen en Google y "
         "no adentro de esta app.")
 
+    # Ver esta pestaña no alcanza para enviar. Eso lo decide Uplevel cuenta
+    # por cuenta —interruptor "Envíos: puede enviar" en Soporte, 24-09-2026,
+    # pedido de Serling—, nunca el admin de la empresa: esa pantalla
+    # (`seccion_equipo`) no toca `modulos_extra`. Sin este extra los botones
+    # quedan visibles pero deshabilitados, para que se sepa que la opción
+    # existe sin poder dispararla.
+    puede_enviar = puede(usuario, "envios_enviar")
+
     izquierda, derecha = st.columns(2, gap="medium")
     for columna, panel in zip((izquierda, derecha), PANELES):
         with columna:
@@ -93,10 +102,17 @@ def seccion_envios(usuario: dict) -> None:
                          help=f"La cuenta {panel['cuenta']}")
                 st.caption(f"Cuenta: `{panel['cuenta']}`")
                 st.link_button(f"Abrir {panel['nombre']}", panel["url"],
-                               width="stretch", type="primary")
-                st.caption(
-                    "Al abrirlo, arriba tiene que decir "
-                    f"**«{panel['titulo_en_pantalla']}»**.")
+                               width="stretch", type="primary",
+                               disabled=not puede_enviar)
+                if puede_enviar:
+                    st.caption(
+                        "Al abrirlo, arriba tiene que decir "
+                        f"**«{panel['titulo_en_pantalla']}»**.")
+                else:
+                    st.caption(
+                        "🔒 Tu cuenta puede ver esta sección, pero el envío "
+                        "está reservado. Escríbenos a webuplevel@gmail.com "
+                        "si necesitas activarlo.")
 
     # EL AVISO VA DESPUES DE LOS BOTONES Y NO ANTES, a proposito: se lee cuando
     # ya se eligio uno, que es el momento en que sirve comprobar.
