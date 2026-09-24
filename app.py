@@ -118,48 +118,26 @@ RUTA_ICONO = RUTA_LOGO_UPLEVEL
 # Paleta tomada del Panel Armada (emergenza-mailer/Index.html) para que los
 # dos paneles se vean como un mismo sistema.
 # ---------------------------------------------------------------- LOS COLORES
-# Dos paletas, una por modo (08-09-2026, pedido de Serling). El codigo las pide
-# siempre igual —COLOR['tarjeta']— y sale la del modo en que esta mirando QUIEN
-# TIENE ESA PANTALLA ABIERTA, que no tiene por que ser el mismo de otra persona
-# conectada al mismo tiempo.
+# 24-09-2026, pedido de Serling: se saca el modo oscuro. Habia dos paletas y
+# un boton para alternar, pero `modo_de_la_vista()` -de donde salian los
+# colores propios (tarjetas HTML, sombra)- caia en oscuro cada vez que
+# `st.context.theme` no alcanzaba a resolver el tipo a tiempo (ver el detalle
+# que se borro mas abajo), y eso desarmaba pantallas: widgets nativos de
+# Streamlit en claro (por el `base = "light"` de config.toml) mezclados con
+# tarjetas en oscuro. Mas simple y sin ese riesgo: una sola paleta, siempre.
 #
-# Por eso `COLOR` no es un diccionario normal al que se le cambien los valores
-# al empezar cada corrida: todas las sesiones comparten el mismo proceso de
-# Python y se pisarian los colores entre ellas. Es un diccionario que RESUELVE
-# cada consulta contra el modo de quien pregunta. Ver `modo_de_la_vista`.
-#
-# Los colores de Streamlit —fondo de la pagina, botones, tablas— NO se definen
-# aca sino en .streamlit/config.toml, que trae los mismos dos juegos en
-# [theme.light] y [theme.dark]. Si se cambia uno hay que cambiar el otro.
-PALETA_OSCURA = {
-    "fondo": "#0c2c57",
-    "tarjeta": "#123a6e",
-    "borde": "#1e4d87",
-    "texto": "#EAF1F8",
-    "texto_suave": "#A9BED4",
-    # La llave se sigue llamando «rojo» porque esta usada en decenas de
-    # lugares; lo que cambio es el color, que ahora es el naranjo de
-    # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
-    "rojo": "#f18c3f",
-    "blanco": "#FFFFFF",
-    "titulo": "#0c2c57",
-    "subtitulo": "#5A7089",
-    "flecha": "#3f5a7d",
-    "verde_fondo": "#10432f",
-    "verde_borde": "#1c6b4a",
-    "verde_texto": "#7ee0ab",
-    "verde_rotulo": "#9fd9bd",
-    "baja": "#f0a3a3",
-    "igual": "#c9d3e0",
-}
-PALETA_CLARA = {
+# Los colores de Streamlit -fondo de la pagina, botones, tablas- se definen en
+# .streamlit/config.toml, que ahora trae un solo juego bajo [theme]. Si se
+# cambia un color aca hay que cambiarlo alla tambien.
+COLOR = {
     "fondo": "#F2F6FB",
     "tarjeta": "#FFFFFF",
     "borde": "#D3DFEC",
     "texto": "#0c2c57",
     "texto_suave": "#5A7089",
-    # El mismo naranjo, un punto mas oscuro: el #f18c3f sobre blanco no alcanza
-    # el contraste para leerse. Es el unico color de marca que cambia de tono.
+    # La llave se sigue llamando «rojo» porque esta usada en decenas de
+    # lugares; lo que cambio es el color, que ahora es el naranjo de
+    # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
     "rojo": "#d9741f",
     "blanco": "#FFFFFF",
     "titulo": "#0c2c57",
@@ -172,49 +150,6 @@ PALETA_CLARA = {
     "baja": "#C0392B",
     "igual": "#5A7089",
 }
-
-
-def modo_de_la_vista() -> str:
-    """«claro» u «oscuro», segun como esta mirando esta persona.
-
-    Lo decide el navegador y Streamlit lo cuenta en `st.context.theme`: puede
-    venir del boton de la app —que lo deja guardado— o, si nunca lo toco, del
-    modo en que este el telefono o el PC. Ante cualquier duda, oscuro, que es
-    como estuvo la app desde que existe.
-    """
-    try:
-        tema = st.context.theme
-        tipo = getattr(tema, "type", None)
-        if tipo is None and isinstance(tema, dict):
-            tipo = tema.get("type")
-    except Exception:
-        tipo = None
-    return "claro" if tipo == "light" else "oscuro"
-
-
-class _Colores(dict):
-    """Se comporta como la paleta del modo activo, sin copiarla a ningun lado."""
-
-    def _vigente(self) -> dict:
-        return PALETA_CLARA if modo_de_la_vista() == "claro" else PALETA_OSCURA
-
-    def __getitem__(self, clave):
-        return self._vigente()[clave]
-
-    def get(self, clave, por_defecto=None):
-        return self._vigente().get(clave, por_defecto)
-
-    def items(self):
-        return self._vigente().items()
-
-    def values(self):
-        return self._vigente().values()
-
-
-# Se construye sobre la oscura para que `in`, `len` y `keys` respondan aunque
-# no haya nadie mirando (las pruebas, por ejemplo). Las dos tienen las mismas
-# llaves; si se agrega una a una, hay que agregarla a la otra.
-COLOR = _Colores(PALETA_OSCURA)
 TIPOGRAFIA = 'Tahoma, Geneva, Verdana, "DejaVu Sans", sans-serif'
 
 # Columnas de la tabla final, en este orden. Todo lo demas se descarta.
@@ -2419,13 +2354,10 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
 
 def aplicar_estilos() -> None:
     """Tipografia y tarjetas iguales a las del Panel Armada."""
-    # En modo oscuro las tarjetas ya se distinguen del fondo por el color
-    # (tarjeta mas clara que el fondo). En modo claro las dos son casi el
-    # mismo blanco/gris y sin nada mas se ven planas -"menos amigable",
-    # dijo Serling el 08-09-2026-. Una sombra suave les da el mismo relieve
-    # que ya tenian en oscuro, sin tocar ningun color.
-    SOMBRA = ("0 1px 3px rgba(12,44,87,.08)" if modo_de_la_vista() == "claro"
-              else "none")
+    # La tarjeta y el fondo son casi el mismo blanco/gris y sin nada mas se
+    # ven planas -"menos amigable", dijo Serling el 08-09-2026-. Una sombra
+    # suave les da relieve sin tocar ningun color.
+    SOMBRA = "0 1px 3px rgba(12,44,87,.08)"
     st.markdown(
         f"""
         <style>
@@ -2487,12 +2419,6 @@ def aplicar_estilos() -> None:
         }}
         .aire-antes-del-boton {{
             height: 90px;
-        }}
-        /* El boton de modo claro/oscuro va pegado bajo la cabecera, como una
-           barra de herramientas, no como un boton mas de la pantalla. */
-        .st-key-fila_tema {{ margin-top: -10px; margin-bottom: 2px; }}
-        .st-key-fila_tema .stButton > button {{
-            font-size: 13px; padding: 2px 14px; min-height: 32px;
         }}
         /* En el celular, los margenes se comen la pantalla. */
         @media (max-width: 640px) {{
@@ -2849,67 +2775,6 @@ def avisar_antes_de_salir(hay_resultados: bool) -> None:
                 evento.returnValue = "";
             });
         }
-        </script>
-        """,
-        height=1,
-    )
-
-
-def interruptor_de_tema() -> None:
-    """El boton de modo claro / modo oscuro.
-
-    QUIEN NO TOCA NADA NO TIENE QUE TOCAR NADA: la app sale clara u oscura
-    segun como este el telefono o el PC de quien la abre. Eso lo resuelve
-    .streamlit/config.toml, que trae las dos paletas, y no hace falta este
-    boton para que funcione.
-
-    El boton es para forzarlo. Y tiene un precio que conviene saber: Streamlit
-    NO deja cambiar el tema desde Python —el modo lo guarda el navegador y se
-    lee UNA sola vez, al abrir la pagina—, asi que el boton escribe esa
-    preferencia y recarga. Recargar empieza una sesion nueva: la identificacion
-    aguanta (va en una galleta del navegador) pero los filtros de la pantalla
-    no. Por eso el RUT viaja en la direccion y vuelve solo del otro lado; ver
-    `seccion_oportunidades`.
-    """
-    modo = modo_de_la_vista()
-    destino = "Light" if modo == "oscuro" else "Dark"
-    etiqueta = "☀️ Modo claro" if modo == "oscuro" else "🌙 Modo oscuro"
-    with st.container(key="fila_tema"):
-        _, derecha = st.columns([1, 0.22])
-        with derecha:
-            pulsado = st.button(
-                etiqueta, key="boton_tema", width="stretch",
-                help="Cambia el fondo de toda la app. Queda recordado en este "
-                     "navegador. La pantalla se recarga para aplicarlo.")
-    if not pulsado:
-        return
-    rut = str(st.session_state.get("op_rut", "") or "")
-    # `json.dumps` y no comillas a mano: deja el texto listo para JavaScript
-    # aunque el RUT venga con algo raro escrito.
-    st.iframe(
-        f"""
-        <script>
-        // window.top y no window.parent: Streamlit Cloud a veces envuelve la
-        // app en mas de un iframe (por ejemplo, para quien entra como
-        // invitado con acceso restringido, no solo para el dueno viendo su
-        // propia app). window.parent asume un solo nivel; window.top es
-        // siempre la ventana de verdad, sin importar cuantos niveles haya.
-        // Comprobado el 08-09-2026: con window.parent el boton escribia bien
-        // pero no siempre recargaba para quien no era el dueno.
-        const app = window.top;
-        const url = new URL(app.location.href);
-        const rut = {json.dumps(rut)};
-        if (rut) {{ url.searchParams.set("rut", rut); }}
-        // Streamlit guarda sus propios valores con JSON.stringify (con las
-        // comillas adentro del string: `"Dark"`, no `Dark`). Sin el
-        // JSON.stringify de aca, Streamlit intenta JSON.parse(valor), truena
-        // silenciosamente y vuelve a "System" — que es lo que pasaba: el
-        // boton escribia el valor pero la app jamas lo tomaba por bueno.
-        app.localStorage.setItem(
-            "stActiveTheme-" + url.pathname + "-v2",
-            JSON.stringify({json.dumps(destino)}));
-        app.__saliendoAProposito = true;
-        app.location.replace(url.toString());
         </script>
         """,
         height=1,
@@ -5489,7 +5354,6 @@ def main() -> None:
     aplicar_estilos()
     icono_del_movil()
     cabecera()
-    interruptor_de_tema()
 
     # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
     # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
