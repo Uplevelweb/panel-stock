@@ -75,13 +75,10 @@ MODULOS = {
                   "listas para tus compradores del Convenio Marco.",
         "extra": True,
     },
-    # El Asistente Diario (agenda.uplevelweb.art).
-    "agenda": {
-        "nombre": "Agenda",
-        "que_es": "Tu día: la ruta de visitas, el horario y las notas por "
-                  "institución, en un solo lugar.",
-        "extra": True,
-    },
+    # 25-09-2026: "agenda" se saca de aca -ya no es una pestaña de este
+    # panel, es su propio boton en territorio.uplevelweb.art/panel (ver
+    # CLAUDE.md / BITACORA). Dejarla en MODULOS sin pestaña que la use
+    # habria sido un candado fantasma.
     "envios_enviar": {"nombre": "Envíos: puede enviar (no solo ver)",
                        "que_es": "", "extra": True},
 }

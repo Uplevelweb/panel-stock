@@ -53,7 +53,7 @@ from fpdf.fonts import FontFace
 # 1. CONFIGURACION
 # ===========================================================================
 
-TITULO_APP = "Uplevel Inteligencia"
+TITULO_APP = "Territorio Comercial"
 SUBTITULO_APP = "Compras Públicas · Chile"
 
 # Enlaces que trae la app cargados de fabrica. Los dos campos son editables:
@@ -5443,8 +5443,11 @@ def main() -> None:
     # se esconden para quien no es proveedor del Convenio Marco -se dibujan
     # SIEMPRE, igual que el resto, y quien no las tiene ve el candado (mas
     # abajo, via `abierta()`). Se elimino "Seguimiento" y "Modulo Cotizador".
+    # 25-09-2026, pedido de Serling: se saca "Agenda" de esta barra -ya se
+    # abre como boton propio desde la pantalla principal de Territorio
+    # (territorio.uplevelweb.art/panel), asi que tenerla tambien aca
+    # confundia, era la misma herramienta en dos partes.
     orden = []
-    orden.append(("agenda", "🗓️ Agenda"))
     orden.append(("oportunidades", "🎯 Oportunidades"))
     orden.append(("mercado_publico", "🏛️ Convenios Marco"))
     # La puerta a los dos paneles de envio de Apps Script. Va al lado de
@@ -5465,10 +5468,6 @@ def main() -> None:
         candado(clave)
         return False
 
-    with pestanas["agenda"]:
-        if abierta("agenda"):
-            from modulo_agenda import seccion_agenda
-            seccion_agenda()
     with pestanas["oportunidades"]:
         if abierta("oportunidades"):
             # Vive en su propio archivo: no comparte nada con las otras y asi
