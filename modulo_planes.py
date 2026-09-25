@@ -40,11 +40,6 @@ MODULOS = {
         "que_es": "Configura qué te llega cada mañana: tus rubros, tu RUT, "
                   "a qué hora y de qué tipo.",
     },
-    "seguimiento": {
-        "nombre": "Seguimiento",
-        "que_es": "El embudo de lo que ya te avisamos: en qué quedó cada "
-                  "oportunidad, cuál ofertaste y cuál se te pasó.",
-    },
     "oportunidades": {
         "nombre": "Oportunidades",
         "que_es": "Escribe un RUT y sale a quién le puede vender y todavía no "
@@ -61,19 +56,32 @@ MODULOS = {
         "que_es": "Suma a tus comerciales, dales un rol y repárteles "
                   "territorios. Cada uno ve solo lo suyo.",
     },
-    # Los dos de abajo NO son parte de ningún plan. Leen el catálogo de
-    # Emergenza desde su Drive: no le sirven a ningún otro cliente. Se
-    # entregan por cuenta, con `cuentas.modulos_extra`.
-    "mercado_publico": {"nombre": "Mercado Público", "que_es": "", "extra": True},
-    "cotizador": {"nombre": "Módulo Cotizador", "que_es": "", "extra": True},
-    # Es la puerta a los dos paneles de Apps Script de Emergenza, que mandan
-    # desde su Gmail. A otro cliente no le sirve: son sus cuentas y su lista.
-    "envios": {"nombre": "Envíos de Ofertas, Catálogo y Mailing",
-               "que_es": "", "extra": True},
-    # El Asistente Diario (agenda.uplevelweb.art). Lee la planilla AVANZADA V
-    # REGIÓN de Emergenza: mismo criterio que mercado_publico/envios/cotizador,
-    # no le sirve a otro cliente todavía.
-    "agenda": {"nombre": "Agenda", "que_es": "", "extra": True},
+    # Los de abajo NO son parte de ningún plan: se entregan por cuenta, con
+    # `cuentas.modulos_extra`, solo a quienes son proveedores del Convenio
+    # Marco. A diferencia de antes (25-09-2026, pedido de Serling), ahora SI
+    # se dibujan cerrados para todos los demas -visibles, pero con candado-,
+    # igual que el resto de los modulos: asi cualquiera que entre ve que la
+    # herramienta existe, aunque todavia no la pueda usar.
+    "mercado_publico": {
+        "nombre": "Convenios Marco",
+        "que_es": "Panorama de precios y oferta vigente en tu Convenio Marco: "
+                  "qué se está vendiendo, a qué precio y dónde estás parado.",
+        "extra": True,
+    },
+    # Es la puerta a los dos paneles de Apps Script, que mandan desde Gmail.
+    "envios": {
+        "nombre": "Envíos de Ofertas, Catálogo y Mailing",
+        "que_es": "Manda tu catálogo y tus ofertas de la semana por correo, "
+                  "listas para tus compradores del Convenio Marco.",
+        "extra": True,
+    },
+    # El Asistente Diario (agenda.uplevelweb.art).
+    "agenda": {
+        "nombre": "Agenda",
+        "que_es": "Tu día: la ruta de visitas, el horario y las notas por "
+                  "institución, en un solo lugar.",
+        "extra": True,
+    },
     "envios_enviar": {"nombre": "Envíos: puede enviar (no solo ver)",
                        "que_es": "", "extra": True},
 }
@@ -87,20 +95,20 @@ PLANES = {
     # El de entrada: el correo diario y el embudo. Seguimiento va aquí a
     # propósito aunque se pueda cobrar: es lo que hace volver al panel, y un
     # cliente que solo recibe correos se olvida de que existes.
-    "alertas": {"alertas", "seguimiento"},
+    "alertas": {"alertas"},
 
     # Suma el mapa por RUT, que es «a quién venderle». Adentro va también el
     # panorama de mercado, porque es la misma pantalla y cortarla al medio
     # dejaría media respuesta.
-    "comercial": {"alertas", "seguimiento", "oportunidades"},
+    "comercial": {"alertas", "oportunidades"},
 
     # Suma el itinerario y el reparto entre comerciales. Lo que separa a
     # Empresa son PERSONAS, no funciones.
-    "empresa": {"alertas", "seguimiento", "oportunidades", "ipt", "equipo"},
+    "empresa": {"alertas", "oportunidades", "ipt", "equipo"},
 
     # La prueba ve todo lo de Empresa. Perder algo que ya usabas pesa más que
     # nunca haberlo tenido: eso es lo que empuja a elegir plan, no un folleto.
-    "piloto": {"alertas", "seguimiento", "oportunidades", "ipt", "equipo"},
+    "piloto": {"alertas", "oportunidades", "ipt", "equipo"},
 
     # Uplevel. Ve todo, extras incluidos.
     "soporte": set(MODULOS),
@@ -151,8 +159,8 @@ def extras_para_abrir_todo(plan: str) -> list[str]:
     """Los modulos que hay que regalar para que una cuenta lo vea todo.
 
     Es la oferta de la feria: paga el plan de entrada y recibe el de arriba.
-    Se excluyen `mercado_publico` y `cotizador` a proposito: leen el Drive de
-    Emergenza, no le sirven a ningun otro cliente y no estan a la venta.
+    Se excluyen los modulos marcados `extra` a proposito: son de quienes son
+    proveedores del Convenio Marco, no estan a la venta para cualquiera.
     """
     limpio = str(plan or "").strip().lower()
     del_plan = PLANES[limpio if limpio in PLANES else "soporte"]
@@ -188,8 +196,8 @@ def plan_de(usuario: dict) -> str:
 def modulos_de(usuario: dict) -> set[str]:
     """Todo lo que esta persona puede abrir: su plan más sus extras."""
     abiertos = set(PLANES[plan_de(usuario)])
-    # Los extras se dan por cuenta, no por plan: Mercado Público y el
-    # Cotizador solo le sirven a Emergenza.
+    # Los extras se dan por cuenta, no por plan: son de quienes son
+    # proveedores del Convenio Marco, no de cualquier cliente.
     for extra in usuario.get("modulos_extra") or []:
         clave = str(extra).strip().lower()
         if clave in MODULOS:

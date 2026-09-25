@@ -5384,7 +5384,7 @@ def main() -> None:
     # lo usan. Para un cliente cualquiera esa lectura no sirve de nada y son
     # segundos de espera en cada pantalla.
     from modulo_planes import puede
-    usa_catalogo = puede(yo, "mercado_publico") or puede(yo, "cotizador")
+    usa_catalogo = puede(yo, "mercado_publico")
     if usa_catalogo:
         precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
         # El catalogo completo (lo que vende) vive en la misma carpeta de Drive.
@@ -5439,20 +5439,18 @@ def main() -> None:
     # y quiere que sea lo primero que se ve al entrar a Inteligencia. Por eso
     # se arma aparte y no dentro del `for` de abajo, que respeta el orden fijo
     # de las demas.
+    # 25-09-2026 (pedido de Serling): Agenda, Convenios Marco y Envios ya NO
+    # se esconden para quien no es proveedor del Convenio Marco -se dibujan
+    # SIEMPRE, igual que el resto, y quien no las tiene ve el candado (mas
+    # abajo, via `abierta()`). Se elimino "Seguimiento" y "Modulo Cotizador".
     orden = []
-    if puede(yo, "agenda"):
-        orden.append(("agenda", "🗓️ Agenda"))
+    orden.append(("agenda", "🗓️ Agenda"))
     orden.append(("oportunidades", "🎯 Oportunidades"))
-    orden.append(("seguimiento", "📌 Seguimiento"))
-    for clave, etiqueta in (("mercado_publico", "🏛️ Mercado Público"),
-                            # La puerta a los dos paneles de envio de Apps
-                            # Script. Va al lado de Mercado Publico porque es
-                            # de la misma clase: usa sus cuentas de Gmail y su
-                            # lista de contactos.
-                            ("envios", "📧 Email Catálogo y Ofertas"),
-                            ("cotizador", "🧾 Módulo Cotizador")):
-        if puede(yo, clave):
-            orden.append((clave, etiqueta))
+    orden.append(("mercado_publico", "🏛️ Convenios Marco"))
+    # La puerta a los dos paneles de envio de Apps Script. Va al lado de
+    # Convenios Marco porque es de la misma clase: usa sus cuentas de Gmail y
+    # su lista de contactos.
+    orden.append(("envios", "📧 Email Catálogo y Ofertas"))
     orden.append(("equipo", "👥 Mi equipo"))
     orden.append(("alertas", "🔔 Alertas"))
     if es_soporte(yo):
@@ -5467,8 +5465,8 @@ def main() -> None:
         candado(clave)
         return False
 
-    if "agenda" in pestanas:
-        with pestanas["agenda"]:
+    with pestanas["agenda"]:
+        if abierta("agenda"):
             from modulo_agenda import seccion_agenda
             seccion_agenda()
     with pestanas["oportunidades"]:
@@ -5477,26 +5475,17 @@ def main() -> None:
             # un error suyo no puede tumbar el resto del panel.
             from modulo_oportunidades import seccion_oportunidades
             seccion_oportunidades()
-    with pestanas["seguimiento"]:
-        if abierta("seguimiento"):
-            # El embudo de lo ya avisado. Va aparte de «Alertas» a proposito:
-            # aquella configura QUE llega, esta dice EN QUE QUEDO.
-            from modulo_seguimiento import seccion_seguimiento
-            seccion_seguimiento()
     with pestanas["alertas"]:
         if abierta("alertas"):
             # Importa `alertador.py` para que la vista previa use las mismas
             # reglas que el correo de verdad y no una copia desalineada.
             from modulo_alertas import seccion_alertas
             seccion_alertas()
-    if "mercado_publico" in pestanas:
-        with pestanas["mercado_publico"]:
+    with pestanas["mercado_publico"]:
+        if abierta("mercado_publico"):
             seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
-    if "cotizador" in pestanas:
-        with pestanas["cotizador"]:
-            seccion_cotizacion_regional(url_ofertas, precios_oferta)
-    if "envios" in pestanas:
-        with pestanas["envios"]:
+    with pestanas["envios"]:
+        if abierta("envios"):
             # La puerta a los dos paneles de Apps Script. No manda correo: los
             # abre. El envio se quedo en Gmail por decision del 01-09-2026.
             from modulo_envios import seccion_envios
