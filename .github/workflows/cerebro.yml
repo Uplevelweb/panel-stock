@@ -1,0 +1,60 @@
+# Recalcula el indice de n-gramas del Cerebro de palabras clave.
+#
+# Hermano de "Bodega de Licitaciones": ese workflow llena bodega/licitaciones/
+# cada mañana; este lee lo que haya ahi y deja bodega/indice_ngramas.parquet +
+# bodega/indice_token_rubro.parquet, que es lo que `modulo_alertas.py` consulta
+# en caliente para sugerir combinaciones de palabras clave.
+#
+# CORRE UNA VEZ POR SEMANA, no a diario: el corpus de licitaciones cerradas
+# no cambia lo bastante rapido dia a dia como para justificar recalcular
+# cada mañana (ver el docstring de `cerebro_keywords.py`). Se deja despues
+# del workflow de licitaciones -domingo, para que ya haya alcanzado a sumar
+# lo de toda la semana-.
+#
+# Es gratis: los repositorios publicos no pagan minutos de GitHub Actions.
+
+name: Cerebro de Palabras Clave
+
+on:
+  schedule:
+    - cron: "0 12 * * 0"     # domingo 08:00-09:00 en Chile (segun horario de verano)
+  workflow_dispatch:          # y tambien a mano, con el boton "Run workflow"
+
+permissions:
+  contents: write
+
+jobs:
+  cerebro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow pytest
+
+      - name: Probar el modulo antes de recalcular
+        run: python -m pytest test_cerebro_keywords.py -q
+
+      - name: Recalcular el indice de n-gramas
+        run: python cerebro_keywords.py
+
+      - name: Guardar el indice en el repositorio
+        run: |
+          git config user.name "Cerebro"
+          git config user.email "cerebro@users.noreply.github.com"
+          git add bodega/indice_ngramas.parquet bodega/indice_token_rubro.parquet
+          if git diff --staged --quiet; then
+            echo "El indice no cambio."
+          else
+            git commit -m "Cerebro: indice de n-gramas al $(date -u +'%d-%m-%Y')"
+            git pull --rebase --autostash origin main || true
+            git push
+          fi

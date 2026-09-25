@@ -34,6 +34,7 @@ import pandas as pd
 import streamlit as st
 
 import alertador
+import cerebro_keywords
 
 CARPETA = Path(__file__).parent
 RUTA_BODEGA = CARPETA / "bodega"
@@ -107,6 +108,19 @@ def rubros_disponibles(sello: str) -> list[str]:
     cuenta = d["rubro1"].dropna().astype(str).str.strip()
     cuenta = cuenta[cuenta.str.len() > 3].value_counts()
     return list(cuenta.head(300).index)
+
+
+@st.cache_data(show_spinner=False)
+def sugerencias_cerebro(semillas: tuple[str, ...]) -> list[dict]:
+    """Envuelve `cerebro_keywords.generar_sugerencias` en cache.
+
+    El indice no cambia entre corridas de la app -lo actualiza el workflow
+    semanal-, asi que cachear por las semillas evita recalcular en cada
+    interaccion del formulario. Sin indice todavia (primera semana antes de
+    que corra el workflow), `generar_sugerencias` ya falla abierto y
+    devuelve una lista vacia: aca no hace falta duplicar ese manejo.
+    """
+    return cerebro_keywords.generar_sugerencias(list(semillas))
 
 
 @st.cache_data(show_spinner=False)
@@ -385,6 +399,31 @@ def seccion_alertas():
         else:
             st.caption("Si escribiste tu RUT arriba, esto es opcional: las "
                        "palabras salen solas de lo que ya has vendido.")
+
+        # EL CEREBRO: de las palabras propias que escribio, propone
+        # combinaciones mas precisas -sacadas de licitaciones de verdad, no
+        # inventadas-, y el las acepta o las deja pasar. No reemplaza nada
+        # de lo de arriba: lo que se acepte aca se AGREGA a `palabras_clave`
+        # antes de armar `config`, exactamente como si las hubiera escrito
+        # el mismo a mano.
+        if palabras_clave:
+            sugerencias = sugerencias_cerebro(tuple(sorted(palabras_clave)))
+            if sugerencias:
+                opciones_sug = [s["frase"] for s in sugerencias]
+                etiquetas = {
+                    s["frase"]: f"{s['frase']} · {s['rubro1'].title()}"
+                    for s in sugerencias
+                }
+                elegidas_sug = st.multiselect(
+                    "Combinaciones sugeridas por el Cerebro",
+                    options=opciones_sug, key="al_sugerencias_cerebro",
+                    format_func=lambda f: etiquetas.get(f, f),
+                    placeholder="Combinaciones reales encontradas en licitaciones",
+                    help="Salen de analizar licitaciones publicadas recientes que "
+                         "mencionan lo que escribiste. Ninguna se agrega sola: "
+                         "elige las que de verdad describan lo que vendes.")
+                palabras_clave = palabras_clave + [
+                    s for s in elegidas_sug if s not in palabras_clave]
 
         st.markdown("**Dónde y desde cuánto**")
         regiones = st.multiselect("Regiones", options=REGIONES, key="al_regiones",

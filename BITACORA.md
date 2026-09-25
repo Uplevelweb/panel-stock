@@ -2399,3 +2399,82 @@ literal no son iguales, así que el disparador no encontró la cuenta y creó ot
   «Comercial Emergenza», guardada como `77.082.051-0`.
 - `alertador.solo_digitos_rut` ya hacía esto desde antes. **La regla existía y no se
   aplicó en el lugar nuevo** — es el modo típico en que estas cosas se escapan.
+
+## 25-09-2026 · El Cerebro de palabras clave
+
+Serling pidió un módulo que mejore las palabras clave que un proveedor escribe a mano
+en el formulario de Alertas: hoy «notebook» se manda tal cual a la bolsa de términos
+de `alertador.py` y se pierde «notebook i7 16gb», «notebook corporativo», «arriendo
+de notebook» — combinaciones con las que las licitaciones de verdad piden lo mismo.
+
+**No es un sistema aparte.** `cerebro_keywords.generar_sugerencias()` se conecta en
+`modulo_alertas.py` justo después de «¿Qué vendes?»: cuando el proveedor escribe una
+palabra propia, aparecen combinaciones sugeridas (sacadas de licitaciones reales) para
+que las acepte o no. Lo que acepta se agrega a `palabras_clave` exactamente como si lo
+hubiera escrito a mano — el motor de filtrado diario no se tocó.
+
+**De dónde aprende, y de dónde no.** Solo de `bodega/licitaciones/*.parquet` (licitaciones
+YA CERRADAS, historial desde enero 2025 — no hay más años que esos, el archivo de
+`transparenciachc.blob.core.windows.net/lic-da/` no tiene nada anterior). Compras Ágiles
+queda FUERA del entrenamiento a propósito: no existe una bodega histórica de compras
+ágiles — se consultan en vivo con una ventana de 1 a 7 días — así que no hay corpus del
+que aprender combinaciones. El filtrado diario de compras ágiles sigue igual, solo que
+con mejores palabras de entrada.
+
+**Se mide con PMI, no con TF-IDF.** TF-IDF pondera palabras dentro de un documento; acá
+hace falta medir qué tan pegadas van dos o tres palabras EN TODO EL CORPUS frente a que
+tan pegadas irían por azar — eso es PMI sobre colocaciones contiguas (2 a 4 palabras),
+contando por LICITACIÓN, no por línea×oferta (una licitación con 40 ofertas no puede
+pesar 40 veces: `bodega/licitaciones` trae una fila por línea×oferta, así que
+`_corpus_licitaciones()` dedupe por `codigo` antes de contar nada).
+
+⚠️ **El ranking necesitó dos ajustes después de probarlo con la bodega real, no con
+datos de juguete:**
+1. Con `puntaje = pmi * log1p(frecuencia)`, un par que salió 3 veces por azar (PMI
+   altísimo porque cada palabra suelta también es rarísima) le ganaba a uno sólido con
+   244 apariciones («impresoras multifuncionales» quedaba abajo de frases con 3-5
+   apariciones). `log1p(244)` es solo 4x `log1p(3)`; la frecuencia cruda es 80x. Se
+   cambió a `puntaje = pmi * frecuencia` — sin logaritmo — y ahí sí manda lo frecuente.
+2. Con el piso de frecuencia en 3, pasaban frases sin sentido («mts notebook cuente
+   almuerzos»): quitar las palabras de relleno ANTES de armar los n-gramas pega palabras
+   que en el texto original estaban lejos, si la licitación mezcla ítems distintos
+   («notebooks, catering, pantalla led...»). Con el piso en 5 (`FRECUENCIA_MINIMA`) casi
+   no pasan, pero **sigue siendo una limitación conocida, no resuelta**: una licitación
+   que mezcla rubros puede seguir generando alguna combinación rara si se repite 5 veces
+   o más. No se intentó arreglar con algo más sofisticado (separar por segmento de
+   frase, detectar texto repetido de boilerplate UNSPSC) — quedó para si molesta en uso
+   real, no antes.
+
+**El fallback es por rubro, sin embeddings.** `bodega/licitaciones` ya trae
+`rubro1/rubro2/rubro3` y `codigo_onu` (el UNSPSC) por línea — confirmado revisando
+`licitador.py`, no asumido — así que cuando las palabras semilla no alcanzan el mínimo
+de sugerencias, se completa con los mejores n-gramas de los rubros más asociados a esas
+palabras. Sin llamar a ningún modelo de embeddings: la data ya estaba. Esto NO cubre
+Compras Ágiles (no trae esa clasificación) ni evita devolver menos de 10 si la palabra
+semilla no aparece en ningún rubro conocido — ahí se devuelve lo que haya, aunque sea
+poco, en vez de forzar un mínimo con ruido.
+
+⚠️ **El primer intento de ordenar por puntaje tenía un bug real, encontrado por los
+propios tests**: cuando el fallback por rubro se activaba, sus resultados se
+ordenaban entre ellos pero se pegaban DESPUÉS de los directos sin reordenar la
+lista completa — un n-grama de rubro afín con más puntaje que la cola de los
+directos quedaba mal ubicado. Se corrigió juntando todos los candidatos en una
+sola lista y ordenando una sola vez al final (`generar_sugerencias`,
+`candidatos.sort(...)`), en vez de dos `sort_values` separados.
+
+**Se recalcula una vez por semana, no en caliente.** `cerebro_keywords.py` es hermano
+de `licitador.py`: un script que lee la bodega y deja un resultado precalculado en
+`bodega/indice_ngramas.parquet` y `bodega/indice_token_rubro.parquet`. El workflow
+`.github/workflows/cerebro.yml` lo corre los domingos y corre los tests antes de
+recalcular — si algo se rompe, no se empuja un índice malo. El formulario nunca
+recorre el corpus completo por request: solo lee el parquet ya armado.
+
+**Falla abierto, igual que el resto de la app.** Sin índice todavía (antes de la
+primera corrida del workflow) o sin coincidencias, `generar_sugerencias` devuelve una
+lista vacía y el formulario simplemente no muestra la sección de sugerencias — no se
+cae nada.
+
+Pendiente, anotado y no resuelto: si algún día se justifica, habría que (1) armar una
+bodega histórica de Compras Ágiles (hoy no existe) para que el Cerebro también aprenda
+de ellas, y (2) revisar si el ruido de licitaciones con ítems mezclados justifica algo
+más que subir `FRECUENCIA_MINIMA`.

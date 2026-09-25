@@ -163,6 +163,8 @@ no.
 | `.streamlit/config.toml` | Tema oscuro + `baseFontSize = 13` |
 | `enviador-para-copiar.txt` | Apps Script que envía los correos (uno por cuenta) |
 | `licitador.py` | Hermano del bodeguero: baja las LICITACIONES a `bodega/licitaciones` |
+| `cerebro_keywords.py` | El Cerebro: arma `bodega/indice_ngramas.parquet` (n-gramas con PMI) y `bodega/indice_token_rubro.parquet` desde la bodega de licitaciones; `generar_sugerencias()` es lo que consulta `modulo_alertas.py` |
+| `test_cerebro_keywords.py` | Pruebas del Cerebro, aisladas de la bodega real (`python -m pytest test_cerebro_keywords.py`) |
 | `alertador.py` | El correo diario de oportunidades (ver más abajo) |
 | `modulo_alertas.py` | Pestaña «Alertas»: configurar el correo y ver antes qué llegaría |
 | `modulo_oportunidades.py` | Pestaña «Oportunidades»: el mapa comercial por RUT |
@@ -1088,12 +1090,13 @@ app.button(key="mp_consultar").click().run()
 Las tablas se buscan **por sus columnas, no por su posición** (`app.dataframe[-1]` se rompió al
 cambiar el orden de las pestañas).
 
-## Los cuatro trabajos automáticos
+## Los cinco trabajos automáticos
 
 | Archivo | Cuándo | Qué hace |
 |---|---|---|
 | `bodega.yml` | 02:00 Chile | llena la bodega de Mercado Público |
 | `licitaciones.yml` | 07:00 Chile | llena la bodega de licitaciones |
+| `cerebro.yml` | domingo, después de licitaciones | recalcula el índice de n-gramas del Cerebro |
 | `alertas.yml` | 8, 13 y 18 Chile | el correo diario, disparado por el reloj de Supabase |
 | `bienvenida.yml` | cada 5 min + al inscribirse | el **primer** correo |
 
