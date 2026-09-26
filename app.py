@@ -2439,8 +2439,14 @@ def aplicar_estilos() -> None:
         }}
         .cabecera img {{ width: 62px; flex: none; }}
         .cabecera-texto {{ line-height: 1.15; text-align: center; }}
+        /* 26-09-2026, pedido de Serling: exacto -no proporcional- al tamaño
+           del encabezado de Panel Territorio (su "Territorio" es 21px, su
+           "Tu panel" es 15px), para que no se note distinto al pasar de
+           una pantalla a la otra. Antes escalaba 1.2x sobre el 27px que
+           tenia, lo que lo dejaba en 32.4px -mucho mas grande que su
+           equivalente en Panel Territorio-. */
         .titulo-panel {{
-            color: {COLOR['titulo']}; font-size: 32.4px; font-weight: bold; letter-spacing: -0.4px;
+            color: {COLOR['titulo']}; font-size: 21px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
             color: {COLOR['subtitulo']}; font-size: 15px; margin-top: 2px;
@@ -2626,8 +2632,11 @@ def aplicar_estilos() -> None:
         @media (max-width: 640px) {{
             .cabecera {{ flex-direction: column; gap: 8px; padding: 12px 10px; }}
             .cabecera img {{ width: 54px; }}
-            .titulo-panel {{ font-size: 25.2px; letter-spacing: -0.2px; }}
-            .subtitulo-panel {{ font-size: 13.2px; }}
+            /* 26-09-2026: Panel Territorio no achica su titulo en el celular
+               -su encabezado no tiene ninguna regla de @media-, asi que para
+               que quede exacto tampoco se achica aca; solo se ajusta el
+               layout (columna, aire, logo mas chico) arriba. */
+            .titulo-panel {{ letter-spacing: -0.2px; }}
 
             /* ---------- LAS TABLAS EN EL TELEFONO ----------
                Serling lo pidio el 01-09-2026: «para las vistas moviles hasta 10
