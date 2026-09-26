@@ -42,7 +42,11 @@ from modulo_planes import puede
 # lleva `/a/macros/emergenza.cl/` y la personal no.
 PANELES = [
     {
-        "nombre": "Ofertas y Catálogo",
+        # 26-09-2026, pedido de Serling: se renombró de "Ofertas y Catálogo" a
+        # "Ofertas y Catálogo Cartera" para dejar espacio, en el nombre, a la
+        # futura opción Premium de cartera de contactos (ver tarjeta
+        # "Email Catálogo de Ofertas" más abajo en seccion_envios()).
+        "nombre": "Ofertas y Catálogo Cartera",
         "cuenta": "svera@emergenza.cl",
         "contactos": 224,
         "alcance": "Todas las instituciones menos Armada",
@@ -55,7 +59,9 @@ PANELES = [
         "titulo_en_pantalla": "Panel de Catálogo y Ofertas",
     },
     {
-        "nombre": "Armada",
+        # 26-09-2026, pedido de Serling: mismo motivo que arriba — de "Armada"
+        # a "Ofertas y Catálogo Cartera (Solo Armada)".
+        "nombre": "Ofertas y Catálogo Cartera (Solo Armada)",
         "cuenta": "serlingvera@gmail.com",
         "contactos": 27,
         "alcance": "Solo la pestaña Armada",
@@ -113,6 +119,21 @@ def seccion_envios(usuario: dict) -> None:
                         "🔒 Tu cuenta puede ver esta sección, pero el envío "
                         "está reservado. Escríbenos a webuplevel@gmail.com "
                         "si necesitas activarlo.")
+
+    # 26-09-2026, pedido de Serling: tarjeta "Email Catálogo de Ofertas" que
+    # antes vivía en la Agenda (con su propia cartera de contactos y envío de
+    # campaña vía las funciones mailer_* de Supabase). Se movió para acá,
+    # debajo de las dos tarjetas de arriba, pero por ahora SOLO como vitrina
+    # simple: sin el botón "agregar a mi cartera" ni la lógica de contactos.
+    # Es una opción Premium que todavía se va a diseñar y definir — cuando
+    # se implemente, este bloque se reemplaza por la versión completa.
+    with st.expander("📨 Email Catálogo de Ofertas"):
+        st.caption(
+            "Tu cartera de contactos y el envío de campañas — plan Premium "
+            "de Territorio.")
+        st.info(
+            "Esta opción todavía no está disponible. Se está definiendo como "
+            "parte del plan Premium.")
 
     # EL AVISO VA DESPUES DE LOS BOTONES Y NO ANTES, a proposito: se lee cuando
     # ya se eligio uno, que es el momento en que sirve comprobar.

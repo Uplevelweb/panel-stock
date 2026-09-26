@@ -159,6 +159,25 @@ def solo_digitos_rut(rut: str) -> str:
     return re.sub(r"[^0-9kK]", "", str(rut or "")).upper()
 
 
+def rut_bonito(rut: str) -> str:
+    """«770820510» -> «77.082.051-0». Vacio si no hay nada que formatear.
+
+    26-09-2026, pedido de Serling: mostrar el RUT de cada proveedor en
+    "Quien se lo lleva hoy", para que quien quiera pueda investigarlo por
+    su cuenta -como adjudica, a que precios-.
+    """
+    limpio = solo_digitos_rut(rut)
+    if len(limpio) < 2:
+        return ""
+    cuerpo, dv = limpio[:-1], limpio[-1]
+    con_puntos = ""
+    for i, c in enumerate(reversed(cuerpo)):
+        if i and i % 3 == 0:
+            con_puntos = "." + con_puntos
+        con_puntos = c + con_puntos
+    return f"{con_puntos}-{dv}"
+
+
 # Lo que la bodega escribe en `convenio_marco` cuando la orden NO es de
 # Convenio Marco. Desde que la bodega guarda las seis vias, la mayoria de las
 # lineas viene asi.
@@ -180,8 +199,20 @@ def convenios_de(columna) -> list[str]:
     return sorted(c for c in valores if c.upper() not in SIN_CONVENIO)
 
 
+def _numero_cl(valor: float, decimales: int) -> str:
+    """Formatea a la chilena: punto para miles, coma para decimales -al
+    reves que el separador por defecto de Python-. Se hace con un
+    caracter de paso (%) para no pisar un separador con el otro."""
+    texto = f"{valor:,.{decimales}f}"
+    return texto.replace(",", "%").replace(".", ",").replace("%", ".")
+
+
 def plata(monto) -> str:
-    """1234567 -> «$1.234.567». Los millones se acortan para que quepan."""
+    """1234567 -> «$1,2 M». 26-09-2026, pedido de Serling: SIEMPRE en
+    millones con 1 decimal, sin excepcion -antes los montos bajo $1.000.000
+    salian en pesos completos ("$636.000"), lo que rompia la uniformidad de
+    la tarjeta y ocupaba mas espacio. Se pierde algo de precision en montos
+    chicos (ej: $93.915 -> "$0,1 M"), a cambio de que todo se lea parejo."""
     try:
         n = float(monto)
     except (TypeError, ValueError):
@@ -189,10 +220,8 @@ def plata(monto) -> str:
     if n <= 0:
         return "sin dato"
     if n >= 1_000_000_000:
-        return f"${n/1_000_000_000:,.1f}".replace(",", ".") + " mil M"
-    if n >= 1_000_000:
-        return f"${n/1_000_000:,.0f}".replace(",", ".") + " M"
-    return "$" + f"{n:,.0f}".replace(",", ".")
+        return "$" + _numero_cl(n / 1_000_000_000, 1) + " mil M"
+    return "$" + _numero_cl(n / 1_000_000, 1) + " M"
 
 
 def minimo_coincidencias(bolsa: set[str]) -> int:
@@ -251,7 +280,8 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
         f"{url}/rest/v1/suscriptores"
         "?select=id,email,nombre,empresa,rut_empresa,token_baja,fecha_consentimiento,"
         "plan,al_dia,telefono_contacto,prueba_vence,"
-        "filtros(rubros,regiones,monto_minimo,frecuencia,rut_proveedor,palabras_clave,"
+        "filtros(rubros,regiones,monto_minimo,monto_minimo_licitaciones,monto_minimo_agiles,"
+        "frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
         "&activo=eq.true"
         # Si tiene un plan pagado y esta atrasado (al_dia=false), no recibe el
@@ -292,6 +322,12 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
             "palabras_clave": f.get("palabras_clave") or [],
             "regiones": f.get("regiones") or [],
             "monto_minimo": int(f.get("monto_minimo") or 0),
+            # 26-09-2026, pedido de Serling: monto minimo separado por tipo de
+            # oportunidad (antes era un solo umbral compartido). Se conserva
+            # "monto_minimo" arriba por compatibilidad, pero le_sirve() ya solo
+            # usa los dos de abajo.
+            "monto_minimo_licitaciones": int(f.get("monto_minimo_licitaciones") or 0),
+            "monto_minimo_agiles": int(f.get("monto_minimo_agiles") or 0),
             "incluye_licitaciones": f.get("incluye_licitaciones", True),
             "incluye_compras_agiles": f.get("incluye_compras_agiles", True),
         })
@@ -926,9 +962,10 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
     humo: cuando descubra que en alimentos son $50 M se siente engañado.
 
     Devuelve, por unidad:
-      via         {mecanismo: monto}   como compra
-      proveedores [(nombre, monto)]    quienes se lo llevan hoy, de mayor a menor
-      rubro       {palabra: monto}     en que se le va la plata dentro del rubro
+      via         {mecanismo: monto}       como compra
+      proveedores [(nombre, monto, rut)]   quienes se lo llevan hoy, de mayor a menor
+                                            -rut viene vacio si el archivo no lo trae-
+      rubro       {palabra: monto}         en que se le va la plata dentro del rubro
       total       float
     """
     if not unidades or not bolsa or not BODEGA_OC.exists():
@@ -936,7 +973,11 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
 
     corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
     via: dict[str, dict[str, float]] = {}
-    prov: dict[str, dict[str, float]] = {}
+    # 26-09-2026, pedido de Serling: se agrega el RUT de cada proveedor, para
+    # que quien reciba el correo pueda investigarlo por su cuenta. prov queda
+    # {unidad: {nombre: {"monto": float, "rut": str}}} en vez de un simple
+    # {nombre: monto} -mismo dato de siempre, con el RUT colgando al lado.
+    prov: dict[str, dict[str, dict]] = {}
     rubro: dict[str, dict[str, float]] = {}
 
     for archivo in sorted(BODEGA_OC.glob("*.parquet")):
@@ -948,7 +989,8 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
             # lectura entera y el correo salia sin el desglose, en silencio.
             import pyarrow.parquet as pq
             hay = set(pq.read_schema(archivo).names)
-            pedidas = [c for c in ("unidad", "mecanismo", "proveedor", "producto", "total")
+            pedidas = [c for c in ("unidad", "mecanismo", "proveedor", "rut_proveedor",
+                                   "producto", "total")
                        if c in hay]
             if "producto" not in pedidas or "total" not in pedidas:
                 continue
@@ -983,12 +1025,21 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
             continue
         tocadas = tocadas[suficientes]
         mes["total"] = pd.to_numeric(mes["total"], errors="coerce").fillna(0.0)
+        # Se normaliza ANTES de agrupar -mismo RUT escrito "77.082.051-0" un
+        # mes y "770820510" otro no debe partir al proveedor en dos filas.
+        if "rut_proveedor" in mes.columns:
+            mes["rut_proveedor"] = mes["rut_proveedor"].astype(str).map(solo_digitos_rut)
+        else:
+            mes["rut_proveedor"] = ""  # archivo viejo sin esa columna: la tarjeta sale igual, sin RUT
 
         for (u, m), monto in mes.groupby(["unidad", "mecanismo"], observed=True)["total"].sum().items():
             via.setdefault(str(u), {})[str(m)] = via.get(str(u), {}).get(str(m), 0.0) + float(monto)
-        for (u, pr), monto in mes.groupby(["unidad", "proveedor"], observed=True)["total"].sum().items():
-            prov.setdefault(str(u), {})
-            prov[str(u)][str(pr)] = prov[str(u)].get(str(pr), 0.0) + float(monto)
+        for (u, pr, rut), monto in mes.groupby(
+                ["unidad", "proveedor", "rut_proveedor"], observed=True)["total"].sum().items():
+            fila = prov.setdefault(str(u), {}).setdefault(str(pr), {"monto": 0.0, "rut": ""})
+            fila["monto"] += float(monto)
+            if rut and not fila["rut"]:
+                fila["rut"] = str(rut)
         for unidad, terminos, monto in zip(mes["unidad"].astype(str), tocadas, mes["total"]):
             reparto = float(monto) / max(len(terminos), 1)
             rubro.setdefault(unidad, {})
@@ -999,10 +1050,11 @@ def radiografia_de_unidades(unidades: set[str], bolsa: set[str],
     salida = {}
     for u in unidades:
         u = str(u)
-        proveedores = sorted(prov.get(u, {}).items(), key=lambda x: -x[1])
+        proveedores = sorted(prov.get(u, {}).items(), key=lambda x: -x[1]["monto"])
         salida[u] = {
             "via": via.get(u, {}),
-            "proveedores": proveedores[:5],
+            "proveedores": [(nombre, datos["monto"], datos["rut"])
+                            for nombre, datos in proveedores[:5]],
             "rubro": dict(sorted(rubro.get(u, {}).items(), key=lambda x: -x[1])[:6]),
             "total": sum(via.get(u, {}).values()),
         }
@@ -1585,7 +1637,14 @@ def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
         if suya and suya not in {str(u).strip() for u in unidades}:
             return 0
 
-    minimo = suscriptor.get("monto_minimo") or 0
+    # 26-09-2026, pedido de Serling: monto minimo separado por tipo -antes
+    # era un solo umbral compartido entre licitaciones y compras agiles-. Asi
+    # cada quien recibe solo las oportunidades del monto que le interesa en
+    # cada categoria, sin tener que elegir un unico piso para las dos.
+    if oportunidad["tipo"] == "compra_agil":
+        minimo = suscriptor.get("monto_minimo_agiles") or 0
+    else:
+        minimo = suscriptor.get("monto_minimo_licitaciones") or 0
     if minimo and oportunidad.get("monto") and oportunidad["monto"] < minimo:
         return 0
 
@@ -1706,16 +1765,23 @@ def tarjeta(op: dict) -> str:
 
     if proveedores:
         # QUIEN — contra quien compite, hasta 10
-        suma = sum(m for _, m in proveedores) or 1
+        suma = sum(m for _, m, _ in proveedores) or 1
         filas = []
-        for i, (nombre, monto) in enumerate(proveedores, 1):
+        for i, (nombre, monto, rut) in enumerate(proveedores, 1):
             destacado = "700" if i == 1 else "400"
+            # 26-09-2026, pedido de Serling: el RUT va debajo del nombre, en
+            # letra bien chica, para el que quiera investigar a ese
+            # proveedor por su cuenta -como adjudica, a que precios-. Si el
+            # archivo no trajo RUT para esta fila, no se muestra nada extra.
+            rut_legible = rut_bonito(rut)
+            linea_rut = (f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;'
+                         f'margin-top:1px;">{rut_legible}</div>') if rut_legible else ""
             filas.append(
                 f'<tr>'
                 f'<td width="16" valign="top" style="padding:3px 0;color:{TEXTO_SUAVE};'
                 f'font-size:11.5px;">{i}.</td>'
                 f'<td style="padding:3px 0;color:{TEXTO};font-size:12.5px;'
-                f'font-weight:{destacado};">{nombre[:40]}</td>'
+                f'font-weight:{destacado};">{nombre[:40]}{linea_rut}</td>'
                 f'<td align="right" style="padding:3px 0;color:{TEXTO_SUAVE};'
                 f'font-size:12.5px;white-space:nowrap;">{plata(monto)} '
                 f'<span style="color:{NARANJO};font-weight:600;">'
@@ -1971,7 +2037,7 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
     <table width="100%" cellpadding="0" cellspacing="0"
            style="background:#f7f9fb;border-radius:12px;padding:16px 18px;">
       <tr><td style="padding-bottom:6px;">
-        <div style="font-size:16px;font-weight:700;color:#12293f;">Tus 3 del mes</div>
+        <div style="font-size:16px;font-weight:700;color:#12293f;">Acciones Comerciales en Convenio Marco</div>
         <div style="color:#5b6b7c;font-size:13px;">
           Una puerta de cada tipo. No hay que anotar nada: el proximo mes la
           bodega dice sola si te compraron.</div>
@@ -1997,12 +2063,12 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     bloques = []
     if agiles:
         bloques.append(encabezado_grupo(
-            f"Compras ágiles · {len(agiles)}",
+            f"Oportunidades en Compras Ágiles · {len(agiles)}",
             "Cierran en 24 a 72 horas. Si vas, es hoy."))
         bloques += [tarjeta(o) for o in agiles]
     if licitaciones:
         bloques.append(encabezado_grupo(
-            f"Licitaciones · {len(licitaciones)}",
+            f"Oportunidades en Licitaciones · {len(licitaciones)}",
             "Con plazo para preparar la oferta."))
         bloques += [tarjeta(o) for o in licitaciones]
     tarjetas = "".join(bloques)
@@ -2656,7 +2722,7 @@ def main():
         if not ticket:
             print("Falta TICKET_MP en el entorno. Con --prueba no hace falta.")
             return
-        # Para el primer correo se miran 7 dias HABILES de compras agiles en
+        # Para el primer correo se miran 10 dias HABILES de compras agiles en
         # vez de uno: hace falta material para que no llegue casi vacio.
         #
         # Historia de este numero, porque va y viene:
@@ -2670,7 +2736,10 @@ def main():
         #     dias de vigencia y con 3 se pierden. Las dos razones de agosto
         #     estan tapadas: ahora se descartan las ya cerradas al leerlas, y
         #     el techo de paginas sube para el primer correo.
-        dias_agiles = 7 if args.bienvenidas else 1
+        #   - El 26-09-2026 suben de 7 a 10, mismo motivo que el 31-08: Serling
+        #     sigue viendo compras agiles vigentes mas viejas que se pierden.
+        #     Es simplemente para ampliar el rango y sumar mas oportunidades.
+        dias_agiles = 10 if args.bienvenidas else 1
 
         # Las dos consultas se miden POR SEPARADO. Juntas decian «1194 s» y
         # no se podia saber cual acortar: son cosas distintas y se arreglan
@@ -2681,12 +2750,13 @@ def main():
         print("[tiempo] licitaciones: %.0f s" % (time.perf_counter() - marca))
 
         marca = time.perf_counter()
-        # El techo sube SOLO para la bienvenida: con 7 dias habiles hay
+        # El techo sube SOLO para la bienvenida: con 10 dias habiles hay
         # muchas mas y con 40 paginas se cortaria en silencio. El correo
-        # diario mira un dia y con 40 le sobra.
+        # diario mira un dia y con 40 le sobra. Subido de 120 a 170 el
+        # 26-09-2026 junto con dias_agiles (7->10), misma proporcion.
         agi = compras_agiles_abiertas(
             ticket, dias=dias_agiles, habiles=args.bienvenidas,
-            techo_paginas=120 if args.bienvenidas else 40)
+            techo_paginas=170 if args.bienvenidas else 40)
         print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
 
         universo = lic + agi
