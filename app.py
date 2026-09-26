@@ -2402,26 +2402,27 @@ def aplicar_estilos() -> None:
            necesita decir en cual estás parado, no es una alerta que atender-,
            con el mismo tono suave que ya usa la insignia de plan (fondo
            naranjo tenue, texto naranjo fuerte).
+
+           26-09-2026, correccion en caliente: el selector original era
+           [data-baseweb="tab"] (la libreria BaseWeb, vieja). Streamlit
+           actualizo sus pestañas a react-aria y ahora el atributo real es
+           [data-testid="stTab"] -comprobado a mano en el DOM en vivo con
+           Claude in Chrome, el CSS anterior nunca llego a pintar nada-.
         */
-        [data-baseweb="tab"] {{
+        [data-testid="stTab"] {{
             border-radius: 999px !important;
             border: 1px solid {COLOR['borde']} !important;
             padding: 6px 18px !important;
             margin-right: 6px !important;
             background: {COLOR['tarjeta']} !important;
         }}
-        [data-baseweb="tab"][aria-selected="true"] {{
+        [data-testid="stTab"][aria-selected="true"] {{
             border-color: {COLOR['rojo']} !important;
             background: rgba(217, 116, 31, .16) !important;
         }}
-        [data-baseweb="tab"][aria-selected="true"] p {{
+        [data-testid="stTab"][aria-selected="true"] p {{
             color: {COLOR['rojo']} !important;
             font-weight: 700 !important;
-        }}
-        /* La rayita de abajo que Streamlit dibuja bajo la pestaña elegida ya
-           no hace falta -la cápsula naranja cumple ese rol-. */
-        [data-baseweb="tab-highlight"] {{
-            display: none !important;
         }}
         [role="radiogroup"] label, [data-baseweb="segmented-control"],
         [data-baseweb="segmented-control"] div[role="tab"] {{
