@@ -2440,10 +2440,10 @@ def aplicar_estilos() -> None:
         .cabecera img {{ width: 62px; flex: none; }}
         .cabecera-texto {{ line-height: 1.15; text-align: center; }}
         .titulo-panel {{
-            color: {COLOR['titulo']}; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
+            color: {COLOR['titulo']}; font-size: 32.4px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
-            color: {COLOR['subtitulo']}; font-size: 12.5px; margin-top: 2px;
+            color: {COLOR['subtitulo']}; font-size: 15px; margin-top: 2px;
         }}
         /* ---------- LA FORMA VISUAL DEL BOCETO (02-09-2026) ----------
            Serling mando un boceto y de el se tomaron primero las ideas —el
@@ -2465,10 +2465,10 @@ def aplicar_estilos() -> None:
             padding: 11px 16px;
             margin: 4px 0 14px;
         }}
-        .cinta-pasos .paso {{ font-size: 15px; white-space: nowrap; }}
+        .cinta-pasos .paso {{ font-size: 18px; white-space: nowrap; }}
         .cinta-pasos .flecha {{ color: {COLOR['flecha']}; padding: 0 12px; }}
         .cinta-pasos .que-es {{
-            color: {COLOR['texto_suave']}; font-size: 13px;
+            color: {COLOR['texto_suave']}; font-size: 15.6px;
             margin-left: auto; padding-left: 14px;
         }}
 
@@ -2480,14 +2480,14 @@ def aplicar_estilos() -> None:
             box-shadow: {SOMBRA};
         }}
         .cifra .rotulo {{
-            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
+            font-size: 13.8px; letter-spacing: .09em; text-transform: uppercase;
             color: {COLOR['texto_suave']}; font-weight: 600;
         }}
         .cifra .valor {{
-            font-size: 27px; font-weight: 700; color: {COLOR['texto']};
+            font-size: 32.4px; font-weight: 700; color: {COLOR['texto']};
             margin-top: 4px; line-height: 1.1;
         }}
-        .cifra .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+        .cifra .pie {{ font-size: 14.4px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
         /* La tercera es la que importa: lo que hay por ganar. Va en verde
            porque es lo unico de la fila que es una oportunidad y no un hecho. */
         .cifra.ganar {{
@@ -2543,7 +2543,7 @@ def aplicar_estilos() -> None:
             outline: 2px solid {COLOR['rojo']}; outline-offset: 2px;
         }}
         .camino .pulsar {{
-            margin-top: 11px; padding-top: 9px; font-size: 12.5px; font-weight: 600;
+            margin-top: 11px; padding-top: 9px; font-size: 15px; font-weight: 600;
             color: {COLOR['texto_suave']};
             border-top: 1px solid {COLOR['borde']};
         }}
@@ -2558,17 +2558,17 @@ def aplicar_estilos() -> None:
            mismo criterio que el filo superior de la tarjeta (08-09-2026:
            en modo claro casi no se notaba). */
         .camino .letra {{
-            float: right; font-size: 12px; font-weight: 700;
+            float: right; font-size: 14.4px; font-weight: 700;
             border-radius: 6px; padding: 1px 7px;
         }}
         .camino.a .letra {{ color: #d9741f; background: rgba(217,116,31,.14); }}
         .camino.b .letra {{ color: #2f6bb0; background: rgba(47,107,176,.14); }}
         .camino .titulo {{
-            font-size: 19px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
+            font-size: 22.8px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
         }}
-        .camino .cuanto {{ font-size: 32px; font-weight: 800; color: {COLOR['texto']}; line-height: 1.05; }}
+        .camino .cuanto {{ font-size: 38.4px; font-weight: 800; color: {COLOR['texto']}; line-height: 1.05; }}
         .camino .bajada {{
-            font-size: 13px; color: {COLOR['texto_suave']}; margin-top: 6px;
+            font-size: 15.6px; color: {COLOR['texto_suave']}; margin-top: 6px;
         }}
 
         /* El ranking de Prioridad y Conquistar (07-09-2026): unas pocas
@@ -2576,7 +2576,7 @@ def aplicar_estilos() -> None:
         .camino .ranking {{ margin-top: 10px; }}
         .camino .fila-rank {{
             display: flex; justify-content: space-between; gap: 10px;
-            font-size: 12.5px; color: {COLOR['texto']};
+            font-size: 15px; color: {COLOR['texto']};
             padding: 4px 0; border-top: 1px solid {COLOR['borde']};
         }}
         .camino .fila-rank .nombre {{ font-weight: 600; }}
@@ -2584,7 +2584,7 @@ def aplicar_estilos() -> None:
         /* Por que convenio marco compra esa unidad, en chico bajo su nombre
            (08-09-2026). Es lo que dice de que catalogo cotizarle. */
         .camino .fila-rank .via {{
-            display: block; font-weight: 400; font-size: 11.5px;
+            display: block; font-weight: 400; font-size: 13.8px;
             color: {COLOR['texto_suave']}; margin-top: 1px;
         }}
 
@@ -2595,14 +2595,14 @@ def aplicar_estilos() -> None:
             box-shadow: {SOMBRA};
         }}
         .evolucion .rotulo {{
-            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
+            font-size: 13.8px; letter-spacing: .09em; text-transform: uppercase;
             color: {COLOR['texto_suave']}; font-weight: 600;
         }}
         .evolucion .valor {{
-            font-size: 22px; font-weight: 700; color: {COLOR['texto']};
+            font-size: 26.4px; font-weight: 700; color: {COLOR['texto']};
             margin-top: 4px;
         }}
-        .evolucion .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+        .evolucion .pie {{ font-size: 14.4px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
 
         /* ---------- LA BARRA DE STREAMLIT NO ES NUESTRA ----------
            Arriba a la derecha, Streamlit pone «Fork» y el icono de GitHub, que
@@ -2626,8 +2626,8 @@ def aplicar_estilos() -> None:
         @media (max-width: 640px) {{
             .cabecera {{ flex-direction: column; gap: 8px; padding: 12px 10px; }}
             .cabecera img {{ width: 54px; }}
-            .titulo-panel {{ font-size: 21px; letter-spacing: -0.2px; }}
-            .subtitulo-panel {{ font-size: 11px; }}
+            .titulo-panel {{ font-size: 25.2px; letter-spacing: -0.2px; }}
+            .subtitulo-panel {{ font-size: 13.2px; }}
 
             /* ---------- LAS TABLAS EN EL TELEFONO ----------
                Serling lo pidio el 01-09-2026: «para las vistas moviles hasta 10
@@ -2658,18 +2658,18 @@ def aplicar_estilos() -> None:
                tarjeta, sin esto hay que hacer zoom para leer los nombres. */
             .cifras-diag {{ gap: 8px; }}
             .cifra {{ flex: 1 1 100%; padding: 11px 13px; }}
-            .cifra .valor {{ font-size: 23px; }}
+            .cifra .valor {{ font-size: 27.6px; }}
             .camino {{ padding: 13px 14px 11px; }}
-            .camino .titulo {{ font-size: 17px; }}
-            .camino .cuanto {{ font-size: 27px; }}
-            .camino .bajada {{ font-size: 12.5px; }}
-            .camino .fila-rank {{ font-size: 12px; padding: 5px 0; }}
-            .camino .fila-rank .via {{ font-size: 11px; }}
-            .cinta-pasos {{ font-size: 13px; padding: 9px 12px; }}
-            .cinta-pasos .paso {{ font-size: 13px; }}
+            .camino .titulo {{ font-size: 20.4px; }}
+            .camino .cuanto {{ font-size: 32.4px; }}
+            .camino .bajada {{ font-size: 15px; }}
+            .camino .fila-rank {{ font-size: 14.4px; padding: 5px 0; }}
+            .camino .fila-rank .via {{ font-size: 13.2px; }}
+            .cinta-pasos {{ font-size: 15.6px; padding: 9px 12px; }}
+            .cinta-pasos .paso {{ font-size: 15.6px; }}
             .cinta-pasos .flecha {{ padding: 0 7px; }}
             .cinta-pasos .que-es {{ margin-left: 0; padding-left: 0; }}
-            .evolucion .valor {{ font-size: 19px; }}
+            .evolucion .valor {{ font-size: 22.8px; }}
         }}
         </style>
         """,
@@ -2687,7 +2687,7 @@ def cabecera() -> None:
         logo = base64.b64encode(RUTA_LOGO_UPLEVEL.read_bytes()).decode()
         marca = f'<img src="data:image/png;base64,{logo}" alt="Uplevel">'
     else:
-        marca = (f'<div style="color:{COLOR["rojo"]};font-size:20px;font-weight:bold;'
+        marca = (f'<div style="color:{COLOR["rojo"]};font-size:24px;font-weight:bold;'
                  f'line-height:1.1">UP<br>LEVEL</div>')
     st.markdown(
         f'<div class="cabecera">{marca}'

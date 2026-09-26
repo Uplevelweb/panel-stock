@@ -17,4 +17,11 @@ textColor = "#0c2c57"
 font = "sans-serif"
 # Un 15% mas grande que el 13 que tenia (27-08-2026: costaba leerlo). Se hace
 # aqui y no con CSS para que la tabla tambien lo respete y no se rompa la seleccion.
-baseFontSize = 15
+#
+# 26-09-2026, pedido de Serling: subido de 15 a 18 -un 20% mas- para que el
+# tamaño de letra de "Territorio Comercial" quede proporcional al de "Panel
+# Territorio" (cuyo texto de contenido usa 18px). Todo lo que en app.py esta
+# en rem/em escala solo con este numero; los tamaños en px puestos a mano en
+# el CSS de aplicar_estilos() se subieron ese mismo 20% a mano, para que la
+# proporcion entre titulo/subtitulo/contenido no cambie, solo el tamaño.
+baseFontSize = 18
