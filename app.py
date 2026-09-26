@@ -2393,8 +2393,35 @@ def aplicar_estilos() -> None:
         .stFormSubmitButton > button, [data-testid^="stBaseButton"] {{
             border-radius: 999px !important;
         }}
+        /* 26-09-2026, pedido de Serling: las pestañas (Oportunidades, Convenio
+           Marco, etc.) deben verse encerradas en su cápsula -antes el
+           border-radius no se notaba porque no habia fondo ni borde que
+           rellenar-, igual que las "pestañas" de acceso rápido de Territorio
+           y Agenda (Panel Territorio, .acceso-rapido). La elegida SI se pinta
+           de naranjo -a diferencia de "Configura tus alertas", una pestaña
+           necesita decir en cual estás parado, no es una alerta que atender-,
+           con el mismo tono suave que ya usa la insignia de plan (fondo
+           naranjo tenue, texto naranjo fuerte).
+        */
         [data-baseweb="tab"] {{
             border-radius: 999px !important;
+            border: 1px solid {COLOR['borde']} !important;
+            padding: 6px 18px !important;
+            margin-right: 6px !important;
+            background: {COLOR['tarjeta']} !important;
+        }}
+        [data-baseweb="tab"][aria-selected="true"] {{
+            border-color: {COLOR['rojo']} !important;
+            background: rgba(217, 116, 31, .16) !important;
+        }}
+        [data-baseweb="tab"][aria-selected="true"] p {{
+            color: {COLOR['rojo']} !important;
+            font-weight: 700 !important;
+        }}
+        /* La rayita de abajo que Streamlit dibuja bajo la pestaña elegida ya
+           no hace falta -la cápsula naranja cumple ese rol-. */
+        [data-baseweb="tab-highlight"] {{
+            display: none !important;
         }}
         [role="radiogroup"] label, [data-baseweb="segmented-control"],
         [data-baseweb="segmented-control"] div[role="tab"] {{
@@ -5407,7 +5434,10 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
-    guia_de_entrada()
+    #
+    # 26-09-2026, pedido de Serling: se saca la guía "¿Primera vez? Pulsa
+    # aquí..." -la reemplazan los video tutoriales-. Queda `guia_de_entrada()`
+    # sin llamar, por si hace falta reponerla.
 
     # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
     # escribir un RUT: quien entra ve algo suyo en segundos, sin buscar ni
