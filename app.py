@@ -53,7 +53,7 @@ from fpdf.fonts import FontFace
 # 1. CONFIGURACION
 # ===========================================================================
 
-TITULO_APP = "Territorio Comercial"
+TITULO_APP = "Uplevel Inteligencia"
 SUBTITULO_APP = "Compras Públicas · Chile"
 
 # Enlaces que trae la app cargados de fabrica. Los dos campos son editables:
@@ -118,26 +118,48 @@ RUTA_ICONO = RUTA_LOGO_UPLEVEL
 # Paleta tomada del Panel Armada (emergenza-mailer/Index.html) para que los
 # dos paneles se vean como un mismo sistema.
 # ---------------------------------------------------------------- LOS COLORES
-# 24-09-2026, pedido de Serling: se saca el modo oscuro. Habia dos paletas y
-# un boton para alternar, pero `modo_de_la_vista()` -de donde salian los
-# colores propios (tarjetas HTML, sombra)- caia en oscuro cada vez que
-# `st.context.theme` no alcanzaba a resolver el tipo a tiempo (ver el detalle
-# que se borro mas abajo), y eso desarmaba pantallas: widgets nativos de
-# Streamlit en claro (por el `base = "light"` de config.toml) mezclados con
-# tarjetas en oscuro. Mas simple y sin ese riesgo: una sola paleta, siempre.
+# Dos paletas, una por modo (08-09-2026, pedido de Serling). El codigo las pide
+# siempre igual —COLOR['tarjeta']— y sale la del modo en que esta mirando QUIEN
+# TIENE ESA PANTALLA ABIERTA, que no tiene por que ser el mismo de otra persona
+# conectada al mismo tiempo.
 #
-# Los colores de Streamlit -fondo de la pagina, botones, tablas- se definen en
-# .streamlit/config.toml, que ahora trae un solo juego bajo [theme]. Si se
-# cambia un color aca hay que cambiarlo alla tambien.
-COLOR = {
+# Por eso `COLOR` no es un diccionario normal al que se le cambien los valores
+# al empezar cada corrida: todas las sesiones comparten el mismo proceso de
+# Python y se pisarian los colores entre ellas. Es un diccionario que RESUELVE
+# cada consulta contra el modo de quien pregunta. Ver `modo_de_la_vista`.
+#
+# Los colores de Streamlit —fondo de la pagina, botones, tablas— NO se definen
+# aca sino en .streamlit/config.toml, que trae los mismos dos juegos en
+# [theme.light] y [theme.dark]. Si se cambia uno hay que cambiar el otro.
+PALETA_OSCURA = {
+    "fondo": "#0c2c57",
+    "tarjeta": "#123a6e",
+    "borde": "#1e4d87",
+    "texto": "#EAF1F8",
+    "texto_suave": "#A9BED4",
+    # La llave se sigue llamando «rojo» porque esta usada en decenas de
+    # lugares; lo que cambio es el color, que ahora es el naranjo de
+    # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
+    "rojo": "#f18c3f",
+    "blanco": "#FFFFFF",
+    "titulo": "#0c2c57",
+    "subtitulo": "#5A7089",
+    "flecha": "#3f5a7d",
+    "verde_fondo": "#10432f",
+    "verde_borde": "#1c6b4a",
+    "verde_texto": "#7ee0ab",
+    "verde_rotulo": "#9fd9bd",
+    "baja": "#f0a3a3",
+    "igual": "#c9d3e0",
+}
+PALETA_CLARA = {
     "fondo": "#F2F6FB",
     "tarjeta": "#FFFFFF",
     "borde": "#D3DFEC",
     "texto": "#0c2c57",
     "texto_suave": "#5A7089",
-    # La llave se sigue llamando «rojo» porque esta usada en decenas de
-    # lugares; lo que cambio es el color, que ahora es el naranjo de
-    # Uplevel. Renombrarla seria tocar codigo que hoy funciona.
+    # El mismo naranjo, un punto mas oscuro: el #f18c3f sobre blanco no alcanza
+    # el contraste para leerse. Es el unico color de marca que cambia de tono.
     "rojo": "#d9741f",
     "blanco": "#FFFFFF",
     "titulo": "#0c2c57",
@@ -150,6 +172,49 @@ COLOR = {
     "baja": "#C0392B",
     "igual": "#5A7089",
 }
+
+
+def modo_de_la_vista() -> str:
+    """«claro» u «oscuro», segun como esta mirando esta persona.
+
+    Lo decide el navegador y Streamlit lo cuenta en `st.context.theme`: puede
+    venir del boton de la app —que lo deja guardado— o, si nunca lo toco, del
+    modo en que este el telefono o el PC. Ante cualquier duda, oscuro, que es
+    como estuvo la app desde que existe.
+    """
+    try:
+        tema = st.context.theme
+        tipo = getattr(tema, "type", None)
+        if tipo is None and isinstance(tema, dict):
+            tipo = tema.get("type")
+    except Exception:
+        tipo = None
+    return "claro" if tipo == "light" else "oscuro"
+
+
+class _Colores(dict):
+    """Se comporta como la paleta del modo activo, sin copiarla a ningun lado."""
+
+    def _vigente(self) -> dict:
+        return PALETA_CLARA if modo_de_la_vista() == "claro" else PALETA_OSCURA
+
+    def __getitem__(self, clave):
+        return self._vigente()[clave]
+
+    def get(self, clave, por_defecto=None):
+        return self._vigente().get(clave, por_defecto)
+
+    def items(self):
+        return self._vigente().items()
+
+    def values(self):
+        return self._vigente().values()
+
+
+# Se construye sobre la oscura para que `in`, `len` y `keys` respondan aunque
+# no haya nadie mirando (las pruebas, por ejemplo). Las dos tienen las mismas
+# llaves; si se agrega una a una, hay que agregarla a la otra.
+COLOR = _Colores(PALETA_OSCURA)
 TIPOGRAFIA = 'Tahoma, Geneva, Verdana, "DejaVu Sans", sans-serif'
 
 # Columnas de la tabla final, en este orden. Todo lo demas se descarta.
@@ -2354,10 +2419,13 @@ def buscar_compras_cm(unidades: pd.DataFrame, desde: date, hasta: date,
 
 def aplicar_estilos() -> None:
     """Tipografia y tarjetas iguales a las del Panel Armada."""
-    # La tarjeta y el fondo son casi el mismo blanco/gris y sin nada mas se
-    # ven planas -"menos amigable", dijo Serling el 08-09-2026-. Una sombra
-    # suave les da relieve sin tocar ningun color.
-    SOMBRA = "0 1px 3px rgba(12,44,87,.08)"
+    # En modo oscuro las tarjetas ya se distinguen del fondo por el color
+    # (tarjeta mas clara que el fondo). En modo claro las dos son casi el
+    # mismo blanco/gris y sin nada mas se ven planas -"menos amigable",
+    # dijo Serling el 08-09-2026-. Una sombra suave les da el mismo relieve
+    # que ya tenian en oscuro, sin tocar ningun color.
+    SOMBRA = ("0 1px 3px rgba(12,44,87,.08)" if modo_de_la_vista() == "claro"
+              else "none")
     st.markdown(
         f"""
         <style>
@@ -2393,36 +2461,8 @@ def aplicar_estilos() -> None:
         .stFormSubmitButton > button, [data-testid^="stBaseButton"] {{
             border-radius: 999px !important;
         }}
-        /* 26-09-2026, pedido de Serling: las pestañas (Oportunidades, Convenio
-           Marco, etc.) deben verse encerradas en su cápsula -antes el
-           border-radius no se notaba porque no habia fondo ni borde que
-           rellenar-, igual que las "pestañas" de acceso rápido de Territorio
-           y Agenda (Panel Territorio, .acceso-rapido). La elegida SI se pinta
-           de naranjo -a diferencia de "Configura tus alertas", una pestaña
-           necesita decir en cual estás parado, no es una alerta que atender-,
-           con el mismo tono suave que ya usa la insignia de plan (fondo
-           naranjo tenue, texto naranjo fuerte).
-
-           26-09-2026, correccion en caliente: el selector original era
-           [data-baseweb="tab"] (la libreria BaseWeb, vieja). Streamlit
-           actualizo sus pestañas a react-aria y ahora el atributo real es
-           [data-testid="stTab"] -comprobado a mano en el DOM en vivo con
-           Claude in Chrome, el CSS anterior nunca llego a pintar nada-.
-        */
-        [data-testid="stTab"] {{
+        [data-baseweb="tab"] {{
             border-radius: 999px !important;
-            border: 1px solid {COLOR['borde']} !important;
-            padding: 6px 18px !important;
-            margin-right: 6px !important;
-            background: {COLOR['tarjeta']} !important;
-        }}
-        [data-testid="stTab"][aria-selected="true"] {{
-            border-color: {COLOR['rojo']} !important;
-            background: rgba(217, 116, 31, .16) !important;
-        }}
-        [data-testid="stTab"][aria-selected="true"] p {{
-            color: {COLOR['rojo']} !important;
-            font-weight: 700 !important;
         }}
         [role="radiogroup"] label, [data-baseweb="segmented-control"],
         [data-baseweb="segmented-control"] div[role="tab"] {{
@@ -2448,6 +2488,12 @@ def aplicar_estilos() -> None:
         .aire-antes-del-boton {{
             height: 90px;
         }}
+        /* El boton de modo claro/oscuro va pegado bajo la cabecera, como una
+           barra de herramientas, no como un boton mas de la pantalla. */
+        .st-key-fila_tema {{ margin-top: -10px; margin-bottom: 2px; }}
+        .st-key-fila_tema .stButton > button {{
+            font-size: 13px; padding: 2px 14px; min-height: 32px;
+        }}
         /* En el celular, los margenes se comen la pantalla. */
         @media (max-width: 640px) {{
             [data-testid="stMainBlockContainer"] {{
@@ -2467,17 +2513,11 @@ def aplicar_estilos() -> None:
         }}
         .cabecera img {{ width: 62px; flex: none; }}
         .cabecera-texto {{ line-height: 1.15; text-align: center; }}
-        /* 26-09-2026, pedido de Serling: exacto -no proporcional- al tamaño
-           del encabezado de Panel Territorio (su "Territorio" es 21px, su
-           "Tu panel" es 15px), para que no se note distinto al pasar de
-           una pantalla a la otra. Antes escalaba 1.2x sobre el 27px que
-           tenia, lo que lo dejaba en 32.4px -mucho mas grande que su
-           equivalente en Panel Territorio-. */
         .titulo-panel {{
-            color: {COLOR['titulo']}; font-size: 21px; font-weight: bold; letter-spacing: -0.4px;
+            color: {COLOR['titulo']}; font-size: 27px; font-weight: bold; letter-spacing: -0.4px;
         }}
         .subtitulo-panel {{
-            color: {COLOR['subtitulo']}; font-size: 15px; margin-top: 2px;
+            color: {COLOR['subtitulo']}; font-size: 12.5px; margin-top: 2px;
         }}
         /* ---------- LA FORMA VISUAL DEL BOCETO (02-09-2026) ----------
            Serling mando un boceto y de el se tomaron primero las ideas —el
@@ -2499,10 +2539,10 @@ def aplicar_estilos() -> None:
             padding: 11px 16px;
             margin: 4px 0 14px;
         }}
-        .cinta-pasos .paso {{ font-size: 18px; white-space: nowrap; }}
+        .cinta-pasos .paso {{ font-size: 15px; white-space: nowrap; }}
         .cinta-pasos .flecha {{ color: {COLOR['flecha']}; padding: 0 12px; }}
         .cinta-pasos .que-es {{
-            color: {COLOR['texto_suave']}; font-size: 15.6px;
+            color: {COLOR['texto_suave']}; font-size: 13px;
             margin-left: auto; padding-left: 14px;
         }}
 
@@ -2514,14 +2554,14 @@ def aplicar_estilos() -> None:
             box-shadow: {SOMBRA};
         }}
         .cifra .rotulo {{
-            font-size: 13.8px; letter-spacing: .09em; text-transform: uppercase;
+            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
             color: {COLOR['texto_suave']}; font-weight: 600;
         }}
         .cifra .valor {{
-            font-size: 32.4px; font-weight: 700; color: {COLOR['texto']};
+            font-size: 27px; font-weight: 700; color: {COLOR['texto']};
             margin-top: 4px; line-height: 1.1;
         }}
-        .cifra .pie {{ font-size: 14.4px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+        .cifra .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
         /* La tercera es la que importa: lo que hay por ganar. Va en verde
            porque es lo unico de la fila que es una oportunidad y no un hecho. */
         .cifra.ganar {{
@@ -2577,7 +2617,7 @@ def aplicar_estilos() -> None:
             outline: 2px solid {COLOR['rojo']}; outline-offset: 2px;
         }}
         .camino .pulsar {{
-            margin-top: 11px; padding-top: 9px; font-size: 15px; font-weight: 600;
+            margin-top: 11px; padding-top: 9px; font-size: 12.5px; font-weight: 600;
             color: {COLOR['texto_suave']};
             border-top: 1px solid {COLOR['borde']};
         }}
@@ -2592,17 +2632,17 @@ def aplicar_estilos() -> None:
            mismo criterio que el filo superior de la tarjeta (08-09-2026:
            en modo claro casi no se notaba). */
         .camino .letra {{
-            float: right; font-size: 14.4px; font-weight: 700;
+            float: right; font-size: 12px; font-weight: 700;
             border-radius: 6px; padding: 1px 7px;
         }}
         .camino.a .letra {{ color: #d9741f; background: rgba(217,116,31,.14); }}
         .camino.b .letra {{ color: #2f6bb0; background: rgba(47,107,176,.14); }}
         .camino .titulo {{
-            font-size: 22.8px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
+            font-size: 19px; font-weight: 700; color: {COLOR['texto']}; line-height: 1.15;
         }}
-        .camino .cuanto {{ font-size: 38.4px; font-weight: 800; color: {COLOR['texto']}; line-height: 1.05; }}
+        .camino .cuanto {{ font-size: 32px; font-weight: 800; color: {COLOR['texto']}; line-height: 1.05; }}
         .camino .bajada {{
-            font-size: 15.6px; color: {COLOR['texto_suave']}; margin-top: 6px;
+            font-size: 13px; color: {COLOR['texto_suave']}; margin-top: 6px;
         }}
 
         /* El ranking de Prioridad y Conquistar (07-09-2026): unas pocas
@@ -2610,7 +2650,7 @@ def aplicar_estilos() -> None:
         .camino .ranking {{ margin-top: 10px; }}
         .camino .fila-rank {{
             display: flex; justify-content: space-between; gap: 10px;
-            font-size: 15px; color: {COLOR['texto']};
+            font-size: 12.5px; color: {COLOR['texto']};
             padding: 4px 0; border-top: 1px solid {COLOR['borde']};
         }}
         .camino .fila-rank .nombre {{ font-weight: 600; }}
@@ -2618,7 +2658,7 @@ def aplicar_estilos() -> None:
         /* Por que convenio marco compra esa unidad, en chico bajo su nombre
            (08-09-2026). Es lo que dice de que catalogo cotizarle. */
         .camino .fila-rank .via {{
-            display: block; font-weight: 400; font-size: 13.8px;
+            display: block; font-weight: 400; font-size: 11.5px;
             color: {COLOR['texto_suave']}; margin-top: 1px;
         }}
 
@@ -2629,14 +2669,14 @@ def aplicar_estilos() -> None:
             box-shadow: {SOMBRA};
         }}
         .evolucion .rotulo {{
-            font-size: 13.8px; letter-spacing: .09em; text-transform: uppercase;
+            font-size: 11.5px; letter-spacing: .09em; text-transform: uppercase;
             color: {COLOR['texto_suave']}; font-weight: 600;
         }}
         .evolucion .valor {{
-            font-size: 26.4px; font-weight: 700; color: {COLOR['texto']};
+            font-size: 22px; font-weight: 700; color: {COLOR['texto']};
             margin-top: 4px;
         }}
-        .evolucion .pie {{ font-size: 14.4px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
+        .evolucion .pie {{ font-size: 12px; color: {COLOR['texto_suave']}; margin-top: 3px; }}
 
         /* ---------- LA BARRA DE STREAMLIT NO ES NUESTRA ----------
            Arriba a la derecha, Streamlit pone «Fork» y el icono de GitHub, que
@@ -2660,11 +2700,8 @@ def aplicar_estilos() -> None:
         @media (max-width: 640px) {{
             .cabecera {{ flex-direction: column; gap: 8px; padding: 12px 10px; }}
             .cabecera img {{ width: 54px; }}
-            /* 26-09-2026: Panel Territorio no achica su titulo en el celular
-               -su encabezado no tiene ninguna regla de @media-, asi que para
-               que quede exacto tampoco se achica aca; solo se ajusta el
-               layout (columna, aire, logo mas chico) arriba. */
-            .titulo-panel {{ letter-spacing: -0.2px; }}
+            .titulo-panel {{ font-size: 21px; letter-spacing: -0.2px; }}
+            .subtitulo-panel {{ font-size: 11px; }}
 
             /* ---------- LAS TABLAS EN EL TELEFONO ----------
                Serling lo pidio el 01-09-2026: «para las vistas moviles hasta 10
@@ -2695,18 +2732,18 @@ def aplicar_estilos() -> None:
                tarjeta, sin esto hay que hacer zoom para leer los nombres. */
             .cifras-diag {{ gap: 8px; }}
             .cifra {{ flex: 1 1 100%; padding: 11px 13px; }}
-            .cifra .valor {{ font-size: 27.6px; }}
+            .cifra .valor {{ font-size: 23px; }}
             .camino {{ padding: 13px 14px 11px; }}
-            .camino .titulo {{ font-size: 20.4px; }}
-            .camino .cuanto {{ font-size: 32.4px; }}
-            .camino .bajada {{ font-size: 15px; }}
-            .camino .fila-rank {{ font-size: 14.4px; padding: 5px 0; }}
-            .camino .fila-rank .via {{ font-size: 13.2px; }}
-            .cinta-pasos {{ font-size: 15.6px; padding: 9px 12px; }}
-            .cinta-pasos .paso {{ font-size: 15.6px; }}
+            .camino .titulo {{ font-size: 17px; }}
+            .camino .cuanto {{ font-size: 27px; }}
+            .camino .bajada {{ font-size: 12.5px; }}
+            .camino .fila-rank {{ font-size: 12px; padding: 5px 0; }}
+            .camino .fila-rank .via {{ font-size: 11px; }}
+            .cinta-pasos {{ font-size: 13px; padding: 9px 12px; }}
+            .cinta-pasos .paso {{ font-size: 13px; }}
             .cinta-pasos .flecha {{ padding: 0 7px; }}
             .cinta-pasos .que-es {{ margin-left: 0; padding-left: 0; }}
-            .evolucion .valor {{ font-size: 22.8px; }}
+            .evolucion .valor {{ font-size: 19px; }}
         }}
         </style>
         """,
@@ -2724,7 +2761,7 @@ def cabecera() -> None:
         logo = base64.b64encode(RUTA_LOGO_UPLEVEL.read_bytes()).decode()
         marca = f'<img src="data:image/png;base64,{logo}" alt="Uplevel">'
     else:
-        marca = (f'<div style="color:{COLOR["rojo"]};font-size:24px;font-weight:bold;'
+        marca = (f'<div style="color:{COLOR["rojo"]};font-size:20px;font-weight:bold;'
                  f'line-height:1.1">UP<br>LEVEL</div>')
     st.markdown(
         f'<div class="cabecera">{marca}'
@@ -2812,6 +2849,67 @@ def avisar_antes_de_salir(hay_resultados: bool) -> None:
                 evento.returnValue = "";
             });
         }
+        </script>
+        """,
+        height=1,
+    )
+
+
+def interruptor_de_tema() -> None:
+    """El boton de modo claro / modo oscuro.
+
+    QUIEN NO TOCA NADA NO TIENE QUE TOCAR NADA: la app sale clara u oscura
+    segun como este el telefono o el PC de quien la abre. Eso lo resuelve
+    .streamlit/config.toml, que trae las dos paletas, y no hace falta este
+    boton para que funcione.
+
+    El boton es para forzarlo. Y tiene un precio que conviene saber: Streamlit
+    NO deja cambiar el tema desde Python —el modo lo guarda el navegador y se
+    lee UNA sola vez, al abrir la pagina—, asi que el boton escribe esa
+    preferencia y recarga. Recargar empieza una sesion nueva: la identificacion
+    aguanta (va en una galleta del navegador) pero los filtros de la pantalla
+    no. Por eso el RUT viaja en la direccion y vuelve solo del otro lado; ver
+    `seccion_oportunidades`.
+    """
+    modo = modo_de_la_vista()
+    destino = "Light" if modo == "oscuro" else "Dark"
+    etiqueta = "☀️ Modo claro" if modo == "oscuro" else "🌙 Modo oscuro"
+    with st.container(key="fila_tema"):
+        _, derecha = st.columns([1, 0.22])
+        with derecha:
+            pulsado = st.button(
+                etiqueta, key="boton_tema", width="stretch",
+                help="Cambia el fondo de toda la app. Queda recordado en este "
+                     "navegador. La pantalla se recarga para aplicarlo.")
+    if not pulsado:
+        return
+    rut = str(st.session_state.get("op_rut", "") or "")
+    # `json.dumps` y no comillas a mano: deja el texto listo para JavaScript
+    # aunque el RUT venga con algo raro escrito.
+    st.iframe(
+        f"""
+        <script>
+        // window.top y no window.parent: Streamlit Cloud a veces envuelve la
+        // app en mas de un iframe (por ejemplo, para quien entra como
+        // invitado con acceso restringido, no solo para el dueno viendo su
+        // propia app). window.parent asume un solo nivel; window.top es
+        // siempre la ventana de verdad, sin importar cuantos niveles haya.
+        // Comprobado el 08-09-2026: con window.parent el boton escribia bien
+        // pero no siempre recargaba para quien no era el dueno.
+        const app = window.top;
+        const url = new URL(app.location.href);
+        const rut = {json.dumps(rut)};
+        if (rut) {{ url.searchParams.set("rut", rut); }}
+        // Streamlit guarda sus propios valores con JSON.stringify (con las
+        // comillas adentro del string: `"Dark"`, no `Dark`). Sin el
+        // JSON.stringify de aca, Streamlit intenta JSON.parse(valor), truena
+        // silenciosamente y vuelve a "System" — que es lo que pasaba: el
+        // boton escribia el valor pero la app jamas lo tomaba por bueno.
+        app.localStorage.setItem(
+            "stActiveTheme-" + url.pathname + "-v2",
+            JSON.stringify({json.dumps(destino)}));
+        app.__saliendoAProposito = true;
+        app.location.replace(url.toString());
         </script>
         """,
         height=1,
@@ -5391,6 +5489,7 @@ def main() -> None:
     aplicar_estilos()
     icono_del_movil()
     cabecera()
+    interruptor_de_tema()
 
     # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
     # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
@@ -5435,10 +5534,7 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
-    #
-    # 26-09-2026, pedido de Serling: se saca la guía "¿Primera vez? Pulsa
-    # aquí..." -la reemplazan los video tutoriales-. Queda `guia_de_entrada()`
-    # sin llamar, por si hace falta reponerla.
+    guia_de_entrada()
 
     # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
     # escribir un RUT: quien entra ve algo suyo en segundos, sin buscar ni
@@ -5467,29 +5563,23 @@ def main() -> None:
     from modulo_planes import candado, aviso_de_prueba
     aviso_de_prueba(yo)
 
-    # Las tres del plan se dibujan SIEMPRE, esten incluidas o no. Si el plan no
-    # las trae, la pestaña dice que es y en cual viene: es la unica publicidad
-    # que se lee, porque la mira alguien que ya esta adentro y ya sabe para que
-    # sirve. Esconderla seria peor: no sabria que existe y nunca la pediria.
+    # Todas las pestañas se dibujan SIEMPRE, esten incluidas o no en el plan
+    # o entregadas por cuenta. Si no la tiene, la pestaña dice que es y en que
+    # plan viene (o que se activa por cuenta): es la unica publicidad que se
+    # lee, porque la mira alguien que ya esta adentro. Esconderla seria peor:
+    # no sabria que existe y nunca la pediria.
     #
-    # Los dos extras de Emergenza NO se dibujan cerrados: leen su catalogo de
-    # Drive, a otro cliente no le sirven y no estan a la venta.
+    # 25-09-2026 (pedido de Serling): Agenda, Convenios Marco y Envios -antes
+    # ocultas para quien no era proveedor del Convenio Marco- ahora tambien se
+    # dibujan cerradas para todos los demas, igual que el resto. Se eliminaron
+    # "Seguimiento" y "Modulo Cotizador".
     # «Agenda» va PRIMERA de todas, antes que Oportunidades (08-09-2026,
     # pedido de Serling): es el centro de mando del vendedor —qué visitar hoy—
-    # y quiere que sea lo primero que se ve al entrar a Inteligencia. Por eso
-    # se arma aparte y no dentro del `for` de abajo, que respeta el orden fijo
-    # de las demas.
-    # 25-09-2026 (pedido de Serling): Agenda, Convenios Marco y Envios ya NO
-    # se esconden para quien no es proveedor del Convenio Marco -se dibujan
-    # SIEMPRE, igual que el resto, y quien no las tiene ve el candado (mas
-    # abajo, via `abierta()`). Se elimino "Seguimiento" y "Modulo Cotizador".
-    # 25-09-2026, pedido de Serling: se saca "Agenda" de esta barra -ya se
-    # abre como boton propio desde la pantalla principal de Territorio
-    # (territorio.uplevelweb.art/panel), asi que tenerla tambien aca
-    # confundia, era la misma herramienta en dos partes.
+    # y quiere que sea lo primero que se ve al entrar a Inteligencia.
     orden = []
+    orden.append(("agenda", "🗓️ Agenda"))
     orden.append(("oportunidades", "🎯 Oportunidades"))
-    orden.append(("mercado_publico", "🏛️ Convenios Marco"))
+    orden.append(("mercado_publico", "📈 Comportamiento Mercado Público"))
     # La puerta a los dos paneles de envio de Apps Script. Va al lado de
     # Convenios Marco porque es de la misma clase: usa sus cuentas de Gmail y
     # su lista de contactos.
@@ -5508,6 +5598,10 @@ def main() -> None:
         candado(clave)
         return False
 
+    with pestanas["agenda"]:
+        if abierta("agenda"):
+            from modulo_agenda import seccion_agenda
+            seccion_agenda()
     with pestanas["oportunidades"]:
         if abierta("oportunidades"):
             # Vive en su propio archivo: no comparte nada con las otras y asi
@@ -5538,17 +5632,10 @@ def main() -> None:
             catalogo = cargar_unidades(_sello())
             if catalogo.empty:
                 regiones_posibles, comunas_posibles = [], []
-                organismos_posibles, unidades_posibles = [], []
             else:
                 regiones_posibles = sorted({str(r) for r in catalogo["region"] if str(r).strip()})
                 comunas_posibles = sorted({str(c) for c in catalogo["comuna"] if str(c).strip()})
-                # 15-09-2026, pedido de Serling: ademas de region/comuna, se
-                # puede asignar un cliente (organismo) o una unidad de compra
-                # puntual. Mismo catalogo de siempre, sin leer nada de mas.
-                organismos_posibles = sorted({str(o) for o in catalogo["nombre_organismo"] if str(o).strip()})
-                unidades_posibles = sorted({str(u) for u in catalogo["nombre_unidad"] if str(u).strip()})
-            seccion_equipo(yo, regiones_posibles, comunas_posibles,
-                          organismos_posibles, unidades_posibles)
+            seccion_equipo(yo, regiones_posibles, comunas_posibles)
     if "soporte" in pestanas:
         with pestanas["soporte"]:
             from modulo_cuentas import seccion_soporte

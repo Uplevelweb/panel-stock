@@ -329,20 +329,36 @@ def _llaves_de_emergencia() -> set[str]:
     return {str(c).strip().lower() for c in lista if str(c).strip()}
 
 
-def _verificar_ticket(ticket: str) -> str:
-    """Cambia un ticket de Territorio por un correo, o "" si no sirve.
+def _verificar_ticket(ticket: str) -> dict:
+    """Cambia un ticket de Territorio por quien es, o {} si no sirve.
 
     El ticket lo genera `panel_entrar_oportunidades` en la MISMA base de
-    Supabase (Territorio y Oportunidades comparten proyecto) cuando alguien
-    con sesion de super admin en Territorio hace clic en "Panel de
-    Oportunidades". Dura 10 minutos y es de un solo uso -se consume en la
-    propia funcion de Supabase, no aca-.
+    Supabase (Territorio y Oportunidades comparten proyecto), cuando
+    cualquier cliente con sesion en el panel de Territorio hace clic en uno
+    de sus dos botones de acceso. Dura 10 minutos y es de un solo uso -se
+    consume en la propia funcion de Supabase, no aca-.
+
+    28-09-2026 (pedido de Serling): antes esto SOLO servia para super admin
+    y devolvia SIEMPRE su propio correo. Ahora `panel_entrar_oportunidades`
+    identifica a quien realmente hizo clic y ademas manda `modo`
+    ('completo' = Gestion Comercial Convenio Marco, 'comportamiento' =
+    Comportamiento Mercado Publico), asi que la funcion de Supabase devuelve
+    un objeto en vez de un simple texto. El autoservicio de 'comportamiento'
+    -crear la cuenta con el extra `mercado_publico` si todavia no existia-
+    ya lo hizo esa misma funcion antes de emitir el ticket; aca solo se lee
+    el resultado.
     """
     if not ticket:
-        return ""
+        return {}
     resultado = _pedir("rpc/verificar_ticket_oportunidades", metodo="POST",
                        cuerpo={"p_ticket": ticket})
-    return str(resultado).strip().lower() if resultado else ""
+    if not resultado or not isinstance(resultado, dict):
+        return {}
+    correo = str(resultado.get("email") or "").strip().lower()
+    if not correo:
+        return {}
+    return {"email": correo,
+            "modo": str(resultado.get("modo") or "completo").strip().lower()}
 
 
 def _portada(titulo: str, bajada: str) -> None:
@@ -369,21 +385,30 @@ def puerta() -> dict:
     """
     # 15-09-2026: entrada por TICKET desde el panel de Territorio -camino
     # propio, sin Auth0-. Un clic alla genera un ticket de un solo uso (10
-    # min) que llega por la URL; se cambia por el correo del super admin y
-    # de ahi en mas sigue el mismo camino de siempre (`_quien_es`). Se
+    # min) que llega por la URL; se cambia por el correo de quien hizo clic
+    # y de ahi en mas sigue el mismo camino de siempre (`_quien_es`). Se
     # guarda en `session_state` para que sobreviva a los reruns de
     # Streamlit dentro de la misma pestaña -sin eso, cada clic perderia la
     # sesion, porque Streamlit vuelve a correr el script entero-.
+    #
+    # 28-09-2026 (pedido de Serling): antes el ticket SOLO servia para super
+    # admin y siempre resolvia a su propio correo (bug real: ningun cliente
+    # Plus/Premium podia entrar a su propia cuenta). Ahora
+    # `panel_entrar_oportunidades` identifica a quien realmente hizo clic; el
+    # autoservicio del boton "Comportamiento Mercado Público" -darle a la
+    # cuenta el extra `mercado_publico` si todavia no lo tenia- ya lo resolvio
+    # esa funcion antes de emitir el ticket, asi que aca no hace falta tocar
+    # nada mas alla de leer el correo.
     ticket = st.query_params.get("ticket")
     if ticket and not st.session_state.get("_correo_ticket"):
-        correo_ticket = _verificar_ticket(ticket)
+        resultado_ticket = _verificar_ticket(ticket)
         st.query_params.clear()
-        if correo_ticket:
-            st.session_state["_correo_ticket"] = correo_ticket
+        if resultado_ticket.get("email"):
+            st.session_state["_correo_ticket"] = resultado_ticket["email"]
         else:
             _portada("Ese enlace ya no sirve",
                      "Venció (dura 10 minutos) o ya se usó. Vuelve a hacer "
-                     "clic en \"Panel de Oportunidades\" desde tu panel de "
+                     "clic en el botón correspondiente desde tu panel de "
                      "Territorio.")
             st.stop()
 
