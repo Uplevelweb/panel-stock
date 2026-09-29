@@ -75,6 +75,17 @@ MODULOS = {
                   "listas para tus compradores del Convenio Marco.",
         "extra": True,
     },
+    # Permiso para DISPARAR los envios (habilita los botones "Abrir ..." de la
+    # pestana Envios). Tiene que estar aqui: `modulos_de` descarta cualquier
+    # extra que no sea clave de MODULOS, y sin esta ficha el permiso nunca
+    # llegaba a nadie -ni siquiera a Soporte-, dejando los botones siempre
+    # deshabilitados (29-09-2026).
+    "envios_enviar": {
+        "nombre": "Envíos: puede enviar",
+        "que_es": "Habilita los botones para abrir los paneles de envío "
+                  "masivo de Ofertas y Catálogo.",
+        "extra": True,
+    },
     # El Asistente Diario (agenda.uplevelweb.art).
     "agenda": {
         "nombre": "Agenda",
