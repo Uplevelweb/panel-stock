@@ -1,9 +1,9 @@
 {
  "fuente": "datos abiertos ChileCompra (oc-da)",
  "meses": [
-  "2026-08",
-  "2026-09"
+  "2026-09",
+  "2026-10"
  ],
- "lineas": 830540,
- "actualizado": "2026-09-30T12:00:17"
+ "lineas": 415689,
+ "actualizado": "2026-10-01T12:31:56"
 }
