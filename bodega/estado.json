@@ -1239,11 +1239,11 @@
   "2026-09-29",
   "2026-09-30"
  ],
- "actualizado": "2026-10-01T12:31:56",
+ "actualizado": "2026-10-01T17:16:58",
  "fuente_detalle": "datos abiertos ChileCompra (oc-da)",
  "licitaciones": {
   "desde": "2025-01-01",
-  "hasta": "2026-09-24",
+  "hasta": "2026-09-25",
   "fuente": "datos abiertos ChileCompra (lic-da)",
   "ojo": "solo licitaciones ya cerradas; no sirve para avisar de plazos abiertos"
  }
