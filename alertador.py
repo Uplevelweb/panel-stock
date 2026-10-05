@@ -207,21 +207,26 @@ def _numero_cl(valor: float, decimales: int) -> str:
     return texto.replace(",", "%").replace(".", ",").replace("%", ".")
 
 
+# Terri en el encabezado. El PNG vive en el sitio (se publica con la landing).
+TERRI_URL = "https://territorio.uplevelweb.art/img/terri.png"
+
+
 def plata(monto) -> str:
-    """1234567 -> «$1,2 M». 26-09-2026, pedido de Serling: SIEMPRE en
-    millones con 1 decimal, sin excepcion -antes los montos bajo $1.000.000
-    salian en pesos completos ("$636.000"), lo que rompia la uniformidad de
-    la tarjeta y ocupaba mas espacio. Se pierde algo de precision en montos
-    chicos (ej: $93.915 -> "$0,1 M"), a cambio de que todo se lea parejo."""
+    """1234567890 -> «$1.235 MM». 04-10-2026, pedido de Serling: los montos
+    van en millones con el sufijo «MM» (46 millones = «$46 MM», 6.600
+    millones = «$6.600 MM»). Bajo 10 MM se deja 1 decimal («$2,4 MM»);
+    desde 10 MM, entero. Un decimal en cero se omite («$46 MM»)."""
     try:
         n = float(monto)
     except (TypeError, ValueError):
         return "sin dato"
     if n <= 0:
         return "sin dato"
-    if n >= 1_000_000_000:
-        return "$" + _numero_cl(n / 1_000_000_000, 1) + " mil M"
-    return "$" + _numero_cl(n / 1_000_000, 1) + " M"
+    mm = n / 1_000_000
+    texto = _numero_cl(mm, 0 if mm >= 10 else 1)
+    if texto.endswith(",0"):
+        texto = texto[:-2]
+    return "$" + texto + " MM"
 
 
 def minimo_coincidencias(bolsa: set[str]) -> int:
@@ -1786,7 +1791,11 @@ def tarjeta(op: dict) -> str:
                 f'font-size:12.5px;white-space:nowrap;">{plata(monto)} '
                 f'<span style="color:{NARANJO};font-weight:600;">'
                 f'{monto/suma*100:.0f}%</span></td>'
-                f'</tr>')
+                f'</tr>'
+                # Misma barra naranja que en la landing (uniformidad): el
+                # ancho es la participacion x2, igual que en la demo.
+                f'<tr><td></td><td colspan="2" style="padding:0 0 7px;">'
+                f'{barra(monto / suma * 100, 50)}</td></tr>')
         bloques.append(seccion(
             f"Quién se lo lleva hoy · {len(proveedores)} proveedores",
             '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
@@ -2052,7 +2061,10 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                  puertas: list[dict] | None = None) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
     n = len(oportunidades)
-    saludo = f"Hola {suscriptor['nombre'].split()[0]}, " if suscriptor.get("nombre") else ""
+    nombre = (suscriptor.get("nombre") or "").strip()
+    # Terri SIEMPRE se presenta, en todos los correos.
+    presentacion = (f"Hola {nombre}, soy Terri, el Asistente Inteligente de Territorio."
+                    if nombre else "Hola, soy Terri, el Asistente Inteligente de Territorio.")
 
     # Agrupadas por tipo, no mezcladas: son dos cosas distintas y se actua
     # distinto. Las compras agiles van PRIMERO porque cierran en 24-72 horas;
@@ -2077,15 +2089,15 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     # esto ni cada cuanto le va a llegar. Del segundo en adelante, al grano.
     if bienvenida:
         titulo = "Tu cuenta quedó lista"
-        bajada = (f"{saludo}esto es lo que encontramos hoy en tus rubros: "
+        bajada = (f"{presentacion} Tu cuenta quedó lista y hoy tienes "
                   f"{n} {'oportunidad' if n == 1 else 'oportunidades'}. "
-                  f"De aquí en adelante te llega cada mañana a las 8:00, y el "
-                  f"día que no haya nada que calce, no te escribimos.")
+                  f"De aquí en adelante te escribo de lunes a sábado a la hora "
+                  f"que elegiste, y el día que no haya nada que calce, no te escribo.")
     else:
         titulo = "Oportunidades de hoy"
-        bajada = (f"{saludo}{n} "
-                  f"{'oportunidad coincide' if n == 1 else 'oportunidades coinciden'} "
-                  f"con lo que vendes · {hoy}")
+        bajada = (f"{presentacion} Hoy tienes {n} "
+                  f"{'oportunidad' if n == 1 else 'oportunidades'} "
+                  f"que {'coincide' if n == 1 else 'coinciden'} con lo que vendes · {hoy}")
 
     # El bloque del panel va SOLO en la bienvenida. Sin esto el cliente recibe
     # sus alertas y nunca se entera de que ademas tiene un panel: la mitad del
@@ -2189,14 +2201,17 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   body,table,td{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
+  /* Misma letra que las conversaciones de WhatsApp de Terri. Outlook no
+     hereda la fuente de la tabla hacia las celdas: hay que declararla en todas. */
+  body,table,td,div,p,span,a,strong,b,small,h1,h2,h3,h4{{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif}}
 </style>
 </head>
-<body style="margin:0;padding:0;background:{FONDO};">
+<body style="margin:0;padding:0;background:{FONDO};font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 4px 14px 0;">
 <tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" border="0"
        style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;
-              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+              font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif;">
 
   <!-- LA CABECERA VA MARINA, Y EL LOGO SOBRE UNA PLACA BLANCA.
        Antes iba blanca porque el logo tiene fondo blanco y sobre el marino
@@ -2213,12 +2228,13 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   <tr>
     <td style="background:{MARINO};padding:16px 18px;">
       <table cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="background:#ffffff;border-radius:12px;padding:7px;
+        <td style="background:#eaf2fb;border-radius:12px;padding:5px;
                    line-height:0;">
-          <img src="{LOGO}" alt="Uplevel" width="34" height="34"
+          <img src="{TERRI_URL}" alt="Terri" width="44" height="44"
                style="display:block;border:0;"></td>
         <td style="padding-left:12px;color:#ffffff;font-size:18px;
-                   font-weight:700;letter-spacing:.01em;">Territorio · Sistema Inteligente de Alertas</td>
+                   font-weight:700;letter-spacing:.01em;">Terri · Territorio
+          <div style="font-size:12px;font-weight:400;color:#cbd5e1;letter-spacing:0;">Sistema Inteligente de Alertas · Mercado Público</div></td>
       </tr></table>
     </td>
   </tr>
