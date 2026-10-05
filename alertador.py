@@ -2617,9 +2617,9 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros}).encode("utf-8")
     peticion = urllib.request.Request(
-        f"{bot_url}/tareas/enviar-alerta-whatsapp?clave={urllib.parse.quote(clave)}",
+        f"{bot_url}/tareas/enviar-alerta-whatsapp",
         data=cuerpo, method="POST",
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "x-tarea-clave": clave})
     try:
         with urllib.request.urlopen(peticion, timeout=30):
             print(f"   [whatsapp] alerta mandada a {telefono}")
