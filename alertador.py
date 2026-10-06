@@ -2459,6 +2459,22 @@ def construir_adjunto_seguimiento_xlsx(elegidas: list[dict], bolsa: set[str]) ->
     return buffer.getvalue()
 
 
+# 06-10-2026, pedido de Serling: el remitente se llama «Terri Alertas» (antes
+# «Uplevel Alertas») y, cuando el dominio nuevo este verificado en Resend, la
+# direccion pasa a ser de Territorio (alertas@inteligencia.uplevelweb.art).
+# La direccion NO se cambia aqui: se pone en la variable del repositorio
+# CORREO_DESDE (GitHub > Settings > Secrets and variables > Actions >
+# Variables), y mientras este vacia sigue saliendo la de siempre. Asi nunca se
+# manda desde un dominio que Resend todavia no verifico, que hace rebotar todo.
+NOMBRE_REMITENTE = "Terri Alertas"
+DIRECCION_REMITENTE_ACTUAL = "alertas@uplevelweb.art"
+
+
+def direccion_remitente() -> str:
+    valor = os.environ.get("CORREO_DESDE", "").strip()
+    return valor if "@" in valor and " " not in valor else DIRECCION_REMITENTE_ACTUAL
+
+
 def enviar(a_quienes: list[str], asunto: str, html: str,
           adjunto: tuple[str, bytes] | None = None) -> bool:
     """Un correo por Resend, a uno o varios. Devuelve si salio.
@@ -2476,7 +2492,7 @@ def enviar(a_quienes: list[str], asunto: str, html: str,
         return False
 
     mensaje = {
-        "from": "Uplevel Alertas <alertas@uplevelweb.art>",
+        "from": f"{NOMBRE_REMITENTE} <{direccion_remitente()}>",
         "to": a_quienes,
         "subject": asunto,
         "html": html,
@@ -2838,7 +2854,7 @@ def main():
             asunto = (f"Tu cuenta quedó lista · {len(elegidas)} "
                       f"{cuantas} para partir")
         else:
-            asunto = f"{len(elegidas)} {cuantas} de hoy · Uplevel"
+            asunto = f"{len(elegidas)} {cuantas} de hoy · Terri"
 
         if args.guardar:
             Path(args.guardar).write_text(html, encoding="utf-8")

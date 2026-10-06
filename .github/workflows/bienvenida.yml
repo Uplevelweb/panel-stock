@@ -113,6 +113,7 @@ jobs:
         env:
           TICKET_MP: ${{ secrets.TICKET_MP }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          CORREO_DESDE: ${{ vars.CORREO_DESDE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: |
