@@ -1661,192 +1661,164 @@ def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
 #  EL CORREO
 # ======================================================================
 
-def encabezado_grupo(titulo: str, bajada: str) -> str:
-    """El titulo que separa un tipo de oportunidad del otro."""
+# ---- colores de las tres franjas: los mismos de la demo de la landing ----
+COLOR_BANDA = {"licitacion": "#d9701a", "compra_agil": "#1f6fb8", "convenio": "#2f7d6d"}
+PISTA = "#e6ebf0"      # el riel gris de las barras
+
+
+def encabezado_grupo(titulo: str, bajada: str, clase: str = "licitacion",
+                     cantidad: int | None = None) -> str:
+    """La franja de color que abre cada tipo de oportunidad.
+
+    06-10-2026, pedido de Serling: el correo real tiene que verse igual al
+    ejemplo de territorio.uplevelweb.art. Alli cada tipo abre con una franja
+    de color (naranja licitaciones, azul compra agil, verde convenio marco)
+    con la cantidad en una pildora blanca, y debajo una linea de explicacion.
+    """
+    color = COLOR_BANDA.get(clase, MARINO)
+    pildora = (f'<td align="right" style="padding:9px 12px 9px 0;">'
+               f'<span style="display:inline-block;background:#ffffff;color:{MARINO};'
+               f'border-radius:10px;padding:1px 10px;font-size:13px;font-weight:800;">'
+               f'{cantidad}</span></td>') if cantidad is not None else ""
     return f"""
+  <tr><td style="height:8px;background:#e9eef4;font-size:0;line-height:0;">&nbsp;</td></tr>
   <tr>
-    <td class="pad30" style="padding:22px 10px 4px 0;">
-      <div style="color:{MARINO};font-size:15px;font-weight:700;
-                  letter-spacing:.04em;text-transform:uppercase;">
-        {titulo}
-      </div>
-      <div style="color:{TEXTO_SUAVE};font-size:12.5px;margin-top:2px;">
-        {bajada}
-      </div>
-      <div style="height:2px;background:{NARANJO};width:44px;margin-top:8px;"></div>
+    <td style="background:{color};padding:0;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="padding:9px 12px;color:#ffffff;font-size:14px;font-weight:800;
+                   letter-spacing:.06em;text-transform:uppercase;">{titulo}</td>
+        {pildora}
+      </tr></table>
+    </td>
+  </tr>
+  <tr>
+    <td class="pad30" style="padding:10px 12px 2px;color:{TEXTO_SUAVE};font-size:12px;">
+      {bajada}
     </td>
   </tr>"""
 
 
+def _barra(pct, color):
+    """Barra con riel gris, hecha con tablas (los <div> de ancho % fallan en Outlook)."""
+    ancho = max(2, min(100, int(pct)))
+    return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+            f'style="background:{PISTA};border-radius:3px;"><tr>'
+            f'<td width="{ancho}%" style="background:{color};height:5px;font-size:0;'
+            f'line-height:0;border-radius:3px;">&nbsp;</td>'
+            f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>')
+
+
 def tarjeta(op: dict) -> str:
-    """Una oportunidad. Todo con tablas y estilos en linea, por Outlook."""
-    # 20-09-2026: se saco la etiqueta "PRIORIDAD X - NN" -pedido de Serling:
-    # "es ilegible" y no dice nada que el resto de la tarjeta no diga mejor.
-    # La nota y la clase siguen existiendo en `op` (deciden el orden) pero
-    # ya no se imprimen.
+    """Una oportunidad, con el mismo orden y la misma forma que el ejemplo de
+    la landing (06-10-2026): titulo, aviso de visita, ficha (N° de proceso,
+    comprador, cierra, cuanto compra), «Quien se lo lleva hoy», «Con que te van
+    a evaluar», monto disponible y boton. Todo con tablas y estilos en linea,
+    por Outlook.
+
+    «Como compra» y el detalle por rubro ya no van en el correo: el ejemplo de
+    la landing no los muestra, y la regla es que el correo real y la muestra
+    sean la misma cosa. Siguen en el Panel."""
     donde = " · ".join(x for x in (op.get("nombre_unidad") or op.get("organismo"),
                                    op.get("comuna") or op.get("region")) if x)
+    es_agil = op.get("tipo") == "compra_agil"
+    radio = op.get("radiografia") or {}
+    total_vias = radio.get("total") or 0.0
+    proveedores = radio.get("proveedores") or []
 
-    # Ficha corta con etiqueta, mismo par "etiqueta / valor" que ya usa la
-    # tarjeta de referencia de la web (20-09-2026, pedido de Serling: que el
-    # correo muestre el N° de proceso y el comprador, no solo el titulo).
-    # "Publicada" y "multas al organismo" NO se agregan: ninguna de las dos
-    # APIs de Mercado Publico las entrega (ver docstring del adjunto xlsx,
-    # mas abajo) -esa tarjeta de la web esta marcada "(ejemplo)", es una
-    # maqueta con datos de muestra, no datos reales.
     def fila_ficha(etiqueta, valor):
         return (f'<tr><td style="padding:2px 0;color:{TEXTO_SUAVE};font-size:12px;">{etiqueta}</td>'
-                f'<td align="right" style="padding:2px 0;color:{TEXTO};font-size:12.5px;'
+                f'<td align="right" style="padding:2px 0 2px 10px;color:{TEXTO};font-size:12.5px;'
                 f'font-weight:600;">{valor}</td></tr>')
 
-    filas_ficha = [fila_ficha("N° de proceso", op["codigo"])]
-    if donde:
-        filas_ficha.append(fila_ficha("Comprador", donde[:60]))
-    filas_ficha.append(fila_ficha("Cierra", op['cierre'] or 'sin fecha'))
-    ficha = ('<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-             'style="margin-bottom:12px;">' + "".join(filas_ficha) + '</table>')
+    def titulo_seccion(texto):
+        return (f'<div style="color:{MARINO};font-size:13px;font-weight:700;'
+                f'margin:12px 0 2px;">{texto}</div>')
 
-    # ------------------------------------------------------------------
-    #  LO QUE LA BODEGA SABE DE ESTE COMPRADOR
-    # ------------------------------------------------------------------
-    # Tres bloques separados por lineas, no un parrafo corrido: el ojo salta
-    # de uno a otro y cada uno responde una pregunta distinta.
-    #
-    #   cuanto    ¿vale la pena?          el monto en SUS rubros
-    #   como      ¿como le vendo?         el reparto por via de compra
-    #   quien     ¿contra quien compito?  los proveedores de hoy
-    radio = op.get("radiografia") or {}
-    via, total_vias = radio.get("via") or {}, radio.get("total") or 0.0
-    proveedores = radio.get("proveedores") or []
-    detalle_rubro = radio.get("rubro") or {}
+    # ---- ficha ----
+    if es_agil:
+        # Demo: comprador chico, monto grande y «de presupuesto», y el cierre.
+        cabecera = (f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-bottom:4px;">{donde[:80]}</div>'
+                    if donde else "")
+        if op.get("monto"):
+            cabecera += (f'<div style="margin-bottom:4px;"><span style="color:{MARINO};'
+                         f'font-size:15px;font-weight:700;">{plata(op["monto"])}</span> '
+                         f'<span style="color:{TEXTO_SUAVE};font-size:12px;">de presupuesto</span></div>')
+        filas = [fila_ficha("Cierra", op["cierre"] or "sin fecha")]
+        if total_vias > 0:
+            filas.append(fila_ficha("Cuánto compra", plata(total_vias)))
+    else:
+        cabecera = ""
+        filas = [fila_ficha("N° de proceso", op["codigo"])]
+        if donde:
+            filas.append(fila_ficha("Comprador", donde[:60]))
+        filas.append(fila_ficha("Cierra", op["cierre"] or "sin fecha"))
+        if total_vias > 0:
+            filas.append(fila_ficha("Cuánto compra", plata(total_vias)))
+    ficha = (cabecera + '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+             + "".join(filas) + '</table>')
 
-    def barra(monto, tope):
-        """Una barra de fondo, con tablas: los <div> de ancho % fallan en Outlook."""
-        ancho = max(2, int(monto / tope * 100)) if tope else 2
-        return (f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-                f'<tr><td width="{ancho}%" style="background:{NARANJO};height:4px;'
-                f'font-size:0;line-height:0;border-radius:999px;">&nbsp;</td>'
-                f'<td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>')
-
-    def seccion(titulo, cuerpo):
-        return (f'<tr><td style="padding:11px 0 3px;border-top:1px solid {BORDE};">'
-                f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;font-weight:700;'
-                f'letter-spacing:.09em;text-transform:uppercase;margin-bottom:6px;">'
-                f'{titulo}</div>{cuerpo}</td></tr>')
-
-    bloques = []
-
-    if total_vias > 0:
-        # CUANTO — y en que, dentro de sus rubros
-        cuanto = (f'<div style="color:{MARINO};font-size:16px;font-weight:700;'
-                  f'line-height:1.1;">{plata(total_vias)}</div>'
-                  f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:2px;">'
-                  f'en lo que tú vendes · últimos 12 meses</div>')
-        if detalle_rubro:
-            trozos = [f'{p} {plata(m)}' for p, m in list(detalle_rubro.items())[:4]]
-            cuanto += (f'<div style="color:{TEXTO};font-size:12px;margin-top:7px;'
-                       f'line-height:1.7;">' + ' · '.join(trozos) + '</div>')
-        bloques.append(seccion("Cuánto compra", cuanto))
-
-        # COMO — el reparto por via, con barra
-        tope = max(via.values())
-        filas = []
-        for mecanismo, monto in sorted(via.items(), key=lambda x: -x[1]):
-            if monto <= 0:
-                continue
-            filas.append(
-                f'<tr>'
-                f'<td width="42%" style="padding:3px 0;color:{TEXTO};font-size:12.5px;">'
-                f'{VIAS.get(mecanismo, mecanismo)}</td>'
-                f'<td width="34%" style="padding:3px 8px;">{barra(monto, tope)}</td>'
-                f'<td align="right" style="padding:3px 0;color:{TEXTO};font-size:12.5px;'
-                f'font-weight:600;white-space:nowrap;">{plata(monto)}'
-                f'<span style="color:{NARANJO};"> {monto/total_vias*100:.0f}%</span></td>'
-                f'</tr>')
-        bloques.append(seccion(
-            "Cómo compra",
-            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-            + "".join(filas) + '</table>'))
-
+    # ---- quien se lo lleva hoy (hasta 5, igual que la muestra) ----
+    quien = ""
     if proveedores:
-        # QUIEN — contra quien compite, hasta 10
+        proveedores = proveedores[:5]
         suma = sum(m for _, m, _ in proveedores) or 1
         filas = []
         for i, (nombre, monto, rut) in enumerate(proveedores, 1):
-            destacado = "700" if i == 1 else "400"
-            # 26-09-2026, pedido de Serling: el RUT va debajo del nombre, en
-            # letra bien chica, para el que quiera investigar a ese
-            # proveedor por su cuenta -como adjudica, a que precios-. Si el
-            # archivo no trajo RUT para esta fila, no se muestra nada extra.
             rut_legible = rut_bonito(rut)
-            linea_rut = (f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;'
-                         f'margin-top:1px;">{rut_legible}</div>') if rut_legible else ""
+            linea_rut = (f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;margin:1px 0 0 14px;'
+                         f'font-weight:400;">{rut_legible}</div>') if rut_legible else ""
+            pct = monto / suma * 100
             filas.append(
                 f'<tr>'
-                f'<td width="16" valign="top" style="padding:3px 0;color:{TEXTO_SUAVE};'
-                f'font-size:11.5px;">{i}.</td>'
-                f'<td style="padding:3px 0;color:{TEXTO};font-size:12.5px;'
-                f'font-weight:{destacado};">{nombre[:40]}{linea_rut}</td>'
-                f'<td align="right" style="padding:3px 0;color:{TEXTO_SUAVE};'
-                f'font-size:12.5px;white-space:nowrap;">{plata(monto)} '
-                f'<span style="color:{NARANJO};font-weight:600;">'
-                f'{monto/suma*100:.0f}%</span></td>'
-                f'</tr>'
-                # Misma barra naranja que en la landing (uniformidad): el
-                # ancho es la participacion x2, igual que en la demo.
-                f'<tr><td></td><td colspan="2" style="padding:0 0 7px;">'
-                f'{barra(monto / suma * 100, 50)}</td></tr>')
-        bloques.append(seccion(
-            f"Quién se lo lleva hoy · {len(proveedores)} proveedores",
-            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-            + "".join(filas) + '</table>'))
+                f'<td valign="top" style="padding:5px 0 3px;color:{TEXTO};font-size:12.5px;">'
+                f'<strong>{i}.</strong> {nombre[:40]}{linea_rut}</td>'
+                f'<td align="right" valign="top" style="padding:5px 0 3px 8px;color:{TEXTO};'
+                f'font-size:12.5px;white-space:nowrap;"><strong>{plata(monto)}</strong> '
+                f'<span style="color:{TEXTO_SUAVE};">{pct:.0f}%</span></td></tr>'
+                f'<tr><td colspan="2" style="padding:0 0 3px;">{_barra(pct * 2, NARANJO)}</td></tr>')
+        quien = (titulo_seccion(f"Quién se lo lleva hoy · {len(proveedores)} proveedores")
+                 + '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+                 + "".join(filas) + '</table>')
 
+    # ---- con que te van a evaluar ----
+    evaluar = ""
     criterios = op.get("criterios") or []
     if criterios:
-        # Ordenados de mayor a menor peso: lo primero que hay que saber es
-        # contra que se compite. Un 80% al precio y un 80% a lo tecnico son
-        # dos licitaciones distintas y no se preparan igual.
         filas = []
         for c in sorted(criterios, key=lambda x: -x["ponderacion"]):
             filas.append(
                 f'<tr>'
-                f'<td width="52%" style="padding:3px 0;color:{TEXTO};font-size:12.5px;">'
-                f'{c["item"][:46]}</td>'
-                f'<td width="30%" style="padding:3px 8px;">'
-                f'{barra(c["ponderacion"], 100)}</td>'
-                f'<td align="right" style="padding:3px 0;color:{MARINO};'
-                f'font-size:13px;font-weight:700;">{c["ponderacion"]}%</td>'
-                f'</tr>')
-        bloques.append(seccion(
-            "Con qué te van a evaluar",
-            '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-            + "".join(filas) + '</table>'))
+                f'<td style="padding:5px 0 3px;color:{TEXTO};font-size:12.5px;">'
+                f'{c["item"][:46].upper()}</td>'
+                f'<td align="right" style="padding:5px 0 3px 8px;color:{TEXTO};'
+                f'font-size:12.5px;font-weight:700;">{c["ponderacion"]}%</td></tr>'
+                f'<tr><td colspan="2" style="padding:0 0 3px;">'
+                f'{_barra(c["ponderacion"], MARINO)}</td></tr>')
+        evaluar = (titulo_seccion("Con qué te van a evaluar")
+                   + '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+                   + "".join(filas) + '</table>')
 
-    if not bloques:
-        bloques.append(seccion(
-            "Este comprador",
-            f'<div style="color:{TEXTO_SUAVE};font-size:12.5px;">No aparece '
-            f'comprando lo que tú vendes en los últimos 12 meses. Es terreno nuevo.</div>'))
+    sin_datos = ""
+    if not quien and not evaluar and not es_agil:
+        sin_datos = (f'<div style="color:{TEXTO_SUAVE};font-size:12.5px;margin-top:10px;">'
+                     f'Este comprador no aparece comprando lo que tú vendes en los últimos '
+                     f'12 meses. Es terreno nuevo.</div>')
 
-    detalle = ('<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-               + "".join(bloques) + '</table>')
+    monto = ""
+    if op.get("monto") and not es_agil:
+        monto = ('<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+                 'style="margin-top:6px;">' + fila_ficha("Monto disponible", plata(op["monto"]))
+                 + '</table>')
 
-    monto = f"<br>Monto disponible: <strong>{plata(op['monto'])}</strong>" if op.get("monto") else ""
-
-    # La visita va ARRIBA del todo y en su propio recuadro, no como una linea
-    # mas entre los datos: es lo unico de la tarjeta que, si se pasa por alto,
-    # deja fuera al proveedor pase lo que pase con su oferta.
+    # La visita va arriba, en su propio recuadro: es lo unico que, si se pasa
+    # por alto, deja fuera al proveedor pase lo que pase con su oferta.
     aviso_visita = ""
-    # Dos avisos distintos a proposito. Con fecha es un hecho: se sabe cuando y
-    # donde. Por mencion es una advertencia: el texto la nombra pero el detalle
-    # esta en las bases, y prometer una certeza que no se tiene es peor que
-    # avisar de la duda.
     if not op.get("visita") and op.get("mencion_visita"):
         aviso_visita = f"""
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fffaf2;border:1px dashed {NARANJO};
-                        border-radius:12px;margin-bottom:12px;">
-            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:12.5px;line-height:1.5;">
+                        border-radius:8px;margin:0 0 8px;">
+            <tr><td style="padding:8px 10px;color:#8a4b12;font-size:12px;line-height:1.45;">
               <strong>MENCIONA VISITA A TERRENO</strong><br>
               <span style="color:#a86a35;font-style:italic;">
                 «{op['mencion_visita'][:150]}»</span><br>
@@ -1858,31 +1830,31 @@ def tarjeta(op: dict) -> str:
         aviso_visita = f"""
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fff4e8;border:1px solid {NARANJO};
-                        border-radius:12px;margin-bottom:12px;">
-            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:13px;line-height:1.5;">
+                        border-radius:8px;margin:0 0 8px;">
+            <tr><td style="padding:8px 10px;color:#8a4b12;font-size:12px;line-height:1.45;">
               <strong>VISITA A TERRENO OBLIGATORIA</strong><br>
               {op['visita']}{(' · ' + donde_visita[:70]) if donde_visita else ''}<br>
               <span style="color:#a86a35;">Si no asistes, quedas fuera.</span>
             </td></tr>
           </table>"""
 
+    boton = (f'<a href="{op["enlace"]}" style="display:block;text-align:center;'
+             f'margin-top:12px;padding:10px;background:{NARANJO};color:{MARINO};'
+             f'font-size:13px;font-weight:800;text-decoration:none;border-radius:7px;">'
+             f'Ver en Mercado Público</a>')
+
     return f"""
   <tr>
-    <td class="pad30" style="padding:10px 10px 10px 0;">
+    <td class="pad30" style="padding:0 12px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
-             style="border:1px solid {BORDE};border-left:4px solid {NARANJO};border-radius:12px;">
-        <tr><td style="padding:14px 12px;">
-          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.4;margin-bottom:8px;">
-            {op['nombre'][:150]}
+             style="border-bottom:1px solid {BORDE};">
+        <tr><td style="padding:12px 0 14px;">
+          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.3;margin-bottom:6px;">
+            {op['nombre'][:150].upper()}
           </div>
-          {ficha}
 {aviso_visita}
-          {detalle}{monto}
-          <a href="{op['enlace']}"
-             style="display:inline-block;margin-top:14px;padding:9px 18px;background:{MARINO};
-                    color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;border-radius:999px;">
-            Ver en Mercado Público
-          </a>
+          {ficha}{quien}{evaluar}{sin_datos}{monto}
+          {boton}
         </td></tr>
       </table>
     </td>
@@ -1898,9 +1870,10 @@ def tarjeta(op: dict) -> str:
 
 ETIQUETA_PUERTA = {
     "CRECER":   ("Crecer",   "Ya te compra, pero no todo"),
-    "RECOMPRA": ("Recompra", "Te compro y se enfrio"),
+    "RECOMPRA": ("Recompra", "Te compraba y se enfrió"),
     "NUEVO":    ("Nuevo",    "Compra lo tuyo y nunca te ha comprado"),
 }
+COLOR_PUERTA = {"CRECER": "#1f8a5b", "RECOMPRA": "#e2650f", "NUEVO": "#2563eb"}
 
 
 def direcciones_guardadas(unidades: set[str]) -> dict[str, str]:
@@ -2006,7 +1979,8 @@ def tres_puertas(suscriptor: dict) -> list[dict]:
 
 
 def bloque_de_puertas(puertas: list[dict]) -> str:
-    """Las tres puertas, en el correo. Sin nada que llenar ni donde apretar."""
+    """Las tres puertas, en el correo, como la franja verde «Convenio Marco» de
+    la muestra de la landing (06-10-2026). Sin nada que llenar ni donde apretar."""
     if not puertas:
         return ""
 
@@ -2015,45 +1989,37 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
         titulo, explicacion = ETIQUETA_PUERTA[p["tipo"]]
         donde = " · ".join(x for x in (p.get("unidad_nombre") or p.get("nombre"),
                                        p.get("comuna")) if x)
-        direccion = (f'<div style="color:#5b6b7c;font-size:13px;margin-top:2px;">'
-                     f'{p["direccion"]}</div>') if p.get("direccion") else ""
-        # Solo se muestra si de verdad hay algo peleable por servicio.
-        servicio = ""
-        if p["por_servicio"] > 0:
-            servicio = (f'<div style="color:#1d7a5f;font-size:13px;margin-top:6px;">'
-                        f'{plata(p["por_servicio"])} peleables por servicio, '
-                        f'donde ya entras</div>')
-        ya = ""
-        if p["le_vendo"] > 0:
-            ya = (f'<div style="color:#5b6b7c;font-size:13px;">'
-                  f'Ya le vendes {plata(p["le_vendo"])}</div>')
+        ya = (f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:2px;">'
+              f'Ya le vendes {plata(p["le_vendo"])}</div>') if p["le_vendo"] > 0 else ""
         tarjetas.append(f"""
-      <tr><td style="padding:10px 0;border-bottom:1px solid #e6ebf0;">
-        <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;
-                    color:#e2650f;font-weight:700;">{titulo}</div>
-        <div style="font-size:12px;color:#8899a8;margin-bottom:4px;">{explicacion}</div>
-        <div style="font-weight:600;color:#12293f;">{p["nombre"] or p["unidad"]}</div>
-        <div style="color:#5b6b7c;font-size:13px;">{donde}</div>
-        {direccion}
-        <div style="margin-top:6px;color:#12293f;">
-          <strong>{plata(p["por_ganar"])}</strong> por ganar ·
-          {p["proveedores"]} proveedores se lo reparten</div>
-        {ya}{servicio}
-      </td></tr>""")
+  <tr>
+    <td class="pad30" style="padding:0 12px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="border-bottom:1px solid {BORDE};">
+        <tr><td style="padding:12px 0 14px;">
+          <span style="display:inline-block;background:{COLOR_PUERTA[p["tipo"]]};color:#ffffff;
+                       font-size:10px;font-weight:800;letter-spacing:.08em;padding:1px 6px;
+                       border-radius:4px;">{titulo.upper()}</span>
+          <span style="color:{TEXTO_SUAVE};font-size:12px;"> {explicacion}</span>
+          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.3;margin:4px 0 2px;">
+            {(p["nombre"] or p["unidad"]).upper()}</div>
+          <div style="color:{TEXTO_SUAVE};font-size:12px;">{donde}</div>
+          <div style="margin-top:4px;"><span style="color:{MARINO};font-size:15px;font-weight:700;">
+            {plata(p["por_ganar"])}</span>
+            <span style="color:{TEXTO_SUAVE};font-size:12px;">por ganar ·
+            {p["proveedores"]} proveedores se lo reparten</span></div>
+          {ya}
+        </td></tr>
+      </table>
+    </td>
+  </tr>""")
 
-    return f"""
-  <tr><td style="padding:16px 14px 4px;">
-    <table width="100%" cellpadding="0" cellspacing="0"
-           style="background:#f7f9fb;border-radius:12px;padding:16px 18px;">
-      <tr><td style="padding-bottom:6px;">
-        <div style="font-size:16px;font-weight:700;color:#12293f;">Acciones Comerciales en Convenio Marco</div>
-        <div style="color:#5b6b7c;font-size:13px;">
-          Una puerta de cada tipo. No hay que anotar nada: el proximo mes la
-          bodega dice sola si te compraron.</div>
-      </td></tr>
-      {''.join(tarjetas)}
-    </table>
-  </td></tr>"""
+    return (encabezado_grupo(
+                "Convenio Marco",
+                "Tus 3 del mes: una puerta de cada tipo. No hay que anotar nada: "
+                "el próximo mes la bodega dice sola si te compraron.",
+                "convenio", len(puertas))
+            + "".join(tarjetas))
 
 
 def armar_correo(suscriptor: dict, oportunidades: list[dict],
@@ -2072,32 +2038,37 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     agiles = [o for o in oportunidades if o["tipo"] == "compra_agil"]
     licitaciones = [o for o in oportunidades if o["tipo"] != "compra_agil"]
 
+    # Orden de la regla de premisa (03-10-2026): licitaciones primero (la
+    # mayor parte del monto), luego compra agil, y al final Convenio Marco.
     bloques = []
-    if agiles:
-        bloques.append(encabezado_grupo(
-            f"Oportunidades en Compras Ágiles · {len(agiles)}",
-            "Cierran en 24 a 72 horas. Si vas, es hoy."))
-        bloques += [tarjeta(o) for o in agiles]
     if licitaciones:
         bloques.append(encabezado_grupo(
-            f"Oportunidades en Licitaciones · {len(licitaciones)}",
-            "Con plazo para preparar la oferta."))
+            "Licitaciones", "Con plazo para preparar la oferta.",
+            "licitacion", len(licitaciones)))
         bloques += [tarjeta(o) for o in licitaciones]
+    if agiles:
+        bloques.append(encabezado_grupo(
+            "Compra Ágil", "Cotizaciones que cierran pronto: 24 a 72 horas. Si vas, es hoy.",
+            "compra_agil", len(agiles)))
+        bloques += [tarjeta(o) for o in agiles]
     tarjetas = "".join(bloques)
 
     # El primer correo se presenta: quien lo recibe todavia no sabe que es
     # esto ni cada cuanto le va a llegar. Del segundo en adelante, al grano.
     if bienvenida:
         titulo = "Tu cuenta quedó lista"
-        bajada = (f"{presentacion} Tu cuenta quedó lista y hoy tienes "
+        resumen = (f"{n} {'oportunidad' if n == 1 else 'oportunidades'} "
+                   f"{'coincide' if n == 1 else 'coinciden'} con lo que vendes · {hoy}")
+        saludo = (f"<strong>{presentacion}</strong> Tu cuenta quedó lista y hoy tienes "
                   f"{n} {'oportunidad' if n == 1 else 'oportunidades'}. "
                   f"De aquí en adelante te escribo de lunes a sábado a la hora "
                   f"que elegiste, y el día que no haya nada que calce, no te escribo.")
     else:
         titulo = "Oportunidades de hoy"
-        bajada = (f"{presentacion} Hoy tienes {n} "
-                  f"{'oportunidad' if n == 1 else 'oportunidades'} "
-                  f"que {'coincide' if n == 1 else 'coinciden'} con lo que vendes · {hoy}")
+        resumen = (f"{n} {'oportunidad' if n == 1 else 'oportunidades'} "
+                   f"{'coincide' if n == 1 else 'coinciden'} con lo que vendes · {hoy}")
+        saludo = (f"<strong>{presentacion}</strong> Hoy tienes {n} "
+                  f"{'oportunidad' if n == 1 else 'oportunidades'}.")
 
     # El bloque del panel va SOLO en la bienvenida. Sin esto el cliente recibe
     # sus alertas y nunca se entera de que ademas tiene un panel: la mitad del
@@ -2213,49 +2184,35 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
        style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;
               font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif;">
 
-  <!-- LA CABECERA VA MARINA, Y EL LOGO SOBRE UNA PLACA BLANCA.
-       Antes iba blanca porque el logo tiene fondo blanco y sobre el marino
-       dejaba un recuadro pegoteado. El problema fue otro: **Gmail en Android
-       oscurece los fondos claros**, y el logo terminaba siendo un cuadrito
-       negro ilegible (foto de Serling, 30-08-2026).
-
-       Gmail NO toca los fondos que ya son oscuros. Asi que la cabecera marina
-       se ve igual en claro y en oscuro, y el logo va dentro de una placa
-       blanca con esquinas redondeadas: su fondo blanco se funde con la placa
-       —deja de verse pegoteado— y queda legible en los dos modos.
-
-       Referencia de Serling: legible como PIAM, pero sin su tamaño. -->
+  <!-- HERO IGUAL AL DE LA MUESTRA DE LA LANDING (06-10-2026).
+       Fondo marino (Gmail en Android no oscurece los fondos ya oscuros, por eso
+       sigue marino y no blanco: ver foto de Serling del 30-08-2026), kicker
+       naranjo, titulo, cuantas oportunidades y la tarjeta de saludo de Terri
+       con su avatar sobre una placa clara. -->
   <tr>
-    <td style="background:{MARINO};padding:16px 18px;">
-      <table cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="background:#eaf2fb;border-radius:12px;padding:5px;
-                   line-height:0;">
-          <img src="{TERRI_URL}" alt="Terri" width="44" height="44"
-               style="display:block;border:0;"></td>
-        <td style="padding-left:12px;color:#ffffff;font-size:18px;
-                   font-weight:700;letter-spacing:.01em;">Terri · Territorio
-          <div style="font-size:12px;font-weight:400;color:#cbd5e1;letter-spacing:0;">Sistema Inteligente de Alertas · Mercado Público</div></td>
-      </tr></table>
-    </td>
-  </tr>
-  <tr><td style="height:3px;background:{NARANJO};font-size:0;line-height:0;">&nbsp;</td></tr>
-
-  <tr>
-    <td style="padding:22px 10px 6px 0;">
-      <div style="color:{TEXTO};font-size:20px;font-weight:700;margin-bottom:4px;">
-        {titulo}
-      </div>
-      <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.6;">
-        {bajada}
-      </div>
+    <td style="background:{MARINO};padding:14px 12px 16px;">
+      <div style="color:{NARANJO};font-size:12px;font-weight:700;letter-spacing:.02em;">
+        Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
+      <div style="color:#ffffff;font-size:20px;font-weight:700;margin:3px 0 2px;">{titulo}</div>
+      <div style="color:#cbd5e1;font-size:12.5px;line-height:1.5;">{resumen}</div>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
+        <tr>
+          <td width="56" style="padding:8px 0 8px 10px;line-height:0;">
+            <img src="{TERRI_URL}" alt="Terri" width="44" height="44"
+                 style="display:block;border:0;background:#eaf2fb;border-radius:22px;"></td>
+          <td style="padding:8px 12px;color:#e6edf6;font-size:12.5px;line-height:1.45;">
+            {saludo}</td>
+        </tr>
+      </table>
     </td>
   </tr>
 {bloque_panel}
 {bloque_prueba}
-{bloque_puertas}
 {tarjetas}
+{bloque_puertas}
   <tr>
-    <td style="padding:20px 10px 24px 0;border-top:1px solid {BORDE};">
+    <td style="padding:20px 12px 24px;border-top:1px solid {BORDE};">
       <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
         Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
         actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
