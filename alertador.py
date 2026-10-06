@@ -287,7 +287,8 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
         "plan,al_dia,telefono_contacto,prueba_vence,"
         "filtros(rubros,regiones,monto_minimo,monto_minimo_licitaciones,monto_minimo_agiles,"
         "frecuencia,rut_proveedor,palabras_clave,"
-        "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles)"
+        "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles,"
+        "organismos,comunas,rangos_monto)"
         "&activo=eq.true"
         # Si tiene un plan pagado y esta atrasado (al_dia=false), no recibe el
         # correo -salvo que haya un override manual puesto-. A quien esta en
@@ -326,6 +327,12 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
             "rubros": f.get("rubros") or [],
             "palabras_clave": f.get("palabras_clave") or [],
             "regiones": f.get("regiones") or [],
+            # 06-10-2026, pedido de Serling: el panel guarda organismos y comunas
+            # desde antes, pero el correo nunca los leia. "instituciones" es el
+            # nombre que ya entiende le_sirve().
+            "instituciones": f.get("organismos") or [],
+            "comunas": f.get("comunas") or [],
+            "rangos_monto": f.get("rangos_monto") or [],
             "monto_minimo": int(f.get("monto_minimo") or 0),
             # 26-09-2026, pedido de Serling: monto minimo separado por tipo de
             # oportunidad (antes era un solo umbral compartido). Se conserva
@@ -1597,6 +1604,14 @@ def fuente_de_prueba(dias: int = 3) -> list[dict]:
 #  EL FILTRO
 # ======================================================================
 
+TRAMOS_MONTO = (500_000, 1_000_000, 3_000_000)   # 0: <500k, 1: 500k-1M, 2: 1M-3M, 3: 3M o mas
+
+
+def tramo_de_monto(monto: float) -> int:
+    """0 a 3 segun los cortes de TRAMOS_MONTO (el limite superior pasa al tramo siguiente)."""
+    return sum(1 for corte in TRAMOS_MONTO if monto >= corte)
+
+
 def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
     """
     Cuantos terminos del suscriptor aparecen en la oportunidad.
@@ -1614,6 +1629,12 @@ def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
     if regiones:
         suya = sin_tildes(oportunidad.get("region") or "")
         if suya and not any(sin_tildes(r) in suya or suya in sin_tildes(r) for r in regiones):
+            return 0
+
+    comunas = suscriptor.get("comunas") or []
+    if comunas:
+        suya = sin_tildes(oportunidad.get("comuna") or "")
+        if suya and not any(sin_tildes(c) in suya or suya in sin_tildes(c) for c in comunas):
             return 0
 
     # INSTITUCION Y UNIDAD. Agregados el 01-09-2026 a pedido de Serling: la
@@ -1652,6 +1673,14 @@ def le_sirve(oportunidad: dict, bolsa: set[str], suscriptor: dict) -> int:
         minimo = suscriptor.get("monto_minimo_licitaciones") or 0
     if minimo and oportunidad.get("monto") and oportunidad["monto"] < minimo:
         return 0
+
+    # Tramos de monto (panel, 06-10-2026). Se pueden marcar varios; sin
+    # ninguno marcado no filtra. Si la oportunidad no trae monto, pasa: ante la
+    # duda se muestra, igual que el resto de los filtros.
+    rangos = suscriptor.get("rangos_monto") or []
+    if rangos and oportunidad.get("monto"):
+        if tramo_de_monto(oportunidad["monto"]) not in {int(r) for r in rangos}:
+            return 0
 
     texto = palabras(f"{oportunidad['nombre']} {oportunidad['descripcion']}")
     return len(texto & bolsa)
