@@ -284,7 +284,7 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
     consulta = (
         f"{url}/rest/v1/suscriptores"
         "?select=id,email,nombre,empresa,rut_empresa,token_baja,fecha_consentimiento,"
-        "plan,al_dia,telefono_contacto,prueba_vence,"
+        "plan,al_dia,telefono_contacto,prueba_vence,override_acceso,rol,"
         "filtros(rubros,regiones,monto_minimo,monto_minimo_licitaciones,monto_minimo_agiles,"
         "frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles,"
@@ -321,6 +321,8 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
             "al_dia": fila.get("al_dia"),
             "telefono_contacto": fila.get("telefono_contacto") or "",
             "prueba_vence": fila.get("prueba_vence"),
+            "override_acceso": fila.get("override_acceso"),
+            "rol": fila.get("rol") or "",
             "rut_proveedor": f.get("rut_proveedor") or "",
             "correos_envio": f.get("correos_envio") or [],
             "hora_envio": int(f.get("hora_envio") or 8),
@@ -624,6 +626,29 @@ def dias_de_prueba_territorio(suscriptores: list[dict]) -> dict:
             continue
         salida[correo] = 7 - (hoy - inicio).days
     return salida
+
+
+def prueba_vencida(suscriptor: dict, quedan: int | None) -> bool:
+    """True si es de prueba gratis (sin plan pagado) y la prueba ya terminó.
+
+    06-10-2026, pedido de Serling: a quien se le vence la prueba gratis le
+    llega UNA sola oportunidad de muestra, con el aviso claro de que para
+    recibir todas debe adherirse a un plan. Nunca aplica a quien tiene plan,
+    a un super admin ni a quien Serling dejó con acceso manual
+    (override_acceso). Respeta la prueba extendida a mano (prueba_vence).
+    """
+    if suscriptor.get("plan") or suscriptor.get("rol") == "superadmin":
+        return False
+    if suscriptor.get("override_acceso") is True:
+        return False
+    vence = suscriptor.get("prueba_vence")
+    if vence:
+        try:
+            limite = datetime.fromisoformat(str(vence).replace("Z", "+00:00"))
+            return datetime.now(timezone.utc) > limite
+        except ValueError:
+            pass
+    return quedan is not None and quedan < 0
 
 
 # ======================================================================
@@ -2036,7 +2061,8 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
 
 def armar_correo(suscriptor: dict, oportunidades: list[dict],
                  bienvenida: bool = False, quedan: int | None = None,
-                 puertas: list[dict] | None = None) -> str:
+                 puertas: list[dict] | None = None,
+                 recortada_de: int | None = None) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
     n = len(oportunidades)
     nombre = (suscriptor.get("nombre") or "").strip()
@@ -2081,6 +2107,12 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                    f"{'coincide' if n == 1 else 'coinciden'} con lo que vendes · {hoy}")
         saludo = (f"<strong>{presentacion}</strong> Hoy tienes {n} "
                   f"{'oportunidad' if n == 1 else 'oportunidades'}.")
+        if recortada_de:
+            titulo = "Tu prueba gratis terminó"
+            resumen = f"1 oportunidad de muestra · hoy había {recortada_de} para ti · {hoy}"
+            saludo = (f"<strong>{presentacion}</strong> Tu prueba gratis terminó. "
+                      f"Hoy encontré <strong>{recortada_de}</strong> oportunidades "
+                      f"para lo que vendes y te dejo <strong>solo 1 como muestra</strong>.")
 
     # El bloque del panel va SOLO en la bienvenida. Sin esto el cliente recibe
     # sus alertas y nunca se entera de que ademas tiene un panel: la mitad del
@@ -2139,7 +2171,36 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     # convierte en ruido y se deja de leer justo cuando importa.
     bloque_puertas = bloque_de_puertas(puertas or [])
     bloque_prueba = ""
-    if not bienvenida and quedan is not None and quedan <= 3:
+    if recortada_de and not bienvenida:
+        mas = recortada_de - 1
+        bloque_prueba = f"""
+  <tr>
+    <td class="pad30" style="padding:14px 10px 4px 0;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#fff6ee;border:2px solid {NARANJO};border-radius:12px;">
+        <tr><td style="padding:18px 20px;">
+          <div style="color:{TEXTO};font-size:16px;font-weight:700;margin-bottom:6px;">
+            Quieres recibir las {recortada_de} oportunidades de hoy, completas
+          </div>
+          <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.65;margin-bottom:12px;">
+            Tu prueba gratis terminó, por eso hoy solo ves 1. Hay
+            <strong>{mas} más</strong> esperando para ti. <strong>Adhiérete a un plan</strong>
+            y vuelves a recibirlas todas, todos los días. Si prefieres que te
+            contactemos, <strong>respóndenos este correo con tu teléfono</strong>
+            o escríbenos por WhatsApp y te ayudamos a elegir el plan.
+          </div>
+          <a href="{CONTRATAR}" style="display:inline-block;background:{NARANJO};
+             color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
+             padding:11px 22px;border-radius:999px;margin-right:8px;">Ver planes y contratar</a>
+          <a href="https://wa.me/56967329214?text=Quiero%20contratar%20un%20plan%20de%20Territorio"
+             style="display:inline-block;color:{MARINO};text-decoration:none;font-size:14px;
+             font-weight:700;padding:10px 20px;border-radius:999px;border:2px solid {MARINO};">
+             Escribir por WhatsApp</a>
+        </td></tr>
+      </table>
+    </td>
+  </tr>"""
+    elif not bienvenida and quedan is not None and quedan <= 3:
         if quedan >= 1:
             verbo, dia = ("queda", "día") if quedan == 1 else ("quedan", "días")
             encabezado = f"Te {verbo} {quedan} {dia} de prueba"
@@ -2847,6 +2908,13 @@ def main():
             continue
         print(f"   {len(elegidas)} oportunidades · mejor nota {elegidas[0]['nota']} ({elegidas[0]['clase']})")
 
+        # Prueba gratis vencida: UNA sola oportunidad de muestra (06-10-2026).
+        recortada_de = None
+        if not args.bienvenidas and prueba_vencida(suscriptor, prueba.get(suscriptor.get("email"))):
+            recortada_de = len(elegidas)
+            elegidas = elegidas[:1]
+            print(f"   prueba vencida: se manda 1 de {recortada_de}")
+
         # Las tres puertas del mes. Falla abierto: si no se pueden calcular,
         # el correo sale igual, solo que sin ese bloque.
         marca_puertas = time.perf_counter()
@@ -2858,7 +2926,7 @@ def main():
 
         html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas,
                             quedan=prueba.get(suscriptor.get("email")),
-                            puertas=puertas)
+                            puertas=puertas, recortada_de=recortada_de)
         # La palabra concuerda con el numero: con una sola decia
         # «1 oportunidades», y se vio en un correo real (31-08-2026).
         cuantas = "oportunidad" if len(elegidas) == 1 else "oportunidades"
@@ -2867,6 +2935,9 @@ def main():
                       f"{cuantas} para partir")
         else:
             asunto = f"{len(elegidas)} {cuantas} de hoy · Terri"
+            if recortada_de:
+                asunto = (f"Tu prueba terminó: 1 oportunidad de muestra "
+                          f"(hoy había {recortada_de}) · Terri")
 
         if args.guardar:
             Path(args.guardar).write_text(html, encoding="utf-8")
