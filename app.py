@@ -53,8 +53,8 @@ from fpdf.fonts import FontFace
 # 1. CONFIGURACION
 # ===========================================================================
 
-TITULO_APP = "Uplevel Inteligencia"
-SUBTITULO_APP = "Compras Públicas · Chile"
+TITULO_APP = "Gestión Convenio Marco"
+SUBTITULO_APP = "Territorio · Uplevel"
 
 # Enlaces que trae la app cargados de fabrica. Los dos campos son editables:
 # se pueden reemplazar por los de otra institucion o de otra carpeta.
@@ -2752,23 +2752,103 @@ def aplicar_estilos() -> None:
 
 
 def cabecera() -> None:
-    """Franja blanca con el logo de Uplevel a la izquierda y el titulo al lado.
-
-    Va sobre blanco a proposito: el logo de Uplevel tiene fondo blanco y sobre
-    el azul marino dejaria un recuadro. Es la misma decision que en el correo.
+    """Barra azul marino de Territorio: logo, nombre de la herramienta y el
+    regreso al panel. 06-10-2026, pedido de Serling: dentro de «Gestión
+    Convenio Marco» la app lleva el mismo diseño, fondo y letras que el panel
+    de Territorio, y el nombre es el de la opción (no «Uplevel Inteligencia»).
     """
     if RUTA_LOGO_UPLEVEL.exists():
         logo = base64.b64encode(RUTA_LOGO_UPLEVEL.read_bytes()).decode()
         marca = f'<img src="data:image/png;base64,{logo}" alt="Uplevel">'
     else:
-        marca = (f'<div style="color:{COLOR["rojo"]};font-size:20px;font-weight:bold;'
-                 f'line-height:1.1">UP<br>LEVEL</div>')
+        marca = '<b style="color:#E8944A">UP<br>LEVEL</b>'
     st.markdown(
-        f'<div class="cabecera">{marca}'
-        f'<div class="cabecera-texto">'
-        f'<div class="titulo-panel">{TITULO_APP}</div>'
-        f'<div class="subtitulo-panel">{SUBTITULO_APP}</div>'
+        f'<div class="t-barra"><div class="t-barra-in">'
+        f'<div class="t-marca"><span class="t-logo">{marca}</span>'
+        f'<span class="t-textos"><span class="t-titulo">{TITULO_APP}</span>'
+        f'<span class="t-sub">{SUBTITULO_APP}</span></span></div>'
+        f'<a class="t-volver" href="https://territorio.uplevelweb.art/panel/" target="_top">← Volver al panel</a>'
         f'</div></div>',
+        unsafe_allow_html=True,
+    )
+    estilo_territorio()
+
+
+def estilo_territorio() -> None:
+    """Fondo, letras, pestañas en cápsula y barra, igual que el panel."""
+    nodos = ("<svg xmlns='http://www.w3.org/2000/svg' width='900' height='700' viewBox='0 0 900 700'>"
+             "<g stroke='%231B3A5C' stroke-opacity='.10' stroke-width='1' fill='none'>"
+             "<path d='M60 90L190 40L300 130L220 230L60 90M300 130L460 70L560 190L420 260L300 130M560 190L720 120L830 240L690 330L560 190'/>"
+             "<path d='M80 420L210 360L330 470L230 580L80 420M330 470L500 410L610 540L450 620L330 470M610 540L760 470L850 600'/>"
+             "</g><g fill='%231B3A5C' fill-opacity='.22'>"
+             "<circle cx='60' cy='90' r='3'/><circle cx='190' cy='40' r='3'/><circle cx='300' cy='130' r='3'/>"
+             "<circle cx='220' cy='230' r='3'/><circle cx='460' cy='70' r='3'/><circle cx='560' cy='190' r='3'/>"
+             "<circle cx='420' cy='260' r='3'/><circle cx='720' cy='120' r='3'/><circle cx='830' cy='240' r='3'/>"
+             "<circle cx='690' cy='330' r='3'/><circle cx='80' cy='420' r='3'/><circle cx='210' cy='360' r='3'/>"
+             "<circle cx='330' cy='470' r='3'/><circle cx='230' cy='580' r='3'/><circle cx='500' cy='410' r='3'/>"
+             "<circle cx='610' cy='540' r='3'/><circle cx='450' cy='620' r='3'/><circle cx='760' cy='470' r='3'/>"
+             "<circle cx='850' cy='600' r='3'/></g></svg>")
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background: linear-gradient(180deg,#f7f9fc,#eef4fb) !important;
+            font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif !important;
+        }}
+        .stApp::before {{
+            content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+            background-image:url("data:image/svg+xml;utf8,{nodos}");
+            background-size:900px 700px; opacity:.9;
+        }}
+        [data-testid="stMainBlockContainer"] {{ position:relative; z-index:1; }}
+        html, body, .stApp, button, input, textarea, select, label, p, h1, h2, h3, h4,
+        li, td, th, [data-testid="stMarkdownContainer"] {{
+            font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif !important;
+        }}
+        h1, h2, h3 {{ color:#1B3A5C; letter-spacing:-.02em; }}
+
+        /* Barra azul marino de Territorio */
+        .t-barra {{ margin:-1.6rem -2rem 18px; background:#1B3A5C; }}
+        .t-barra-in {{ max-width:1700px; margin:0 auto; padding:10px 24px; display:flex;
+                       align-items:center; justify-content:space-between; gap:14px; }}
+        .t-marca {{ display:flex; align-items:center; gap:14px; min-width:0; }}
+        .t-logo {{ background:#fff; border-radius:12px; padding:4px 8px; display:flex; flex:none; }}
+        .t-logo img {{ height:38px; width:auto; display:block; }}
+        .t-textos {{ display:flex; flex-direction:column; line-height:1.15; min-width:0; }}
+        .t-titulo {{ color:#fff; font-weight:800; font-size:20px; letter-spacing:.04em; text-transform:uppercase; }}
+        .t-sub {{ color:#E8944A; font-weight:700; font-size:12px; letter-spacing:.06em; text-transform:uppercase; }}
+        .t-volver {{ color:#fff !important; font-weight:700; font-size:14px; text-decoration:none !important;
+                     white-space:nowrap; }}
+        .t-volver:hover {{ color:#E8944A !important; }}
+        @media (max-width:640px) {{
+            .t-barra {{ margin:-1rem -.7rem 14px; }}
+            .t-titulo {{ font-size:15px; }} .t-sub {{ font-size:10.5px; }}
+            .t-logo img {{ height:30px; }}
+        }}
+
+        /* Pestañas: cápsulas, como las opciones del panel. Se cubren las dos
+           versiones de Streamlit (data-baseweb antes, role=tab/stTab ahora). */
+        [role="tablist"] {{ gap:8px !important; flex-wrap:wrap !important; border-bottom:0 !important; padding:4px 0 10px !important; }}
+        [data-baseweb="tab-highlight"], [data-baseweb="tab-border"],
+        [data-testid="stTabHighlight"], [data-testid="stTabBorder"] {{ display:none !important; }}
+        [role="tablist"] > div:not([role="tab"]):not([data-testid="stTab"]) {{ display:none !important; }}
+        [role="tab"], [data-testid="stTab"] {{
+            background:#fff !important; border:1.5px solid #e2e8f0 !important; border-radius:999px !important;
+            padding:8px 18px !important; height:auto !important; margin:0 !important;
+            color:#1B3A5C !important; font-weight:700 !important; box-shadow:0 1px 3px rgba(27,58,92,.08);
+        }}
+        [data-orientation="horizontal"]:has(> [role="tablist"]) {{ border-bottom:0 !important; box-shadow:none !important; }}
+        [role="tablist"]::before, [role="tablist"]::after, [role="tab"]::before, [role="tab"]::after {{ display:none !important; content:none !important; }}
+        [role="tablist"] {{ box-shadow:none !important; background:transparent !important; }}
+        .react-aria-SelectionIndicator, [data-testid="stTabs"] [class*="SelectionIndicator"] {{ display:none !important; }}
+        [role="tab"] p, [data-testid="stTab"] p {{ font-size:15px !important; font-weight:700 !important; margin:0 !important; color:inherit !important; }}
+        [role="tab"]:hover, [data-testid="stTab"]:hover {{ border-color:#E8944A !important; }}
+        [role="tab"][aria-selected="true"], [data-testid="stTab"][aria-selected="true"] {{
+            background:#1B3A5C !important; border-color:#1B3A5C !important; color:#fff !important;
+        }}
+        [role="tab"][aria-selected="true"] p, [data-testid="stTab"][aria-selected="true"] p {{ color:#fff !important; }}
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -5502,7 +5582,7 @@ def main() -> None:
 
     if not solo_comportamiento:
         cabecera()
-        interruptor_de_tema()
+        # 06-10-2026, pedido de Serling: sin boton de modo claro/oscuro.
 
     # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
     # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
@@ -5533,7 +5613,10 @@ def main() -> None:
     # lo usan. Para un cliente cualquiera esa lectura no sirve de nada y son
     # segundos de espera en cada pantalla.
     from modulo_planes import puede
-    usa_catalogo = puede(yo, "mercado_publico")
+    # Dentro de «Gestión Convenio Marco» ya no hay pestaña de Comportamiento
+    # (vive en el panel de Territorio), así que el catálogo solo se lee en la
+    # vista embebida: ahorra segundos en cada carga.
+    usa_catalogo = solo_comportamiento and puede(yo, "mercado_publico")
     if usa_catalogo:
         precios_oferta, fuente_ofertas, error_ofertas = precios_del_catalogo(url_ofertas)
         # El catalogo completo (lo que vende) vive en la misma carpeta de Drive.
@@ -5600,13 +5683,11 @@ def main() -> None:
     orden = []
     orden.append(("agenda", "🗓️ Agenda"))
     orden.append(("oportunidades", "🎯 Oportunidades"))
-    orden.append(("mercado_publico", "📈 Comportamiento Mercado Público"))
     # La puerta a los dos paneles de envio de Apps Script. Va al lado de
     # Convenios Marco porque es de la misma clase: usa sus cuentas de Gmail y
     # su lista de contactos.
     orden.append(("envios", "📧 Email Catálogo y Ofertas"))
     orden.append(("equipo", "👥 Mi equipo"))
-    orden.append(("alertas", "🔔 Alertas"))
     if es_soporte(yo):
         orden.append(("soporte", "🛟 Soporte"))
 
@@ -5629,15 +5710,6 @@ def main() -> None:
             # un error suyo no puede tumbar el resto del panel.
             from modulo_oportunidades import seccion_oportunidades
             seccion_oportunidades()
-    with pestanas["alertas"]:
-        if abierta("alertas"):
-            # Importa `alertador.py` para que la vista previa use las mismas
-            # reglas que el correo de verdad y no una copia desalineada.
-            from modulo_alertas import seccion_alertas
-            seccion_alertas()
-    with pestanas["mercado_publico"]:
-        if abierta("mercado_publico"):
-            seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
     with pestanas["envios"]:
         if abierta("envios"):
             # La puerta a los dos paneles de Apps Script. No manda correo: los
