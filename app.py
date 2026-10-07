@@ -3774,7 +3774,10 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # --- El resultado (se guarda, para que no se pierda al tocar otra cosa) --
     tabla = st.session_state.get("mp_tabla")
     if tabla is None:
-        st.info("Elige una o más unidades y toca **Consultar Mercado Público**.")
+        # En el panel embebido (vista=comportamiento) no se muestra este aviso:
+        # el filtro de arriba ya se explica solo (pedido de Serling, 06-10-2026).
+        if not st.session_state.get("_vista_embebida"):
+            st.info("Elige una o más unidades y toca **Consultar Mercado Público**.")
         return
 
     avisar_antes_de_salir(True)
