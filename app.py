@@ -5488,8 +5488,21 @@ def main() -> None:
     )
     aplicar_estilos()
     icono_del_movil()
-    cabecera()
-    interruptor_de_tema()
+
+    # 06-10-2026, pedido de Serling: Territorio muestra «Comportamiento Mercado
+    # Publico» DENTRO de su propio panel (un desplegable que carga esta app en un
+    # marco) y tardaba 20-30 s porque se dibujaban las siete pestañas. Con
+    # `?vista=comportamiento` se dibuja SOLO ese modulo, sin encabezado ni las
+    # otras pestañas. No da ningun permiso nuevo: `puede()` se sigue exigiendo.
+    # Se guarda en session_state porque `puerta()` limpia los parametros de la
+    # URL al canjear el ticket.
+    if st.query_params.get("vista") == "comportamiento":
+        st.session_state["_vista_embebida"] = "comportamiento"
+    solo_comportamiento = st.session_state.get("_vista_embebida") == "comportamiento"
+
+    if not solo_comportamiento:
+        cabecera()
+        interruptor_de_tema()
 
     # LA PUERTA, y va aca arriba a proposito: antes de bajar el catalogo de
     # Drive y antes de tocar la bodega. Quien no ha entrado no tiene por que
@@ -5534,6 +5547,14 @@ def main() -> None:
 
     # Dos pestañas. «Análisis de compras» sigue deshabilitada desde el 18-08
     # (el código queda en `seccion_analisis_compras` por si hay que reponerla).
+    if solo_comportamiento:
+        from modulo_planes import candado
+        if puede(yo, "mercado_publico"):
+            seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
+        else:
+            candado("mercado_publico")
+        return
+
     guia_de_entrada()
 
     # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
