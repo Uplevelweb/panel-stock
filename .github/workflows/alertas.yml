@@ -73,6 +73,7 @@ jobs:
           CORREO_DESDE: ${{ vars.CORREO_DESDE }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          TAREA_CLAVE: ${{ secrets.TAREA_CLAVE }}
         run: |
           # De que turno es esta corrida. `github.event.schedule` trae el cron
           # que la disparo, asi que no hay que adivinar la hora ni pelear con
