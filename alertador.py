@@ -2653,13 +2653,11 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
     if not telefono:
         return
 
-    primera = elegidas[0]
+    # La plantilla aprobada en Meta (alerta_oportunidades_diaria) tiene solo
+    # DOS variables: {{1}} nombre y {{2}} cantidad. Mandar una tercera hace que
+    # Meta rechace el mensaje completo.
     nombre = (suscriptor.get("nombre") or "").split(" ")[0] or "Hola"
-    parametros = [
-        nombre,
-        str(len(elegidas)),
-        primera.get("nombre") or primera.get("descripcion") or "una oportunidad",
-    ]
+    parametros = [nombre, str(len(elegidas))]
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros}).encode("utf-8")
     peticion = urllib.request.Request(
@@ -2667,8 +2665,11 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
         data=cuerpo, method="POST",
         headers={"Content-Type": "application/json", "x-tarea-clave": clave})
     try:
-        with urllib.request.urlopen(peticion, timeout=30):
-            print(f"   [whatsapp] alerta mandada a {telefono}")
+        with urllib.request.urlopen(peticion, timeout=30) as respuesta:
+            if respuesta.status == 200:
+                print(f"   [whatsapp] alerta mandada a {telefono}")
+            else:
+                print(f"   [whatsapp] NO salio a {telefono} (codigo {respuesta.status})")
     except urllib.error.HTTPError as error:
         print(f"   [whatsapp] no salio ({error.code}): {error.read().decode('utf-8')[:200]}")
     except urllib.error.URLError as error:
