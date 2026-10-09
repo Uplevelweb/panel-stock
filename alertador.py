@@ -62,6 +62,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -97,6 +98,7 @@ V2 = "https://api2.mercadopublico.cl/v2/compra-agil"
 # (2) el correo avisa al cliente, (3) nada se da por «vacio» sin decirlo.
 FALLAS_API: list[str] = []
 ESPERA_V1 = 2.0
+HILOS_AGILES = 3             # paginas pedidas a la vez
 TAMANO_PAGINA_AGILES = 30   # ver compras_agiles_abiertas: con 50 la API da 504
 
 # Resend en plan gratis: 100 correos al dia. Al 101 se cae el envio, asi que
@@ -1525,11 +1527,32 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
         return (f"{V2}?estado=publicada&tamano_pagina={tam}"
                 f"&numero_pagina={consumidos // tam + 1}&publicado_desde={desde}")
 
+    # LECTURA EN PARALELO (09-10-2026): la API cobra ~1 s por registro y 2.000
+    # compras eran ~45 min de reloj, al borde del limite de 60 de GitHub. Se
+    # piden HILOS paginas a la vez; se procesan en orden, asi que el resultado
+    # es identico al secuencial. Si una pagina falla, se cae al camino de
+    # siempre (reintentos con espera) para esa pagina.
+    previas: dict[str, object] = {}
+
+    def precargar():
+        base = consumidos // tam + 1
+        urls = [f"{V2}?estado=publicada&tamano_pagina={tam}&numero_pagina={base + k}&publicado_desde={desde}"
+                for k in range(HILOS_AGILES) if (consumidos + k * tam) < techo_items]
+        urls = [u for u in urls if u not in previas]
+        if not urls:
+            return
+        with ThreadPoolExecutor(max_workers=HILOS_AGILES) as pool:
+            for u, d in zip(urls, pool.map(lambda x: _pedir(x, {"ticket": ticket}), urls)):
+                previas[u] = d
+
     for pagina in range(1, techo_items // 10 + 2):
         if consumidos >= techo_items:
             tocado_techo = True
             break
         url = url_pagina()
+        if url not in previas:
+            previas.clear()
+            precargar()
         # Esta API se cae sola de vez en cuando con un 504 «Endpoint request
         # timed out». Paso el 26-08-2026 en la pagina 6 de golpe. Sin
         # reintentar, el correo sale con la mitad de las compras agiles y
@@ -1540,7 +1563,9 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
         fallo = False
         esperas = [10, 20, 40, 60]
         for intento in range(len(esperas) + 1):
-            datos = _pedir(url, {"ticket": ticket})
+            datos = previas.pop(url, None) if intento == 0 else None
+            if datos is None:
+                datos = _pedir(url, {"ticket": ticket})
             filas = _primera_lista(datos)
             if filas:
                 fallo = False
@@ -1549,6 +1574,7 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
             if fallo and tam > 10:
                 # Un 504 por tamaño es determinista: esperar no sirve, achicar si.
                 tam = 10
+                previas.clear()
                 url = url_pagina()
                 print(f"    pagina {pagina} dio error con paginas de {TAMANO_PAGINA_AGILES}: se baja a 10 por pagina")
                 continue
@@ -3110,7 +3136,7 @@ def main():
         # 26-09-2026 junto con dias_agiles (7->10), misma proporcion.
         agi = compras_agiles_abiertas(
             ticket, dias=dias_agiles, habiles=args.bienvenidas,
-            techo_paginas=170 if args.bienvenidas else 40)
+            techo_paginas=170 if args.bienvenidas else 80)
         print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
 
         universo = lic + agi
