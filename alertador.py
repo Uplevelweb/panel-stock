@@ -98,8 +98,8 @@ V2 = "https://api2.mercadopublico.cl/v2/compra-agil"
 # (2) el correo avisa al cliente, (3) nada se da por «vacio» sin decirlo.
 FALLAS_API: list[str] = []
 ESPERA_V1 = 2.0
-HILOS_AGILES = 3             # paginas pedidas a la vez
-TAMANO_PAGINA_AGILES = 30   # ver compras_agiles_abiertas: con 50 la API da 504
+HILOS_AGILES = 12            # paginas pedidas a la vez (medido 09-10-2026: 12 paginas en 15 s)
+TAMANO_PAGINA_AGILES = 10   # ver leer_paginas_agiles: con 50 la API da 504, y 10 es lo mas parejo
 
 # Resend en plan gratis: 100 correos al dia. Al 101 se cae el envio, asi que
 # el tope se respeta desde aca y no se descubre a mitad de la tanda.
@@ -1489,6 +1489,84 @@ def habiles_atras(n: int, desde: date | None = None) -> date:
     return dia
 
 
+def leer_paginas_agiles(ticket: str, desde: str, techo_items: int) -> tuple[list, list[int], int, bool]:
+    """Todas las filas de compras agiles publicadas desde `desde`, EN ORDEN.
+
+    Devuelve (filas, paginas_sin_respuesta, total_paginas, tocado_techo).
+
+    POR QUE ASI (medido contra la API el 09-10-2026):
+    - Cada peticion tarda ~8-15 s sin importar la pagina ni los filtros, y con
+      paginas de 50 la puerta de enlace corta a los ~29 s (siempre 504).
+    - Desde ayer hay ~5.300 publicadas (530 paginas de 10). Pedidas en fila
+      eran ~1 hora y media.
+    - La API ESCALA EN PARALELO: 12 paginas a la vez tardaron 15 s en total.
+      Con 12 hilos son ~11 minutos.
+    - La primera pagina trae `paginacion.total_paginas`: se sabe exactamente
+      cuantas hay, y por lo mismo si algo quedo sin leer.
+    Si una pagina no responde tras sus reintentos, NO se pierde el resto: se
+    anota y se sigue, y quien llama avisa al cliente.
+    """
+    tam = TAMANO_PAGINA_AGILES
+
+    def url(n: int) -> str:
+        return (f"{V2}?estado=publicada&tamano_pagina={tam}"
+                f"&numero_pagina={n}&publicado_desde={desde}")
+
+    def pedir_pagina(n: int):
+        esperas = [5, 15, 30]
+        for i in range(len(esperas) + 1):
+            datos = _pedir(url(n), {"ticket": ticket})
+            if datos is not None:
+                return datos
+            if i < len(esperas):
+                time.sleep(esperas[i])
+        return None
+
+    # Pagina 1: si ni ella responde, ChileCompra esta caido de verdad. Se
+    # insiste con esperas largas, que es lo que se hacia siempre.
+    datos1 = None
+    for espera in (0, 10, 20, 40, 60):
+        if espera:
+            print(f"    pagina 1 fallo, reintento en {espera} s")
+            time.sleep(espera)
+        datos1 = _pedir(url(1), {"ticket": ticket})
+        if datos1 is not None:
+            break
+    if datos1 is None:
+        return [], [1], 0, False
+
+    total = 0
+    if isinstance(datos1, dict):
+        total = int(((datos1.get("payload") or {}).get("paginacion") or {}).get("total_paginas") or 0)
+    filas = list(_primera_lista(datos1))
+    max_paginas = max(1, techo_items // tam)
+    tocado_techo = total > max_paginas
+    ultima = min(total, max_paginas) if total else max_paginas
+    print(f"  {total or '?'} paginas de {tam} en total; se piden {ultima} con {HILOS_AGILES} hilos")
+
+    sin_respuesta: list[int] = []
+    marca = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=HILOS_AGILES) as pool:
+        lote = HILOS_AGILES * 4 if not total else max(1, ultima)
+        siguiente = 2
+        terminado = ultima < 2
+        while not terminado and siguiente <= ultima:
+            paginas = list(range(siguiente, min(siguiente + lote, ultima + 1)))
+            for n, datos in zip(paginas, pool.map(pedir_pagina, paginas)):
+                if datos is None:
+                    sin_respuesta.append(n)
+                    continue
+                fs = _primera_lista(datos)
+                if not fs:
+                    terminado = True        # pagina valida y vacia: se acabaron
+                    break
+                filas.extend(fs)
+                if n % 50 == 0:
+                    print(f"    pagina {n}/{ultima} · {time.perf_counter() - marca:.0f} s")
+            siguiente = paginas[-1] + 1
+    return filas, sin_respuesta, total, tocado_techo
+
+
 def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
                             habiles: bool = False) -> list[dict]:
     """
@@ -1511,85 +1589,17 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
     cerradas = 0
     print(f"  desde {desde} ({dias} dias {'habiles' if habiles else 'corridos'})")
     salida = []
-    # 09-10-2026: EL TAMAÑO DE PAGINA YA NO ES 50. Medido hoy contra la API:
-    # tarda ~1 segundo POR REGISTRO (10 -> 10 s, 20 -> 20 s, 30 -> 21 s) y la
-    # puerta de enlace corta a los ~29 s. Con 50 responde SIEMPRE
-    # «504 Endpoint request timed out», y eso es lo que hacia que hoy no se
-    # recogiera ninguna compra agil: no era una caida de ChileCompra, era
-    # nuestro parametro. Se parte en 30 y, si aun asi da 504, se baja a 10
-    # (30 es multiplo de 10, asi que la paginacion sigue alineada).
-    tam = TAMANO_PAGINA_AGILES
-    consumidos = 0
     techo_items = techo_paginas * 50
-    tocado_techo = False
-
-    def url_pagina() -> str:
-        return (f"{V2}?estado=publicada&tamano_pagina={tam}"
-                f"&numero_pagina={consumidos // tam + 1}&publicado_desde={desde}")
-
-    # LECTURA EN PARALELO (09-10-2026): la API cobra ~1 s por registro y 2.000
-    # compras eran ~45 min de reloj, al borde del limite de 60 de GitHub. Se
-    # piden HILOS paginas a la vez; se procesan en orden, asi que el resultado
-    # es identico al secuencial. Si una pagina falla, se cae al camino de
-    # siempre (reintentos con espera) para esa pagina.
-    previas: dict[str, object] = {}
-
-    def precargar():
-        base = consumidos // tam + 1
-        urls = [f"{V2}?estado=publicada&tamano_pagina={tam}&numero_pagina={base + k}&publicado_desde={desde}"
-                for k in range(HILOS_AGILES) if (consumidos + k * tam) < techo_items]
-        urls = [u for u in urls if u not in previas]
-        if not urls:
-            return
-        with ThreadPoolExecutor(max_workers=HILOS_AGILES) as pool:
-            for u, d in zip(urls, pool.map(lambda x: _pedir(x, {"ticket": ticket}), urls)):
-                previas[u] = d
-
-    for pagina in range(1, techo_items // 10 + 2):
-        if consumidos >= techo_items:
-            tocado_techo = True
-            break
-        url = url_pagina()
-        if url not in previas:
-            previas.clear()
-            precargar()
-        # Esta API se cae sola de vez en cuando con un 504 «Endpoint request
-        # timed out». Paso el 26-08-2026 en la pagina 6 de golpe. Sin
-        # reintentar, el correo sale con la mitad de las compras agiles y
-        # nadie se entera: no hay error, simplemente vienen menos.
-        # La API de compras agiles esta en Beta (desde 22-05-2026) y los 504
-        # duran minutos: se reintenta con esperas crecientes (10, 20, 40, 60 s).
-        filas = []
-        fallo = False
-        esperas = [10, 20, 40, 60]
-        for intento in range(len(esperas) + 1):
-            datos = previas.pop(url, None) if intento == 0 else None
-            if datos is None:
-                datos = _pedir(url, {"ticket": ticket})
-            filas = _primera_lista(datos)
-            if filas:
-                fallo = False
-                break
-            fallo = datos is None          # None = error de red/HTTP; [] = fin real
-            if fallo and tam > 10:
-                # Un 504 por tamaño es determinista: esperar no sirve, achicar si.
-                tam = 10
-                previas.clear()
-                url = url_pagina()
-                print(f"    pagina {pagina} dio error con paginas de {TAMANO_PAGINA_AGILES}: se baja a 10 por pagina")
-                continue
-            if fallo and intento < len(esperas):
-                print(f"    pagina {pagina} fallo, reintento {intento + 1} de {len(esperas)} en {esperas[intento]} s")
-                time.sleep(esperas[intento])
-            elif not fallo:
-                break                      # respuesta valida y vacia: no hay mas paginas
-        if fallo:
-            FALLAS_API.append(f"compras agiles (pagina {pagina})")
-            print(f"::warning title=Compras agiles::ChileCompra no respondio en la pagina {pagina}; "
-                  f"se sigue con {len(salida)} recogidas. El correo avisara al cliente.")
-            break
-        if not filas:
-            break
+    filas_todas, sin_respuesta, total_paginas, tocado_techo = leer_paginas_agiles(
+        ticket, desde, techo_items)
+    tam = TAMANO_PAGINA_AGILES
+    consumidos = len(filas_todas)
+    if sin_respuesta:
+        FALLAS_API.append(f"compras agiles ({len(sin_respuesta)} paginas sin respuesta"
+                          f"{': ' + ','.join(map(str, sin_respuesta[:8])) if len(sin_respuesta) <= 8 else ''})")
+        print(f"::warning title=Compras agiles::ChileCompra no respondio en {len(sin_respuesta)} "
+              f"pagina(s); se sigue con {consumidos} recogidas. El correo avisara al cliente.")
+    for filas in (filas_todas,):
         for fila in filas:
             if not isinstance(fila, dict):
                 continue
@@ -1634,9 +1644,6 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
                 "region": str(_campo(fila, "institucion.nombre_region", "nombre_region")),
                 "comuna": "",
             })
-        consumidos += len(filas)
-        if len(filas) < tam:
-            break
     if tocado_techo:
         # El `for` llego al final sin cortar: se acabaron las paginas
         # permitidas, no las compras. Habia mas y NO se pidieron.
@@ -1645,7 +1652,7 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
         # exactamente 2000 —40 paginas de 50, el techo justo—, que es la
         # firma de que quedaron compras afuera y nadie se entero. Un numero
         # redondo en un dato de la calle es siempre sospechoso.
-        print(f"  TECHO: {techo_items} compras y seguian llegando. "
+        print(f"  TECHO: {techo_items} compras y seguian llegando ({total_paginas} paginas en total). "
               "Quedaron compras agiles sin pedir.")
     if cerradas:
         print(f"  {cerradas} descartadas por estar ya cerradas")
@@ -3136,7 +3143,7 @@ def main():
         # 26-09-2026 junto con dias_agiles (7->10), misma proporcion.
         agi = compras_agiles_abiertas(
             ticket, dias=dias_agiles, habiles=args.bienvenidas,
-            techo_paginas=170 if args.bienvenidas else 80)
+            techo_paginas=250 if args.bienvenidas else 200)
         print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
 
         universo = lic + agi
