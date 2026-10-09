@@ -284,7 +284,7 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
     consulta = (
         f"{url}/rest/v1/suscriptores"
         "?select=id,email,nombre,empresa,rut_empresa,token_baja,fecha_consentimiento,"
-        "plan,al_dia,telefono_contacto,prueba_vence,override_acceso,rol,"
+        "plan,al_dia,telefono_contacto,whatsapp_numero,whatsapp_confirmado_en,prueba_vence,override_acceso,rol,"
         "filtros(rubros,regiones,monto_minimo,monto_minimo_licitaciones,monto_minimo_agiles,"
         "frecuencia,rut_proveedor,palabras_clave,"
         "correos_envio,hora_envio,incluye_licitaciones,incluye_compras_agiles,"
@@ -320,6 +320,8 @@ def _configuracion_supabase(url: str, clave: str) -> list[dict]:
             "plan": fila.get("plan") or "",
             "al_dia": fila.get("al_dia"),
             "telefono_contacto": fila.get("telefono_contacto") or "",
+            "whatsapp_numero": fila.get("whatsapp_numero") or "",
+            "whatsapp_confirmado": bool(fila.get("whatsapp_confirmado_en")),
             "prueba_vence": fila.get("prueba_vence"),
             "override_acceso": fila.get("override_acceso"),
             "rol": fila.get("rol") or "",
@@ -2612,7 +2614,10 @@ def whatsapp_elegible(suscriptor: dict) -> bool:
     """Plus/Premium activo y al dia (beneficio permanente), o dentro de la
     prueba gratis -hasta prueba_vence, tope duro de 15 dias desde que
     confirmo aunque Serling haya dado la excepcion de una segunda prueba."""
-    if not suscriptor.get("telefono_contacto"):
+    # 08-10-2026: solo se manda al WhatsApp CONFIRMADO desde el panel (el
+    # cliente manda un codigo desde ese celular). `telefono_contacto` es un
+    # dato suelto, sin confirmar: ya no se usa para enviar.
+    if not (suscriptor.get("whatsapp_numero") and suscriptor.get("whatsapp_confirmado")):
         return False
 
     plan = (suscriptor.get("plan") or "").lower()
@@ -2649,7 +2654,7 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
         print("   [whatsapp] falta TAREA_CLAVE en el entorno, no se manda")
         return
 
-    telefono = "".join(c for c in suscriptor.get("telefono_contacto", "") if c.isdigit())
+    telefono = "".join(c for c in suscriptor.get("whatsapp_numero", "") if c.isdigit())
     if not telefono:
         return
 

@@ -1,0 +1,69 @@
+# Prueba manual del aviso por WhatsApp: manda la plantilla REAL al numero
+# CONFIRMADO de una cuenta (el que se vincula desde el panel con un codigo).
+# Sirve para saber en un minuto si el canal funciona de punta a punta, sin
+# esperar al turno de las 8:00 / 15:00. La clave del bot (TAREA_CLAVE) vive solo
+# en los secretos de GitHub: nunca se imprime.
+#
+# El resultado queda tambien en la tabla whatsapp_envios (la registra el bot).
+
+name: Prueba WhatsApp
+
+on:
+  workflow_dispatch:
+    inputs:
+      correo:
+        description: "Correo de la cuenta (debe tener su WhatsApp confirmado)"
+        required: true
+        default: "webuplevel@gmail.com"
+
+permissions:
+  contents: read
+
+jobs:
+  prueba:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mandar el aviso de prueba
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          TAREA_CLAVE: ${{ secrets.TAREA_CLAVE }}
+          WHATSAPP_BOT_URL: ${{ vars.WHATSAPP_BOT_URL }}
+          CORREO: ${{ github.event.inputs.correo }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.parse, urllib.request, urllib.error
+
+          base = os.environ["SUPABASE_URL"].rstrip("/")
+          clave_sb = os.environ["SUPABASE_SECRET_KEY"]
+          bot = (os.environ.get("WHATSAPP_BOT_URL") or "https://territorio-whatsapp-bot.onrender.com").strip().rstrip("/")
+          tarea = os.environ.get("TAREA_CLAVE", "").strip()
+          correo = os.environ["CORREO"].strip().lower()
+
+          if not tarea:
+              sys.exit("FALTA el secreto TAREA_CLAVE en GitHub.")
+
+          q = (f"{base}/rest/v1/suscriptores?select=nombre,whatsapp_numero,whatsapp_confirmado_en"
+               f"&email=eq.{urllib.parse.quote(correo)}")
+          req = urllib.request.Request(q, headers={"apikey": clave_sb, "Authorization": f"Bearer {clave_sb}"})
+          filas = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+          if not filas:
+              sys.exit(f"No existe la cuenta {correo}.")
+          f = filas[0]
+          if not f.get("whatsapp_numero") or not f.get("whatsapp_confirmado_en"):
+              sys.exit(f"{correo} no tiene un WhatsApp CONFIRMADO. Vincúlalo primero desde el panel (tarjeta 'Tu WhatsApp para alertas').")
+
+          tel = f["whatsapp_numero"]
+          nombre = (f.get("nombre") or "").split(" ")[0] or "Hola"
+          print(f"Mandando a +{tel[:3]}…{tel[-4:]} (cuenta {correo})")
+          cuerpo = json.dumps({"telefono": tel, "parametros": [nombre, "3"]}).encode()
+          r = urllib.request.Request(f"{bot}/tareas/enviar-alerta-whatsapp", data=cuerpo, method="POST",
+              headers={"Content-Type": "application/json", "x-tarea-clave": tarea})
+          try:
+              with urllib.request.urlopen(r, timeout=60) as resp:
+                  print("OK", resp.status, resp.read().decode()[:200])
+          except urllib.error.HTTPError as e:
+              print("FALLÓ", e.code, e.read().decode()[:300])
+              sys.exit(1)
+          PY
