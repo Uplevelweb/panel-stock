@@ -97,6 +97,7 @@ V2 = "https://api2.mercadopublico.cl/v2/compra-agil"
 # (2) el correo avisa al cliente, (3) nada se da por «vacio» sin decirlo.
 FALLAS_API: list[str] = []
 ESPERA_V1 = 2.0
+TAMANO_PAGINA_AGILES = 30   # ver compras_agiles_abiertas: con 50 la API da 504
 
 # Resend en plan gratis: 100 correos al dia. Al 101 se cae el envio, asi que
 # el tope se respeta desde aca y no se descubre a mitad de la tanda.
@@ -1508,9 +1509,27 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
     cerradas = 0
     print(f"  desde {desde} ({dias} dias {'habiles' if habiles else 'corridos'})")
     salida = []
-    for pagina in range(1, techo_paginas + 1):
-        url = (f"{V2}?estado=publicada&tamano_pagina=50&numero_pagina={pagina}"
-               f"&publicado_desde={desde}")
+    # 09-10-2026: EL TAMAÑO DE PAGINA YA NO ES 50. Medido hoy contra la API:
+    # tarda ~1 segundo POR REGISTRO (10 -> 10 s, 20 -> 20 s, 30 -> 21 s) y la
+    # puerta de enlace corta a los ~29 s. Con 50 responde SIEMPRE
+    # «504 Endpoint request timed out», y eso es lo que hacia que hoy no se
+    # recogiera ninguna compra agil: no era una caida de ChileCompra, era
+    # nuestro parametro. Se parte en 30 y, si aun asi da 504, se baja a 10
+    # (30 es multiplo de 10, asi que la paginacion sigue alineada).
+    tam = TAMANO_PAGINA_AGILES
+    consumidos = 0
+    techo_items = techo_paginas * 50
+    tocado_techo = False
+
+    def url_pagina() -> str:
+        return (f"{V2}?estado=publicada&tamano_pagina={tam}"
+                f"&numero_pagina={consumidos // tam + 1}&publicado_desde={desde}")
+
+    for pagina in range(1, techo_items // 10 + 2):
+        if consumidos >= techo_items:
+            tocado_techo = True
+            break
+        url = url_pagina()
         # Esta API se cae sola de vez en cuando con un 504 «Endpoint request
         # timed out». Paso el 26-08-2026 en la pagina 6 de golpe. Sin
         # reintentar, el correo sale con la mitad de las compras agiles y
@@ -1527,6 +1546,12 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
                 fallo = False
                 break
             fallo = datos is None          # None = error de red/HTTP; [] = fin real
+            if fallo and tam > 10:
+                # Un 504 por tamaño es determinista: esperar no sirve, achicar si.
+                tam = 10
+                url = url_pagina()
+                print(f"    pagina {pagina} dio error con paginas de {TAMANO_PAGINA_AGILES}: se baja a 10 por pagina")
+                continue
             if fallo and intento < len(esperas):
                 print(f"    pagina {pagina} fallo, reintento {intento + 1} de {len(esperas)} en {esperas[intento]} s")
                 time.sleep(esperas[intento])
@@ -1583,9 +1608,10 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
                 "region": str(_campo(fila, "institucion.nombre_region", "nombre_region")),
                 "comuna": "",
             })
-        if len(filas) < 50:
+        consumidos += len(filas)
+        if len(filas) < tam:
             break
-    else:
+    if tocado_techo:
         # El `for` llego al final sin cortar: se acabaron las paginas
         # permitidas, no las compras. Habia mas y NO se pidieron.
         #
@@ -1593,11 +1619,13 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
         # exactamente 2000 —40 paginas de 50, el techo justo—, que es la
         # firma de que quedaron compras afuera y nadie se entero. Un numero
         # redondo en un dato de la calle es siempre sospechoso.
-        print(f"  TECHO: {techo_paginas} paginas y seguian llegando. "
+        print(f"  TECHO: {techo_items} compras y seguian llegando. "
               "Quedaron compras agiles sin pedir.")
     if cerradas:
         print(f"  {cerradas} descartadas por estar ya cerradas")
     print(f"  {len(salida)} compras agiles abiertas")
+    # Visible en la pagina de la corrida sin bajar el log.
+    print(f"::notice title=Compras agiles::{len(salida)} recogidas (paginas de {tam}, {consumidos} leidas, {cerradas} cerradas)")
     return salida
 
 
