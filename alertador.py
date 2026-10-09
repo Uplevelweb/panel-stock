@@ -88,6 +88,14 @@ CONFIG_LOCAL = AQUI / "alertas_config.json"
 
 V1 = "https://api.mercadopublico.cl/servicios/v1/publico/licitaciones.json"
 V2 = "https://api2.mercadopublico.cl/v2/compra-agil"
+
+# 08-10-2026: fallas de las APIs de ChileCompra durante ESTA corrida. Antes, si
+# la API de compras agiles devolvia 504 en la primera pagina, la funcion
+# devolvia una lista vacia y el correo salia -o no salia- como si ese dia no
+# hubiera habido compras agiles: una falla indistinguible de «no hay nada». Ahora
+# se anota aqui y (1) queda como alerta visible en el registro de GitHub,
+# (2) el correo avisa al cliente, (3) nada se da por «vacio» sin decirlo.
+FALLAS_API: list[str] = []
 ESPERA_V1 = 2.0
 
 # Resend en plan gratis: 100 correos al dia. Al 101 se cae el envio, asi que
@@ -1507,14 +1515,28 @@ def compras_agiles_abiertas(ticket: str, dias: int = 1, techo_paginas: int = 40,
         # timed out». Paso el 26-08-2026 en la pagina 6 de golpe. Sin
         # reintentar, el correo sale con la mitad de las compras agiles y
         # nadie se entera: no hay error, simplemente vienen menos.
+        # La API de compras agiles esta en Beta (desde 22-05-2026) y los 504
+        # duran minutos: se reintenta con esperas crecientes (10, 20, 40, 60 s).
         filas = []
-        for intento in range(3):
-            filas = _primera_lista(_pedir(url, {"ticket": ticket}))
+        fallo = False
+        esperas = [10, 20, 40, 60]
+        for intento in range(len(esperas) + 1):
+            datos = _pedir(url, {"ticket": ticket})
+            filas = _primera_lista(datos)
             if filas:
+                fallo = False
                 break
-            if intento < 2:
-                print(f"    pagina {pagina} vino vacia, reintento {intento + 1} de 2")
-                time.sleep(5)
+            fallo = datos is None          # None = error de red/HTTP; [] = fin real
+            if fallo and intento < len(esperas):
+                print(f"    pagina {pagina} fallo, reintento {intento + 1} de {len(esperas)} en {esperas[intento]} s")
+                time.sleep(esperas[intento])
+            elif not fallo:
+                break                      # respuesta valida y vacia: no hay mas paginas
+        if fallo:
+            FALLAS_API.append(f"compras agiles (pagina {pagina})")
+            print(f"::warning title=Compras agiles::ChileCompra no respondio en la pagina {pagina}; "
+                  f"se sigue con {len(salida)} recogidas. El correo avisara al cliente.")
+            break
         if not filas:
             break
         for fila in filas:
@@ -2115,6 +2137,14 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
             saludo = (f"<strong>{presentacion}</strong> Tu prueba gratis terminó. "
                       f"Hoy encontré <strong>{recortada_de}</strong> oportunidades "
                       f"para lo que vendes y te dejo <strong>solo 1 como muestra</strong>.")
+
+    # Si una API de ChileCompra fallo hoy, el cliente tiene que saberlo: sin
+    # esto un dia con falla se lee como «hoy no hubo compras agiles».
+    if FALLAS_API:
+        saludo += ('<br><span style="color:#8a4b12;font-size:13px;">⚠️ Hoy el sistema de ChileCompra '
+                   'no entregó todas las Compras Ágiles (su plataforma respondió con error). '
+                   'Lo que ves es lo que alcanzó a llegar; lo reintentamos en el próximo envío. '
+                   'Si es urgente, revisa mercadopublico.cl directamente.</span>')
 
     # El bloque del panel va SOLO en la bienvenida. Sin esto el cliente recibe
     # sus alertas y nunca se entera de que ademas tiene un panel: la mitad del
@@ -2831,6 +2861,8 @@ def main():
 
     if not universo:
         print("No hay nada publicado. No se envia: el silencio construye confianza.")
+        if FALLAS_API:
+            print("[aviso] OJO: hubo fallas de ChileCompra hoy (" + "; ".join(FALLAS_API) + "): ese «nada» puede no ser real.")
         return
     print()
 
@@ -2981,6 +3013,18 @@ def main():
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
     print(f"\nListo. Correos enviados: {enviados_hoy}")
+    if FALLAS_API:
+        # Resumen visible en la pagina de la corrida en GitHub (no solo en el log).
+        resumen_gh = os.environ.get("GITHUB_STEP_SUMMARY")
+        if resumen_gh:
+            try:
+                with open(resumen_gh, "a", encoding="utf-8") as f:
+                    f.write("### ⚠️ Fallas de ChileCompra en esta corrida\n\n"
+                            + "\n".join(f"- {x}" for x in FALLAS_API)
+                            + "\n\nEl correo avisó al cliente. Si se repite varios días, escribir a ChileCompra.\n")
+            except OSError:
+                pass
+        print("[aviso] Fallas de ChileCompra hoy: " + "; ".join(FALLAS_API))
     print("[tiempo] TOTAL: %.0f s" % (time.perf_counter() - reloj_total))
 
 
