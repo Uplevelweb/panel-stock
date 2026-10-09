@@ -1,0 +1,14 @@
+-- Memoria de las fallas de ChileCompra: quien quedo sin alertas por una falla
+-- y debe reintentarse en el siguiente bloque de envio (8:00 -> 15:00).
+-- ADITIVA: no toca ninguna tabla existente. Solo la usa alertador.py con la
+-- llave secreta; el panel publico no la ve (RLS activo y sin politicas).
+create table if not exists public.fallas_chilecompra (
+  fecha         date        not null,
+  suscriptor_id uuid        not null references public.suscriptores(id) on delete cascade,
+  turno         int         not null,
+  avisado_en    timestamptz,
+  resuelto      boolean     not null default false,
+  creado_en     timestamptz not null default now(),
+  primary key (fecha, suscriptor_id)
+);
+alter table public.fallas_chilecompra enable row level security;
