@@ -72,6 +72,7 @@ jobs:
         run: python diagnostico_extraccion.py 3265-56-LE26
 
       - name: Armar y enviar el correo
+        if: false
         env:
           TICKET_MP: ${{ secrets.TICKET_MP }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}

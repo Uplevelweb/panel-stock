@@ -54,3 +54,22 @@ nota("3 publicadas hoy", f"fecha {hoyddmm} · HTTP {c} · {len(filas3)} filas ·
 # 4. compras agiles pagina 1
 c, t = pedir(f"{V2}?estado=publicada&tamano_pagina=10&numero_pagina=1&publicado_desde={date.today().isoformat()}", {"ticket": T})
 nota("4 compras agiles", f"HTTP {c} · {t[:200].replace(chr(10),' ')}")
+
+# 5. tamaños de pagina de compras agiles, con tiempos (hipotesis: 50 hace timeout)
+import time
+for tam in (10, 20, 30, 50):
+    for desde in (date.today().isoformat(),):
+        t0 = time.time()
+        c, t = pedir(f"{V2}?estado=publicada&tamano_pagina={tam}&numero_pagina=1&publicado_desde={desde}", {"ticket": T})
+        try:
+            items = len(json.loads(t)["payload"]["items"])
+        except Exception:
+            items = "?"
+        nota(f"5 tam={tam}", f"HTTP {c} · {time.time()-t0:.1f}s · {items} items · {'' if c==200 else t[:120]}")
+# 6. tamaño 50 con la fecha de ayer (lo que usa el alertador: hoy - 1 dia)
+from datetime import timedelta
+ayer = (date.today() - timedelta(days=1)).isoformat()
+for tam in (50, 20):
+    t0 = time.time()
+    c, t = pedir(f"{V2}?estado=publicada&tamano_pagina={tam}&numero_pagina=1&publicado_desde={ayer}", {"ticket": T})
+    nota(f"6 ayer tam={tam}", f"HTTP {c} · {time.time()-t0:.1f}s · {'' if c==200 else t[:120]}")
