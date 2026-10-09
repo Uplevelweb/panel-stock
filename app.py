@@ -5641,7 +5641,8 @@ def main() -> None:
             candado("mercado_publico")
         return
 
-    guia_de_entrada()
+    # 08-10-2026, pedido de Serling: se quito el desplegable «¿Primera vez? Pulsa
+    # aqui...» (guia_de_entrada). Ocupaba espacio y quien ya conoce el panel no lo usa.
 
     # «Oportunidades» va PRIMERA a proposito. Es la unica que responde con solo
     # escribir un RUT: quien entra ve algo suyo en segundos, sin buscar ni
