@@ -66,7 +66,13 @@ jobs:
       - name: Instalar lo necesario
         run: pip install pandas pyarrow openpyxl
 
+      - name: DIAG
+        env:
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+        run: python diagnostico_extraccion.py
+
       - name: Armar y enviar el correo
+        if: false
         env:
           TICKET_MP: ${{ secrets.TICKET_MP }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
