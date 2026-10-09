@@ -66,6 +66,11 @@ jobs:
       - name: Instalar lo necesario
         run: pip install pandas pyarrow openpyxl
 
+      - name: DIAGNOSTICO temporal de extraccion (solo lectura)
+        env:
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+        run: python diagnostico_extraccion.py 3265-56-LE26
+
       - name: Armar y enviar el correo
         env:
           TICKET_MP: ${{ secrets.TICKET_MP }}
