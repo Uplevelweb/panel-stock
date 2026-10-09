@@ -1,0 +1,19 @@
+-- 1) TABLA (una fila por suscriptor y dia con falla de ChileCompra)
+create table if not exists public.fallas_dia (
+  dia date not null,
+  suscriptor_id uuid not null references public.suscriptores(id) on delete cascade,
+  motivo text,
+  creado_en timestamptz not null default now(),
+  aviso_en timestamptz,
+  aviso_final_en timestamptz,
+  con_correo boolean not null default false,
+  resuelto_en timestamptz,
+  primary key (dia, suscriptor_id)
+);
+alter table public.fallas_dia enable row level security;  -- sin politicas: solo service_role
+
+-- 2) RELOJ: reintentos a las 12:00 y 18:00 de Chile (misma base UTC que los turnos 8 y 15)
+select cron.schedule('reintento-12', '0 15 * * 1-6',
+  $$select public.disparar_workflow('alertas.yml', '{"ensayo":"false","hora":"reintento"}'::jsonb)$$);
+select cron.schedule('reintento-18-final', '0 21 * * 1-6',
+  $$select public.disparar_workflow('alertas.yml', '{"ensayo":"false","hora":"final"}'::jsonb)$$);

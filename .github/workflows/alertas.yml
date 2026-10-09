@@ -43,10 +43,10 @@ on:
         type: boolean
         default: true
       hora:
-        description: "Turno al que mandar. Vacio = a todos"
+        description: "Turno al que mandar. Vacio = a todos. reintento/final = solo a quienes hoy quedaron sin correo por falla de ChileCompra"
         required: false
         type: choice
-        options: ["", "8", "15"]
+        options: ["", "8", "15", "reintento", "final"]
         default: ""
 
 jobs:
@@ -85,9 +85,12 @@ jobs:
             *)              TURNO=""          ;;   # disparado a mano
           esac
           # Si se dispara a mano y se eligio turno, ese manda.
-          if [ -n "${{ github.event.inputs.hora }}" ]; then
-            TURNO="--hora ${{ github.event.inputs.hora }}"
-          fi
+          case "${{ github.event.inputs.hora }}" in
+            "")        ;;
+            reintento) TURNO="--reintento" ;;
+            final)     TURNO="--reintento --final" ;;
+            *)         TURNO="--hora ${{ github.event.inputs.hora }}" ;;
+          esac
           echo "Turno: ${TURNO:-todos}"
 
           # UNA CORRIDA PROGRAMADA SIEMPRE ENVIA: es lo unico para lo que

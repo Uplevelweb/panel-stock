@@ -1370,6 +1370,9 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
     """
     print("Pidiendo licitaciones activas...")
     datos = _pedir(f"{V1}?estado=activas&ticket={urllib.parse.quote(ticket)}")
+    if datos is None:
+        # None = error de red/HTTP (no es «cero licitaciones»): hay que decirlo.
+        FALLAS_API.append("licitaciones (listado de activas)")
     filas = [f for f in _primera_lista(datos) if isinstance(f, dict)]
     print(f"  {len(filas)} licitaciones abiertas")
 
@@ -2721,6 +2724,248 @@ def enlace(op: dict) -> str:
     return f"http://www.mercadopublico.cl/fichaLicitacion.html?idLicitacion={op['codigo']}"
 
 
+# --- Cuando ChileCompra falla: avisar al cliente y reintentar (09-10-2026) ---
+# Pedido de Serling: si el sistema de ChileCompra -la fuente oficial de los
+# datos- falla y no se puede generar ninguna alerta, el cliente tiene que
+# enterarse POR CORREO, saber que se reintenta en el proximo bloque de envio
+# (aunque haya elegido otra hora) y no tener que ir a revisar a mano, que es
+# justo lo que el sistema promete evitar. Hasta hoy, con cero resultados no
+# salia nada: ni alerta ni explicacion.
+#
+# COMO FUNCIONA
+#   - Tabla `fallas_dia` (una fila por suscriptor y dia): quien quedo sin su
+#     correo por una falla de ChileCompra y si ya se le aviso.
+#   - Una corrida que se topa con la falla anota a sus suscriptores y les manda
+#     el aviso UNA sola vez al dia (la fila lo impide repetir).
+#   - Los bloques de reintento (--reintento) y el turno de las 15 incluyen a
+#     los anotados, sin importar la hora que eligieron. Si esa corrida si
+#     pudo hablar con ChileCompra, la fila se cierra (resuelto_en).
+#   - El ultimo bloque del dia (--reintento --final) manda un segundo aviso si
+#     sigue sin resolverse: "hoy no se pudo, manana retomamos".
+#   - Falla abierto: si la tabla no existe o Supabase no responde, el correo
+#     normal sale igual; solo se pierde el aviso.
+BLOQUES_DE_ENVIO = (8, 12, 15, 18)   # hora de Chile: 2 turnos + 2 reintentos
+
+
+def hoy_chile() -> str:
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Santiago")).date().isoformat()
+    except Exception:
+        return date.today().isoformat()
+
+
+def _sb():
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    return (url, clave) if url and clave else (None, None)
+
+
+def _sb_pedir(metodo: str, ruta: str, cuerpo=None, extra: dict | None = None):
+    """Una llamada a la REST de Supabase. Devuelve el JSON, o None si falla."""
+    url, clave = _sb()
+    if not url:
+        return None
+    cabeceras = {"apikey": clave, "Authorization": f"Bearer {clave}",
+                 "Accept": "application/json", "Content-Type": "application/json",
+                 **(extra or {})}
+    datos = json.dumps(cuerpo).encode("utf-8") if cuerpo is not None else None
+    peticion = urllib.request.Request(f"{url}/rest/v1/{ruta}", data=datos,
+                                      method=metodo, headers=cabeceras)
+    try:
+        with urllib.request.urlopen(peticion, timeout=60) as respuesta:
+            texto = respuesta.read().decode("utf-8")
+            return json.loads(texto) if texto else []
+    except Exception as error:
+        print(f"   [fallas] {metodo} {ruta.split('?')[0]}: {type(error).__name__}")
+        return None
+
+
+def fallas_de_hoy() -> dict[str, dict]:
+    """Los suscriptores anotados hoy por una falla: id -> fila."""
+    filas = _sb_pedir("GET", f"fallas_dia?select=*&dia=eq.{hoy_chile()}") or []
+    return {f["suscriptor_id"]: f for f in filas}
+
+
+def anotar_falla(suscriptor: dict, motivo: str) -> dict | None:
+    """Deja anotado que a este suscriptor hoy le falto su correo.
+
+    Devuelve la fila de hoy (nueva o ya existente), o None si no se pudo.
+    Si ya existia, no la toca: asi el primer aviso sale una sola vez.
+    """
+    sid = suscriptor.get("id")
+    if not sid:
+        return None
+    nueva = _sb_pedir("POST", "fallas_dia?on_conflict=dia,suscriptor_id",
+                      [{"dia": hoy_chile(), "suscriptor_id": sid, "motivo": motivo[:300]}],
+                      {"Prefer": "resolution=ignore-duplicates,return=representation"})
+    if nueva:
+        return {**nueva[0], "_nueva": True}
+    filas = _sb_pedir("GET", f"fallas_dia?select=*&dia=eq.{hoy_chile()}&suscriptor_id=eq.{sid}")
+    return filas[0] if filas else None
+
+
+def cerrar_falla(suscriptor_id: str) -> None:
+    _sb_pedir("PATCH",
+              f"fallas_dia?dia=eq.{hoy_chile()}&suscriptor_id=eq.{suscriptor_id}&resuelto_en=is.null",
+              {"resuelto_en": datetime.now(timezone.utc).isoformat()})
+
+
+def _marcar_aviso(suscriptor_id: str, final: bool, con_correo: bool = False) -> None:
+    campo = "aviso_final_en" if final else "aviso_en"
+    cambios = {campo: datetime.now(timezone.utc).isoformat()}
+    if con_correo:
+        cambios["con_correo"] = True   # recibio un correo con lo que alcanzo a llegar
+    _sb_pedir("PATCH", f"fallas_dia?dia=eq.{hoy_chile()}&suscriptor_id=eq.{suscriptor_id}", cambios)
+
+
+def proximo_bloque() -> str:
+    """Cuando es el proximo envio, para decirselo al cliente."""
+    try:
+        from zoneinfo import ZoneInfo
+        ahora = datetime.now(ZoneInfo("America/Santiago"))
+    except Exception:
+        ahora = datetime.now()
+    # +15 min de holgura: una corrida de las 12:00 que termina 12:20 ya no
+    # puede prometer «las 12:00».
+    for h in BLOQUES_DE_ENVIO:
+        if ahora.hour * 60 + ahora.minute + 15 <= h * 60:
+            return f"hoy a las {h}:00"
+    return "mañana a la hora de siempre"
+
+
+def armar_aviso_falla(suscriptor: dict, final: bool = False) -> tuple[str, str]:
+    """(asunto, html) del aviso de falla de ChileCompra. Mismo marco que la alerta."""
+    hoy = datetime.now().strftime("%d-%m-%Y")
+    nombre = (suscriptor.get("nombre") or "").strip()
+    hola = f"Hola {nombre}, soy Terri." if nombre else "Hola, soy Terri."
+    token = suscriptor.get("token_baja") or ""
+    rut = suscriptor.get("rut_empresa") or "77.082.051-0"
+    desde = suscriptor.get("fecha_consentimiento") or ""
+
+    if final:
+        asunto = "Hoy no pudimos revisar el Mercado Público · Terri"
+        titulo = "Hoy no pudimos revisar por ti"
+        resumen = f"Sin alertas hoy por falla de ChileCompra · {hoy}"
+        saludo = (f"<strong>{hola}</strong> Reintentamos varias veces y el sistema de "
+                  f"ChileCompra siguió sin responder.")
+        que_hacemos = ("<strong>Mañana retomamos solos.</strong> Revisaremos también lo que se "
+                       "publicó hoy y sigue abierto, así que no pierdes esas oportunidades. "
+                       "No tienes que hacer nada.")
+    else:
+        asunto = "Hoy ChileCompra no entregó datos: tu alerta llegará después · Terri"
+        titulo = "Hoy no hay alertas, y no es porque no haya"
+        resumen = f"Falla en ChileCompra · {hoy}"
+        saludo = (f"<strong>{hola}</strong> Te escribo para que no tengas que ir a "
+                  f"revisar a mano: hoy el sistema de ChileCompra falló.")
+        que_hacemos = (f"<strong>Reintentamos solos {proximo_bloque()}</strong>, aunque tu envío "
+                       f"habitual sea a otra hora. Si ChileCompra ya responde, recibes tu correo "
+                       f"con lo que haya. Si no, te lo avisamos. No tienes que hacer nada.")
+
+    def fila(titulo_fila: str, texto: str) -> str:
+        return f"""
+        <tr><td style="padding:0 0 14px;">
+          <div style="color:{TEXTO};font-size:15px;font-weight:700;margin-bottom:4px;">{titulo_fila}</div>
+          <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.6;">{texto}</div>
+        </td></tr>"""
+
+    cuerpo = (
+        fila("Qué pasó",
+             "La plataforma de <strong>ChileCompra</strong>, la fuente oficial de los datos del "
+             "Mercado Público, respondió con errores cuando fuimos a buscar las oportunidades. "
+             "No es un problema de tu cuenta ni de tu configuración.")
+        + fila("Qué significa",
+               "Hoy <strong>no se generó ninguna alerta</strong>. Eso no quiere decir que no haya "
+               "habido compras: solo que no pudimos verlas.")
+        + fila("Qué hacemos", que_hacemos)
+        + fila("Si es urgente",
+               'Puedes mirar directamente <a href="https://www.mercadopublico.cl" '
+               f'style="color:{MARINO};font-weight:600;">mercadopublico.cl</a>.')
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body,table,td{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
+  body,table,td,div,p,span,a,strong,b,small,h1,h2,h3,h4{{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif}}
+</style>
+</head>
+<body style="margin:0;padding:0;background:{FONDO};font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 4px 14px 0;">
+<tr><td align="center">
+<table width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
+  <tr>
+    <td style="background:{MARINO};padding:14px 12px 16px;">
+      <div style="color:{NARANJO};font-size:12px;font-weight:700;letter-spacing:.02em;">
+        Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
+      <div style="color:#ffffff;font-size:20px;font-weight:700;margin:3px 0 2px;">{titulo}</div>
+      <div style="color:#cbd5e1;font-size:12.5px;line-height:1.5;">{resumen}</div>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
+        <tr>
+          <td width="56" style="padding:8px 0 8px 10px;line-height:0;">
+            <img src="{TERRI_URL}" alt="Terri" width="44" height="44"
+                 style="display:block;border:0;background:#eaf2fb;border-radius:22px;"></td>
+          <td style="padding:8px 12px;color:#e6edf6;font-size:12.5px;line-height:1.45;">
+            {saludo}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:20px 14px 6px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">{cuerpo}
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:14px 12px 24px;border-top:1px solid {BORDE};">
+      <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
+        <strong>No respondas este correo</strong>, nadie lo lee. ¿Necesitas soporte?
+        <a href="https://wa.me/56967329214?text=Necesito%20soporte" style="color:{MARINO};font-weight:600;">Escríbenos por WhatsApp</a>.<br><br>
+        Uplevel · {rut} · Santiago, Chile<br>
+        Recibes este correo porque te suscribiste{' el ' + desde if desde else ''}.<br>
+        <a href="https://uplevelweb.art/baja?t={token}" style="color:{MARINO};">Cancelar suscripción</a> ·
+        <a href="https://uplevelweb.art/privacidad" style="color:{MARINO};">Política de privacidad</a>
+      </div>
+    </td>
+  </tr>
+</table>
+</td></tr></table>
+</body></html>"""
+    return asunto, html
+
+
+def avisar_falla(suscriptores: list[dict], final: bool, guardar: str | None, enviar_de_verdad: bool) -> None:
+    """Anota y avisa a cada suscriptor. Un aviso por dia; el final, aparte."""
+    motivo = "; ".join(FALLAS_API) or "sin detalle"
+    for s in suscriptores:
+        fila = anotar_falla(s, motivo) if enviar_de_verdad else {"_nueva": True}
+        if fila is None:
+            print(f"   {s.get('email')}: no se pudo anotar la falla; se avisa igual")
+            fila = {"_nueva": True}
+        ya = fila.get("aviso_final_en") if final else fila.get("aviso_en")
+        if final and fila.get("con_correo"):
+            print(f"   {s.get('email')}: hoy si recibio un correo (parcial). Sin aviso final")
+            continue
+        if ya:
+            print(f"   {s.get('email')}: ya se le {'dio el aviso final' if final else 'aviso'} hoy")
+            continue
+        asunto, html = armar_aviso_falla(s, final=final)
+        if guardar:
+            Path(guardar).write_text(html, encoding="utf-8")
+            print(f"   aviso de falla escrito en {guardar}")
+            return
+        if not enviar_de_verdad:
+            print(f"   (ni --guardar ni --enviar) aviso para {s.get('email')}")
+            continue
+        print(f"   aviso de falla {'FINAL ' if final else ''}a: {', '.join(destinatarios(s))}")
+        if enviar(destinatarios(s), asunto, html) and s.get("id"):
+            _marcar_aviso(s["id"], final)
+
+
 def main():
     parser = argparse.ArgumentParser(description="El correo diario de oportunidades")
     parser.add_argument("--prueba", action="store_true",
@@ -2733,6 +2978,13 @@ def main():
     parser.add_argument("--hora", type=int, metavar="N",
                         help="solo a quienes pidieron recibirlo a esa hora de Chile "
                              "(8, 13 o 18). Sin esto, va a todos")
+    parser.add_argument("--reintento", action="store_true",
+                        help="solo a quienes hoy quedaron sin su correo por una falla de "
+                             "ChileCompra, sin importar la hora que eligieron")
+    parser.add_argument("--final", action="store_true",
+                        help="ultimo reintento del dia: si sigue la falla, segundo aviso")
+    parser.add_argument("--simular-falla", action="store_true",
+                        help="PRUEBA: finge que ChileCompra fallo y no entrego nada")
     args = parser.parse_args()
 
     # Marcas de tiempo: sin esto se optimiza a ciegas, sin saber si lo caro
@@ -2752,10 +3004,26 @@ def main():
     # Cada suscriptor elige su turno (8, 13 o 18 de Chile) y el workflow corre
     # en los tres. Sin --hora van todos, que es lo que se quiere al dispararlo
     # a mano para probar.
-    if args.hora is not None:
+    # Los que hoy quedaron sin correo por una falla de ChileCompra entran a
+    # cualquier corrida real de hoy, sea cual sea la hora que eligieron.
+    enviando_de_verdad = args.enviar and not args.bienvenidas and not args.prueba
+    pendientes = fallas_de_hoy() if (enviando_de_verdad and not args.simular_falla) else {}
+    pendientes = {k: v for k, v in pendientes.items() if not v.get("resuelto_en")}
+    if pendientes:
+        print(f"Con falla de ChileCompra pendiente hoy: {len(pendientes)}")
+
+    if args.reintento:
+        antes = len(suscriptores)
+        suscriptores = [s for s in suscriptores if s.get("id") in pendientes]
+        print(f"Reintento{' FINAL' if args.final else ''} · {len(suscriptores)} de {antes} esperan su correo")
+        if not suscriptores:
+            print("Nadie quedo pendiente por falla de ChileCompra. Nada que hacer.")
+            return
+    elif args.hora is not None:
         antes = len(suscriptores)
         suscriptores = [s for s in suscriptores
-                        if int(s.get("hora_envio") or 8) == args.hora]
+                        if int(s.get("hora_envio") or 8) == args.hora
+                        or s.get("id") in pendientes]
         print(f"Turno de las {args.hora}:00 · {len(suscriptores)} de {antes}")
         if not suscriptores:
             print("Nadie pidio recibirlo a esta hora. Nada que hacer.")
@@ -2859,10 +3127,22 @@ def main():
 
         universo = lic + agi
 
+    if args.simular_falla:
+        FALLAS_API.append("simulada (prueba)")
+        universo = []
     if not universo:
         print("No hay nada publicado. No se envia: el silencio construye confianza.")
         if FALLAS_API:
             print("[aviso] OJO: hubo fallas de ChileCompra hoy (" + "; ".join(FALLAS_API) + "): ese «nada» puede no ser real.")
+            # Ese «nada» no es real: el cliente tiene que saberlo.
+            if not args.bienvenidas and (args.enviar or args.guardar):
+                avisar_falla(suscriptores, args.final, args.guardar,
+                             args.enviar and not args.simular_falla)
+        elif enviando_de_verdad:
+            # ChileCompra respondio y de verdad no hay nada: se cierran los pendientes.
+            for s in suscriptores:
+                if s.get("id") in pendientes:
+                    cerrar_falla(s["id"])
         return
     print()
 
@@ -2943,6 +3223,9 @@ def main():
 
         if not elegidas:
             print("   nada que coincida hoy. No se envia.")
+            # Con una falla a medias ese «nada» puede no ser real.
+            if FALLAS_API and not args.bienvenidas and (args.enviar or args.guardar):
+                avisar_falla([suscriptor], args.final, args.guardar, args.enviar)
             continue
         print(f"   {len(elegidas)} oportunidades · mejor nota {elegidas[0]['nota']} ({elegidas[0]['clase']})")
 
@@ -3001,6 +3284,11 @@ def main():
                 # Se anota DESPUES de que salio, nunca antes: si el envio
                 # falla, esas oportunidades tienen que poder salir manana.
                 anotar_avisado(suscriptor, elegidas, bolsa)
+                # Correo con falla a medias (lleva el aviso adentro): queda
+                # anotado para que el proximo bloque complete lo que falto.
+                if FALLAS_API and enviando_de_verdad:
+                    if anotar_falla(suscriptor, "; ".join(FALLAS_API)):
+                        _marcar_aviso(suscriptor["id"], False, con_correo=True)
                 # La marca va DESPUES del envio, igual que lo anotado: si
                 # el correo no sale, esta persona sigue esperando el suyo.
                 if args.bienvenidas:
@@ -3011,6 +3299,19 @@ def main():
                     enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")))
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
+
+    if enviando_de_verdad:
+        if not FALLAS_API:
+            # ChileCompra respondio completo: nadie queda debiendo su correo.
+            for s in suscriptores:
+                if s.get("id") in pendientes:
+                    cerrar_falla(s["id"])
+        elif args.final:
+            # Ultimo bloque del dia y sigue la falla: segundo aviso a los
+            # que quedaron sin correo (ya se les dio uno; este es el cierre).
+            sin_correo = [s for s in suscriptores if s.get("id") in pendientes]
+            if sin_correo:
+                avisar_falla(sin_correo, True, None, True)
 
     print(f"\nListo. Correos enviados: {enviados_hoy}")
     if FALLAS_API:
