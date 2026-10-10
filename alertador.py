@@ -817,6 +817,67 @@ def quitar_palabras_de_todos(bolsa: set[str], universo: list[dict], techo: float
     return {t for t in bolsa if veces.get(t, 0) <= limite}
 
 
+# ----------------------------------------------------------------------
+#  SINONIMOS POR CATEGORIA (09-10-2026)
+# ----------------------------------------------------------------------
+# El cliente solo elige CATEGORIAS; el vocabulario real de ChileCompra lo
+# ponemos nosotros. Cada categoria de `catalogo_rubros` tiene `palabras` (lo
+# que ve y copia el panel) y `sinonimos` (solo nuestro, nadie lo ve).
+#
+# POR QUE EN TIEMPO DE EJECUCION: el panel copia las palabras de la categoria
+# al suscriptor como una FOTO, y nadie guarda la categoria en si
+# (`suscriptor_rubros` esta vacia). Si los sinonimos se copiaran igual, solo
+# los de cuentas nuevas los tendrian. Asi, mejorar una lista le llega a todos
+# el mismo dia.
+#
+# Una categoria cuenta como marcada cuando comparte alguna palabra con las
+# del suscriptor: la misma regla con la que el panel las tilda en pantalla.
+# Falla abierto: si Supabase o la columna no estan, todo sigue como antes.
+_CATALOGO_RUBROS: list[dict] | None = None
+
+
+def catalogo_de_rubros() -> list[dict]:
+    global _CATALOGO_RUBROS
+    if _CATALOGO_RUBROS is not None:
+        return _CATALOGO_RUBROS
+    _CATALOGO_RUBROS = []
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave):
+        return _CATALOGO_RUBROS
+    try:
+        peticion = urllib.request.Request(
+            f"{url}/rest/v1/catalogo_rubros?select=rubro_id,rubro,palabras,sinonimos",
+            headers={"apikey": clave, "Authorization": f"Bearer {clave}", "Accept": "application/json"})
+        with urllib.request.urlopen(peticion, timeout=30) as r:
+            _CATALOGO_RUBROS = json.loads(r.read().decode("utf-8"))
+    except Exception as error:
+        print(f"   [sinonimos] no se pudo leer catalogo_rubros: {type(error).__name__}")
+    return _CATALOGO_RUBROS
+
+
+def sinonimos_de(suscriptor: dict) -> tuple[set[str], int]:
+    """Terminos extra de las categorias que tiene marcadas, y cuantas son."""
+    propias = set()
+    for clave in suscriptor.get("palabras_clave") or []:
+        propias |= palabras(clave)
+    for rubro in suscriptor.get("rubros") or []:
+        propias |= palabras(rubro)
+    if not propias:
+        return set(), 0
+    extra: set[str] = set()
+    categorias = 0
+    for fila in catalogo_de_rubros():
+        base = set()
+        for w in (fila.get("palabras") or []) + [fila.get("rubro") or ""]:
+            base |= palabras(w)
+        if base & propias:
+            categorias += 1
+            for s in fila.get("sinonimos") or []:
+                extra |= palabras(s)
+    return extra, categorias
+
+
 def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame,
                        catalogo: dict[str, list[dict]] | None = None) -> tuple[set[str], list[str], str]:
     """
@@ -858,6 +919,12 @@ def bolsa_de_terminos(suscriptor: dict, oc: pd.DataFrame,
         bolsa |= palabras(clave)
     if suscriptor.get("palabras_clave"):
         origen.append(f"{len(suscriptor['palabras_clave'])} palabras")
+
+    # Sinonimos de sus categorias (ver arriba). Solo agrega, nunca quita.
+    extra, n_categorias = sinonimos_de(suscriptor)
+    if extra:
+        bolsa |= extra
+        origen.append(f"{len(extra)} sinonimos de {n_categorias} categorias")
 
     return bolsa, convenios, " + ".join(origen) if origen else "sin filtro"
 
