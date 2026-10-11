@@ -3027,15 +3027,27 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
 
     def _resumen(o: dict) -> dict:
         codigo = o.get("codigo") or ""
+        es_lic = o.get("tipo") == "licitacion"
+        visita = ""
+        if o.get("visita"):
+            visita = str(o["visita"])[:16].replace("T", " ")
+        elif o.get("mencion_visita"):
+            visita = "revisa las bases"
+        monto = plata(o.get("monto")) if o.get("monto") else ""
         return {
-            "titulo": (o.get("nombre") or codigo)[:90],
-            "tipo": "Licitación" if o.get("tipo") == "licitacion" else "Compra ágil",
-            "comprador": (o.get("nombre_unidad") or o.get("organismo") or "")[:60],
+            "titulo": (o.get("nombre") or codigo)[:120],
+            "tipo": "Licitación" if es_lic else "Compra ágil",
+            "codigo": codigo,
+            "comprador": (o.get("nombre_unidad") or o.get("organismo") or "")[:70],
+            "region": (o.get("region") or "")[:50],
             "cierre": o.get("cierre") or "",
+            "monto": monto,
+            "visita": visita,
             "enlace": (f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion={codigo}"
-                       if o.get("tipo") == "licitacion" and codigo else ""),
+                       if es_lic and codigo else ""),
         }
-    mejores = [_resumen(o) for o in elegidas[:3]]
+    # De 5 a 10 en el WhatsApp (pedido de Serling): lo demas, con su detalle, en el panel y el correo.
+    mejores = [_resumen(o) for o in elegidas[:10]]
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros, "mejores": mejores}).encode("utf-8")
     peticion = urllib.request.Request(
