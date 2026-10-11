@@ -2989,7 +2989,8 @@ def whatsapp_elegible(suscriptor: dict) -> bool:
     return False
 
 
-def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int | None) -> None:
+def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int | None,
+                           puertas: list[dict] | None = None) -> None:
     """Le pide al bot que mande la plantilla de WhatsApp con el resumen de
     hoy. No hace caer el correo si esto falla: es un canal aparte."""
     bot_url = os.environ.get("WHATSAPP_BOT_URL", "https://territorio-whatsapp-bot.onrender.com").strip()
@@ -3006,9 +3007,37 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
     # DOS variables: {{1}} nombre y {{2}} cantidad. Mandar una tercera hace que
     # Meta rechace el mensaje completo.
     nombre = (suscriptor.get("nombre") or "").split(" ")[0] or "Hola"
-    parametros = [nombre, str(len(elegidas))]
 
-    cuerpo = json.dumps({"telefono": telefono, "parametros": parametros}).encode("utf-8")
+    # 11-10-2026, resumen diario aprobado por Serling: un mensaje corto con los totales (como el correo) y el
+    # detalle bajo demanda. {{1}} nombre, {{2}} total licitaciones + compras agiles, {{3}} desglose y
+    # {{4}} la linea de Convenio Marco, que va aparte (son «puertas», no procesos abiertos). El bot usa
+    # estos 4 si la plantilla nueva esta configurada; si no, solo los 2 primeros, como antes.
+    licit = [o for o in elegidas if o.get("tipo") == "licitacion"]
+    agiles = [o for o in elegidas if o.get("tipo") == "compra_agil"]
+    partes = []
+    if licit:
+        partes.append(f"{len(licit)} licitaci{'ón' if len(licit) == 1 else 'ones'}")
+    if agiles:
+        partes.append(f"{len(agiles)} compra{'s' if len(agiles) != 1 else ''} ágil{'es' if len(agiles) != 1 else ''}")
+    desglose = " · ".join(partes) or "ninguna nueva"
+    n_cm = len(puertas or [])
+    linea_cm = (f"Convenio Marco: {n_cm} puerta{'s' if n_cm != 1 else ''} para golpear" if n_cm
+                else "Convenio Marco: sin novedades hoy")
+    parametros = [nombre, str(len(elegidas)), desglose, linea_cm]
+
+    def _resumen(o: dict) -> dict:
+        codigo = o.get("codigo") or ""
+        return {
+            "titulo": (o.get("nombre") or codigo)[:90],
+            "tipo": "Licitación" if o.get("tipo") == "licitacion" else "Compra ágil",
+            "comprador": (o.get("nombre_unidad") or o.get("organismo") or "")[:60],
+            "cierre": o.get("cierre") or "",
+            "enlace": (f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion={codigo}"
+                       if o.get("tipo") == "licitacion" and codigo else ""),
+        }
+    mejores = [_resumen(o) for o in elegidas[:3]]
+
+    cuerpo = json.dumps({"telefono": telefono, "parametros": parametros, "mejores": mejores}).encode("utf-8")
     peticion = urllib.request.Request(
         f"{bot_url}/tareas/enviar-alerta-whatsapp",
         data=cuerpo, method="POST",
@@ -3368,7 +3397,7 @@ def main():
                 # WhatsApp es un canal aparte del correo: si falla, no le
                 # quita nada a lo de arriba, que ya salio.
                 if whatsapp_elegible(suscriptor):
-                    enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")))
+                    enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")), puertas)
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
