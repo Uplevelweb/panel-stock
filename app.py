@@ -5700,6 +5700,13 @@ def main() -> None:
     orden = []
     orden.append(("agenda", "🗓️ Agenda"))
     orden.append(("oportunidades", "🎯 Oportunidades"))
+    # 12-10-2026 (Mercado total): la consulta por institucion —con cotizacion y
+    # correo— vive aqui, al lado de Agenda y Oportunidades. En Comportamiento
+    # queda la vista de producto/marca.
+    # Se esconde (no se dibuja cerrada) para quien no la tiene: lee el Drive de
+    # Emergenza y no esta a la venta.
+    if puede(yo, "mercado_publico"):
+        orden.append(("mercado", "🏛️ Mercado Público"))
     # La puerta a los dos paneles de envio de Apps Script. Va al lado de
     # Convenios Marco porque es de la misma clase: usa sus cuentas de Gmail y
     # su lista de contactos.
@@ -5727,6 +5734,23 @@ def main() -> None:
             # un error suyo no puede tumbar el resto del panel.
             from modulo_oportunidades import seccion_oportunidades
             seccion_oportunidades()
+    if "mercado" in pestanas:
+      with pestanas["mercado"]:
+        if abierta("mercado_publico"):
+            # st.tabs dibuja TODAS las pestañas en cada corrida: leer el Drive y
+            # armar este modulo cada vez gastaria memoria y segundos aunque nadie
+            # lo abra. Se abre con un boton y queda abierto en la sesion.
+            if not st.session_state.get("_mercado_abierto"):
+                if st.button("Abrir la consulta por institución", key="abrir_mercado"):
+                    st.session_state["_mercado_abierto"] = True
+                    st.rerun()
+            else:
+                pr_oferta, _f, _e = precios_del_catalogo(url_ofertas)
+                try:
+                    cat_propio, _fc = cargar_catalogo_propio(url_ofertas)
+                except Exception:
+                    cat_propio = {}
+                seccion_mercado_publico(pr_oferta, cat_propio, url_ofertas)
     with pestanas["envios"]:
         if abierta("envios"):
             # La puerta a los dos paneles de Apps Script. No manda correo: los
