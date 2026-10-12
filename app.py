@@ -5639,7 +5639,12 @@ def main() -> None:
             # 12-10-2026 (Mercado total): «Mirar por» producto/marca (cuatro vias)
             # o institucion (el modulo de siempre). Por ahora el panel aun no lo
             # publica: vive en la rama `mercado-total`.
-            mirar = st.radio("Mirar por", ["Producto o marca", "Institución"], horizontal=True, key="mirar_por")
+            # Sin el indice de productos (la bodega aun no se rehizo con ONU) se abre
+            # en «Institucion»: el cliente sigue viendo lo de siempre.
+            opciones = ["Producto o marca", "Institución"]
+            if not (Path(__file__).parent / "bodega" / "indice_productos.parquet").exists():
+                opciones.reverse()
+            mirar = st.radio("Mirar por", opciones, horizontal=True, key="mirar_por")
             if mirar == "Producto o marca":
                 from modulo_mercado_total import seccion_mercado_total
                 seccion_mercado_total()
