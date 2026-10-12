@@ -30,18 +30,44 @@ def _indice(sello: float) -> pd.DataFrame:
     return pd.read_parquet(BODEGA / "indice_productos.parquet")
 
 
+@st.cache_data(show_spinner=False, max_entries=2)
+def _mapa(sello: float) -> dict[str, str]:
+    from indice_productos import mapa_conceptos
+    return mapa_conceptos()
+
+
 @st.cache_data(show_spinner="Leyendo las compras…", max_entries=20)
 def _detalle(onus: tuple[str, ...], sello: float, ids: tuple[str, ...] = ()) -> pd.DataFrame:
-    """Líneas de esos productos, ya resumidas por comprador-vía-proveedor."""
+    """Líneas de esos productos, ya resumidas por comprador-vía-proveedor.
+    `onus` mezcla códigos ONU y conceptos de Convenio Marco («cm:PAPEL HIGIENICO»):
+    en CM el ONU viene en 0, así que se filtra por los IDs del catálogo."""
+    normales = [o for o in onus if not o.startswith("cm:")]
+    conceptos = {o[3:] for o in onus if o.startswith("cm:")}
+    ids_cm = set(ids)
+    if conceptos:
+        ids_cm |= {i for i, c in _mapa(sello).items() if c in conceptos}
+    ids_cm = tuple(ids_cm)
     partes = []
     for archivo in sorted((BODEGA / "detalle").glob("20*.parquet")):
         try:
-            t = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor", "total", "orden", "onu", "id_producto"],
-                                filters=[("onu", "in", list(onus))])
+            t = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor", "total", "orden", "onu", "id_producto", "generico"])
         except Exception:
             continue  # mes sin la columna ONU (anterior al 12-10-2026)
-        if ids:
-            t = t[t["id_producto"].astype(str).isin(ids)]
+        es_cm = t["mecanismo"].astype(str) == "CM"
+        pedido = pd.Series(False, index=t.index)
+        if normales:
+            pedido |= (~es_cm) & t["onu"].astype(str).isin(normales)
+        if ids_cm:
+            pedido |= es_cm & t["id_producto"].astype(str).isin(ids_cm)
+        if conceptos:
+            # Productos vendidos que ya no estan en el catalogo vigente: se les
+            # asigna concepto por el nombre de la linea (igual que el indice).
+            from indice_productos import concepto_cm
+            nombres = t.loc[es_cm & ~pedido, "generico"].astype(str).unique()
+            buenos = {n for n in nombres if concepto_cm(n) in conceptos}
+            if buenos:
+                pedido |= es_cm & t["generico"].astype(str).isin(buenos)
+        t = t[pedido]
         if t.empty:
             continue
         t["via"] = t["mecanismo"].astype(str).map(MECA)
@@ -109,11 +135,10 @@ def seccion_mercado_total() -> None:
     marcas_sel = [e[2:] for e in elegidos if e.startswith("m:")]
     if marcas_sel:
         ids = tuple(i for mc in marcas_sel for i in _ids_de_marca(mc, rm.stat().st_mtime))
-        onus_marca = tuple(im.loc[im["marca"].isin(marcas_sel), "onu"].unique())
         if "cm" not in vias:
             st.warning("La marca solo se mide en Convenio Marco: se activó esa vía.")
             vias = vias + ["cm"]
-        d = _detalle(tuple(set(onus_marca) | set(onus)), ruta.stat().st_mtime, ids if not onus else ())
+        d = _detalle(tuple(onus), ruta.stat().st_mtime, ()) if onus else _detalle((), ruta.stat().st_mtime, ids)
         d = d[d["via"] == "cm"] if not onus else d
         st.caption("Con una marca elegida solo se cuenta Convenio Marco: es la única vía donde la marca existe.")
     else:
