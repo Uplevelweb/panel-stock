@@ -5636,7 +5636,15 @@ def main() -> None:
     if solo_comportamiento:
         from modulo_planes import candado
         if puede(yo, "mercado_publico"):
-            seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
+            # 12-10-2026 (Mercado total): «Mirar por» producto/marca (cuatro vias)
+            # o institucion (el modulo de siempre). Por ahora el panel aun no lo
+            # publica: vive en la rama `mercado-total`.
+            mirar = st.radio("Mirar por", ["Producto o marca", "Institución"], horizontal=True, key="mirar_por")
+            if mirar == "Producto o marca":
+                from modulo_mercado_total import seccion_mercado_total
+                seccion_mercado_total()
+            else:
+                seccion_mercado_publico(precios_oferta, catalogo_propio, url_ofertas)
         else:
             candado("mercado_publico")
         return
