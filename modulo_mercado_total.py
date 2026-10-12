@@ -25,6 +25,51 @@ def _mm(x: float) -> str:
     return "$" + f"{x / 1e6:,.0f}".replace(",", ".") + " MM"
 
 
+# 12-10-2026, pedido de Serling (vista móvil): el desplegable con buscador
+# ocupaba media pantalla y el teclado tapaba el resto, y st.bar_chart no
+# rotula las barras. Ahora: vías como botones tocables, productos en una
+# lista que se desliza DENTRO de su propio recuadro (sin teclado, sin
+# ventana encima) y barras horizontales con nombre, monto y % a la vista.
+ESTILO = """<style>
+[data-testid="stButtonGroup"] button{font-weight:700!important;min-height:44px;background:#fff!important;color:#5b6b82!important;border:2px solid #cfd8e6!important}
+[data-testid="stButtonGroup"] button[aria-pressed="true"]{background:#0c2c57!important;color:#fff!important;border-color:#0c2c57!important}
+.mt-b{margin:0 0 14px}
+.mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:5px;line-height:1.25}
+.mt-b-et{font-weight:700;color:#0c2c57;overflow-wrap:anywhere}
+.mt-b-sub{display:block;font-weight:500;font-size:.78em;color:#5b6b82}
+.mt-b-v{font-weight:800;color:#0c2c57;white-space:nowrap}
+.mt-b-v small{font-size:.78em;font-weight:700;color:#5b6b82;margin-left:6px}
+.mt-b-pista{height:14px;border-radius:99px;background:#e3eaf3;overflow:hidden}
+.mt-b-barra{height:100%;border-radius:99px;background:#0c2c57}
+.mt-b.top .mt-b-barra{background:#f18c3f}
+.st-key-mt_rueda [data-testid="stCheckbox"]{min-height:52px;display:flex;align-items:center;padding:4px 6px;
+  border-bottom:1px solid #e3eaf3;scroll-snap-align:center}
+.st-key-mt_rueda [data-testid="stCheckbox"]:has(input:checked){background:#fff3e8;border-radius:10px}
+.st-key-mt_rueda label{width:100%;cursor:pointer}
+.st-key-mt_rueda [data-testid="stVerticalBlock"]{scroll-snap-type:y proximity}
+.st-key-mt_rueda{scroll-snap-type:y proximity}
+@media(max-width:640px){.block-container{padding-left:.9rem!important;padding-right:.9rem!important}}
+</style>"""
+
+
+def _barras(valores: pd.Series, detalle: list[str] | None = None, total: float | None = None) -> None:
+    """Barras horizontales legibles: nombre, monto en MM y % del total.
+    `valores` en pesos, ya ordenado de mayor a menor."""
+    import html
+    tot = float(total if total else valores.sum()) or 1.0
+    mx = float(valores.max()) or 1.0
+    filas = []
+    for i, (nom, v) in enumerate(valores.items()):
+        ancho = max(2.0, float(v) / mx * 100)
+        filas.append(
+            f'<div class="mt-b{" top" if i == 0 else ""}"><div class="mt-b-top">'
+            f'<span class="mt-b-et">{html.escape(str(nom))}'
+            + (f'<small class="mt-b-sub">{html.escape(detalle[i])}</small>' if detalle and detalle[i] else '') + '</span>'
+            f'<span class="mt-b-v">{_mm(float(v))}<small>{float(v) / tot:.0%}</small></span></div>'
+            f'<div class="mt-b-pista"><div class="mt-b-barra" style="width:{ancho:.0f}%"></div></div></div>')
+    st.markdown("".join(filas), unsafe_allow_html=True)
+
+
 @st.cache_data(show_spinner=False, max_entries=2)
 def _indice(sello: float) -> pd.DataFrame:
     return pd.read_parquet(BODEGA / "indice_productos.parquet")
@@ -99,8 +144,9 @@ def seccion_mercado_total() -> None:
     indice = _indice(ruta.stat().st_mtime)
 
     st.markdown("**1 · ¿Dónde quieres mirar?** (puedes elegir varias vías)")
-    vias = st.multiselect("Vías", list(VIAS), default=["cm", "li", "ag"], format_func=VIAS.get,
-                          key="mt_vias", label_visibility="collapsed")
+    st.markdown(ESTILO, unsafe_allow_html=True)
+    vias = st.pills("Vías", list(VIAS), selection_mode="multi", default=["cm", "li", "ag"],
+                    format_func=VIAS.get, key="mt_vias", label_visibility="collapsed") or []
     st.markdown("**2 · Busca tu producto** (escribe 3 letras)")
     q = st.text_input("Producto", key="mt_q", placeholder="Ej: ace, arr, pap…", label_visibility="collapsed")
     if len(q.strip()) < 3:
@@ -127,7 +173,13 @@ def seccion_mercado_total() -> None:
     if not nombre:
         st.warning("Sin coincidencias. Prueba con otra palabra.")
         return
-    elegidos = st.multiselect("Elige uno o más", list(nombre), default=list(nombre)[:1], format_func=nombre.get, key="mt_sel")
+    st.caption("Toca para marcar uno o más. Desliza la lista para ver más.")
+    primero = next(iter(nombre))
+    elegidos = []
+    with st.container(height=300, border=True, key="mt_rueda"):
+        for k, t in nombre.items():
+            if st.checkbox(t, value=(k == primero), key=f"mt_sel_{k}"):
+                elegidos.append(k)
     if not vias or not elegidos:
         st.info("Elige al menos una vía y un producto.")
         return
@@ -154,7 +206,7 @@ def seccion_mercado_total() -> None:
 
     por_via = d.groupby("via")["total"].sum().reindex(vias).fillna(0)
     st.markdown("**Por qué vía se compra**")
-    st.bar_chart(pd.DataFrame({"Monto (MM)": (por_via / 1e6).round(0).values}, index=[VIAS[v] for v in por_via.index]))
+    _barras(por_via.rename(index=VIAS).sort_values(ascending=False))
 
     u = pd.read_parquet(BODEGA / "unidades.parquet", columns=["codigo_unidad", "nombre_unidad", "nombre_organismo", "region"])
     u["codigo_unidad"] = u["codigo_unidad"].astype(str)
@@ -168,17 +220,15 @@ def seccion_mercado_total() -> None:
     with a:
         st.markdown("**Dónde más se compra**")
         t = comp.sort_values("total", ascending=False).head(10)
-        st.dataframe(t.assign(Monto=t["total"].round(0).astype("Int64"))[["Institución", "Unidad", "Región", "Monto"]],
-                     hide_index=True, width="stretch", column_config={"Monto": st.column_config.NumberColumn(format="localized")})
+        _barras(pd.Series(t["total"].values, index=t["Institución"].values),
+                [" · ".join(x for x in (u_, r_) if x) for u_, r_ in zip(t["Unidad"], t["Región"])], total=comp["total"].sum())
     with b:
         st.markdown("**Por región**")
         r = comp.groupby("Región")["total"].sum().sort_values(ascending=False).head(10)
-        st.bar_chart((r / 1e6).round(0))
+        _barras(r.head(8), total=comp["total"].sum())
     st.markdown("**Quién lo vende hoy** (posibles distribuidores o socios de canal)")
-    p = d.groupby("proveedor")["total"].sum().sort_values(ascending=False).head(10).reset_index()
-    p["Monto"] = p["total"].round(0).astype("Int64")
-    st.dataframe(p[["proveedor", "Monto"]].rename(columns={"proveedor": "Proveedor"}), hide_index=True, width="stretch",
-                 column_config={"Monto": st.column_config.NumberColumn(format="localized")})
+    p = d.groupby("proveedor")["total"].sum().sort_values(ascending=False).head(10)
+    _barras(p, total=d["total"].sum())
 
     if marcas_ok and onus:
         sub = im[im["onu"].isin(onus)].groupby("marca")["monto"].sum().sort_values(ascending=False).head(8)
@@ -187,5 +237,5 @@ def seccion_mercado_total() -> None:
             st.caption("El catálogo no identifica marca para estos productos.")
         else:
             tot = sub.sum()
-            st.bar_chart((sub / 1e6).round(0))
+            _barras(sub)
             st.caption(f"Participación dentro de Convenio Marco; la marca líder concentra el {sub.iloc[0] / tot:.0%} de lo que tiene marca.")

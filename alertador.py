@@ -619,8 +619,10 @@ def dias_de_prueba_territorio(suscriptores: list[dict]) -> dict:
 
     A diferencia de dias_de_prueba() -que mira el acceso al Panel: 14 dias,
     y solo si dejo RUT-, esta cuenta el plazo que se promete en el bot de
-    WhatsApp y en la web: 7 dias desde que se inscribio, para cualquiera,
-    tenga o no RUT. Sin esto, quien se inscribia solo con palabras clave
+    WhatsApp y en la web: 15 dias (antes 7; cambio del 12-10-2026), para
+    cualquiera, tenga o no RUT. Si la fila trae prueba_vence -la fecha que
+    fija la base al confirmar el correo-, manda esa; si no, 15 dias desde
+    que se inscribio. Sin esto, quien se inscribia solo con palabras clave
     (sin RUT) no tenia NINGUN aviso de fin de prueba, nunca. Pedido de
     Serling el 12-09-2026: "los 7 dias prometidos, para todos".
 
@@ -633,13 +635,23 @@ def dias_de_prueba_territorio(suscriptores: list[dict]) -> dict:
     for s in suscriptores:
         correo = s.get("email")
         cuando = s.get("fecha_consentimiento")
-        if not correo or not cuando:
+        if not correo:
+            continue
+        vence = s.get("prueba_vence")
+        if vence and not s.get("plan"):
+            try:
+                fin = datetime.fromisoformat(str(vence).replace("Z", "+00:00")).date()
+                salida[correo] = (fin - hoy).days
+                continue
+            except ValueError:
+                pass
+        if not cuando:
             continue
         try:
             inicio = datetime.fromisoformat(str(cuando)[:19]).date()
         except ValueError:
             continue
-        salida[correo] = 7 - (hoy - inicio).days
+        salida[correo] = 15 - (hoy - inicio).days
     return salida
 
 
@@ -1876,17 +1888,41 @@ def encabezado_grupo(titulo: str, bajada: str, clase: str = "licitacion",
   <tr>
     <td style="background:{color};padding:0;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="padding:9px 12px;color:#ffffff;font-size:14px;font-weight:800;
-                   letter-spacing:.06em;text-transform:uppercase;">{titulo}</td>
+        <td style="padding:10px 12px;color:#ffffff;font-size:14px;font-weight:800;
+                   letter-spacing:.04em;text-transform:uppercase;">{titulo}</td>
         {pildora}
       </tr></table>
     </td>
   </tr>
   <tr>
-    <td class="pad30" style="padding:10px 12px 2px;color:{TEXTO_SUAVE};font-size:12px;">
+    <td class="pad30" style="padding:10px 12px 2px;color:{TEXTO_SUAVE};font-size:13px;line-height:1.45;">
       {bajada}
     </td>
   </tr>"""
+
+
+def titulo_legible(texto: str) -> str:
+    """Nombres de proceso/comprador sin gritar. Mercado Publico los trae casi
+    siempre en MAYUSCULAS y un parrafo en mayusculas negritas era lo que mas
+    ruido visual metia al correo (12-10-2026). Si viene TODO en mayusculas se
+    pasa a «Oracion»; las siglas sin vocales (CCTV, SRL) se respetan. Si ya
+    trae minusculas, no se toca."""
+    texto = (texto or "").strip()
+    if not texto:
+        return texto
+    if texto.islower():                      # «inmobiliaria y constructora…»
+        return texto[:1].upper() + texto[1:]
+    if not texto.isupper():
+        return texto
+    palabras = []
+    for w in texto.split():
+        limpia = "".join(ch for ch in w if ch.isalpha())
+        if 2 <= len(limpia) <= 5 and not any(v in limpia for v in "AEIOUÁÉÍÓÚ"):
+            palabras.append(w)
+        else:
+            palabras.append(w.lower())
+    s = " ".join(palabras)
+    return s[:1].upper() + s[1:]
 
 
 def _barra(pct, color):
@@ -1909,31 +1945,39 @@ def tarjeta(op: dict) -> str:
     «Como compra» y el detalle por rubro ya no van en el correo: el ejemplo de
     la landing no los muestra, y la regla es que el correo real y la muestra
     sean la misma cosa. Siguen en el Panel."""
-    donde = " · ".join(x for x in (op.get("nombre_unidad") or op.get("organismo"),
-                                   op.get("comuna") or op.get("region")) if x)
+    donde = " · ".join(titulo_legible(x) for x in (op.get("nombre_unidad") or op.get("organismo"),
+                                                   op.get("comuna") or op.get("region")) if x)
     es_agil = op.get("tipo") == "compra_agil"
     radio = op.get("radiografia") or {}
     total_vias = radio.get("total") or 0.0
     proveedores = radio.get("proveedores") or []
 
     def fila_ficha(etiqueta, valor):
-        return (f'<tr><td style="padding:2px 0;color:{TEXTO_SUAVE};font-size:12px;">{etiqueta}</td>'
-                f'<td align="right" style="padding:2px 0 2px 10px;color:{TEXTO};font-size:12.5px;'
+        return (f'<tr><td style="padding:3px 0;color:{TEXTO_SUAVE};font-size:13px;">{etiqueta}</td>'
+                f'<td align="right" style="padding:3px 0 3px 10px;color:{TEXTO};font-size:14px;'
                 f'font-weight:600;">{valor}</td></tr>')
 
+    def fila_ancha(etiqueta, valor):
+        # Valores largos (el comprador): la etiqueta arriba y el texto a todo el
+        # ancho. En dos columnas se partia en tres lineas pegadas a la derecha.
+        return (f'<tr><td colspan="2" style="padding:3px 0;">'
+                f'<div style="color:{TEXTO_SUAVE};font-size:13px;">{etiqueta}</div>'
+                f'<div style="color:{TEXTO};font-size:14px;font-weight:600;line-height:1.35;">{valor}</div>'
+                f'</td></tr>')
+
     def titulo_seccion(texto):
-        return (f'<div style="color:{MARINO};font-size:13px;font-weight:700;'
-                f'margin:12px 0 2px;">{texto}</div>')
+        return (f'<div style="color:{MARINO};font-size:14px;font-weight:700;'
+                f'margin:14px 0 2px;">{texto}</div>')
 
     # ---- ficha ----
     if es_agil:
         # Demo: comprador chico, monto grande y «de presupuesto», y el cierre.
-        cabecera = (f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-bottom:4px;">{donde[:80]}</div>'
+        cabecera = (f'<div style="color:{TEXTO_SUAVE};font-size:13px;margin-bottom:4px;">{donde[:80]}</div>'
                     if donde else "")
         if op.get("monto"):
             cabecera += (f'<div style="margin-bottom:4px;"><span style="color:{MARINO};'
-                         f'font-size:15px;font-weight:700;">{plata(op["monto"])}</span> '
-                         f'<span style="color:{TEXTO_SUAVE};font-size:12px;">de presupuesto</span></div>')
+                         f'font-size:16px;font-weight:700;">{plata(op["monto"])}</span> '
+                         f'<span style="color:{TEXTO_SUAVE};font-size:13px;">de presupuesto</span></div>')
         filas = [fila_ficha("Cierra", op["cierre"] or "sin fecha")]
         if total_vias > 0:
             filas.append(fila_ficha("Cuánto compra", plata(total_vias)))
@@ -1941,7 +1985,7 @@ def tarjeta(op: dict) -> str:
         cabecera = ""
         filas = [fila_ficha("N° de proceso", op["codigo"])]
         if donde:
-            filas.append(fila_ficha("Comprador", donde[:60]))
+            filas.append(fila_ancha("Comprador", donde[:80]))
         filas.append(fila_ficha("Cierra", op["cierre"] or "sin fecha"))
         if total_vias > 0:
             filas.append(fila_ficha("Cuánto compra", plata(total_vias)))
@@ -1956,15 +2000,15 @@ def tarjeta(op: dict) -> str:
         filas = []
         for i, (nombre, monto, rut) in enumerate(proveedores, 1):
             rut_legible = rut_bonito(rut)
-            linea_rut = (f'<div style="color:{TEXTO_SUAVE};font-size:10.5px;margin:1px 0 0 14px;'
+            linea_rut = (f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin:1px 0 0 16px;'
                          f'font-weight:400;">{rut_legible}</div>') if rut_legible else ""
             pct = monto / suma * 100
             filas.append(
                 f'<tr>'
-                f'<td valign="top" style="padding:5px 0 3px;color:{TEXTO};font-size:12.5px;">'
-                f'<strong>{i}.</strong> {nombre[:40]}{linea_rut}</td>'
-                f'<td align="right" valign="top" style="padding:5px 0 3px 8px;color:{TEXTO};'
-                f'font-size:12.5px;white-space:nowrap;"><strong>{plata(monto)}</strong> '
+                f'<td valign="top" style="padding:6px 0 3px;color:{TEXTO};font-size:14px;line-height:1.3;">'
+                f'<strong>{i}.</strong> {titulo_legible(nombre[:44])}{linea_rut}</td>'
+                f'<td align="right" valign="top" style="padding:6px 0 3px 8px;color:{TEXTO};'
+                f'font-size:14px;white-space:nowrap;"><strong>{plata(monto)}</strong> '
                 f'<span style="color:{TEXTO_SUAVE};">{pct:.0f}%</span></td></tr>'
                 f'<tr><td colspan="2" style="padding:0 0 3px;">{_barra(pct * 2, NARANJO)}</td></tr>')
         quien = (titulo_seccion(f"Quién se lo lleva hoy · {len(proveedores)} proveedores")
@@ -1979,10 +2023,10 @@ def tarjeta(op: dict) -> str:
         for c in sorted(criterios, key=lambda x: -x["ponderacion"]):
             filas.append(
                 f'<tr>'
-                f'<td style="padding:5px 0 3px;color:{TEXTO};font-size:12.5px;">'
-                f'{c["item"][:46].upper()}</td>'
-                f'<td align="right" style="padding:5px 0 3px 8px;color:{TEXTO};'
-                f'font-size:12.5px;font-weight:700;">{c["ponderacion"]}%</td></tr>'
+                f'<td style="padding:6px 0 3px;color:{TEXTO};font-size:14px;line-height:1.3;">'
+                f'{c["item"][:60]}</td>'
+                f'<td align="right" style="padding:6px 0 3px 8px;color:{TEXTO};'
+                f'font-size:14px;font-weight:700;">{c["ponderacion"]}%</td></tr>'
                 f'<tr><td colspan="2" style="padding:0 0 3px;">'
                 f'{_barra(c["ponderacion"], MARINO)}</td></tr>')
         evaluar = (titulo_seccion("Con qué te van a evaluar")
@@ -1991,7 +2035,7 @@ def tarjeta(op: dict) -> str:
 
     sin_datos = ""
     if not quien and not evaluar and not es_agil:
-        sin_datos = (f'<div style="color:{TEXTO_SUAVE};font-size:12.5px;margin-top:10px;">'
+        sin_datos = (f'<div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.45;margin-top:10px;">'
                      f'Este comprador no aparece comprando lo que tú vendes en los últimos '
                      f'12 meses. Es terreno nuevo.</div>')
 
@@ -2009,7 +2053,7 @@ def tarjeta(op: dict) -> str:
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fffaf2;border:1px dashed {NARANJO};
                         border-radius:8px;margin:0 0 8px;">
-            <tr><td style="padding:8px 10px;color:#8a4b12;font-size:12px;line-height:1.45;">
+            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:13px;line-height:1.45;">
               <strong>MENCIONA VISITA A TERRENO</strong><br>
               <span style="color:#a86a35;font-style:italic;">
                 «{op['mencion_visita'][:150]}»</span><br>
@@ -2022,7 +2066,7 @@ def tarjeta(op: dict) -> str:
           <table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="background:#fff4e8;border:1px solid {NARANJO};
                         border-radius:8px;margin:0 0 8px;">
-            <tr><td style="padding:8px 10px;color:#8a4b12;font-size:12px;line-height:1.45;">
+            <tr><td style="padding:10px 12px;color:#8a4b12;font-size:13px;line-height:1.45;">
               <strong>VISITA A TERRENO OBLIGATORIA</strong><br>
               {op['visita']}{(' · ' + donde_visita[:70]) if donde_visita else ''}<br>
               <span style="color:#a86a35;">Si no asistes, quedas fuera.</span>
@@ -2030,8 +2074,8 @@ def tarjeta(op: dict) -> str:
           </table>"""
 
     boton = (f'<a href="{op["enlace"]}" style="display:block;text-align:center;'
-             f'margin-top:12px;padding:10px;background:{NARANJO};color:{MARINO};'
-             f'font-size:13px;font-weight:800;text-decoration:none;border-radius:7px;">'
+             f'margin-top:14px;padding:12px;background:{NARANJO};color:{MARINO};'
+             f'font-size:15px;font-weight:800;text-decoration:none;border-radius:7px;">'
              f'Ver en Mercado Público</a>')
 
     return f"""
@@ -2040,8 +2084,8 @@ def tarjeta(op: dict) -> str:
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="border-bottom:1px solid {BORDE};">
         <tr><td style="padding:12px 0 14px;">
-          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.3;margin-bottom:6px;">
-            {op['nombre'][:150].upper()}
+          <div style="color:{MARINO};font-size:16px;font-weight:700;line-height:1.3;margin-bottom:8px;">
+            {titulo_legible(op['nombre'][:150])}
           </div>
 {aviso_visita}
           {ficha}{quien}{evaluar}{sin_datos}{monto}
@@ -2178,9 +2222,9 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
     tarjetas = []
     for p in puertas:
         titulo, explicacion = ETIQUETA_PUERTA[p["tipo"]]
-        donde = " · ".join(x for x in (p.get("unidad_nombre") or p.get("nombre"),
-                                       p.get("comuna")) if x)
-        ya = (f'<div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:2px;">'
+        donde = " · ".join(titulo_legible(x) for x in (p.get("unidad_nombre") or p.get("nombre"),
+                                                       p.get("comuna")) if x)
+        ya = (f'<div style="color:{TEXTO_SUAVE};font-size:13px;margin-top:2px;">'
               f'Ya le vendes {plata(p["le_vendo"])}</div>') if p["le_vendo"] > 0 else ""
         tarjetas.append(f"""
   <tr>
@@ -2189,15 +2233,15 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
              style="border-bottom:1px solid {BORDE};">
         <tr><td style="padding:12px 0 14px;">
           <span style="display:inline-block;background:{COLOR_PUERTA[p["tipo"]]};color:#ffffff;
-                       font-size:10px;font-weight:800;letter-spacing:.08em;padding:1px 6px;
+                       font-size:11px;font-weight:800;letter-spacing:.06em;padding:2px 7px;
                        border-radius:4px;">{titulo.upper()}</span>
-          <span style="color:{TEXTO_SUAVE};font-size:12px;"> {explicacion}</span>
-          <div style="color:{MARINO};font-size:13px;font-weight:700;line-height:1.3;margin:4px 0 2px;">
-            {(p["nombre"] or p["unidad"]).upper()}</div>
-          <div style="color:{TEXTO_SUAVE};font-size:12px;">{donde}</div>
-          <div style="margin-top:4px;"><span style="color:{MARINO};font-size:15px;font-weight:700;">
+          <span style="color:{TEXTO_SUAVE};font-size:13px;"> {explicacion}</span>
+          <div style="color:{MARINO};font-size:16px;font-weight:700;line-height:1.3;margin:6px 0 2px;">
+            {titulo_legible(p["nombre"] or p["unidad"])}</div>
+          <div style="color:{TEXTO_SUAVE};font-size:13px;">{donde}</div>
+          <div style="margin-top:4px;"><span style="color:{MARINO};font-size:16px;font-weight:700;">
             {plata(p["por_ganar"])}</span>
-            <span style="color:{TEXTO_SUAVE};font-size:12px;">por ganar ·
+            <span style="color:{TEXTO_SUAVE};font-size:13px;">por ganar ·
             {p["proveedores"]} proveedores se lo reparten</span></div>
           {ya}
         </td></tr>
@@ -2288,17 +2332,17 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         if solo_digitos_rut(suscriptor.get("rut_empresa") or ""):
             bloque_panel = f"""
   <tr>
-    <td class="pad30" style="padding:4px 10px 22px 0;">
+    <td class="pad30" style="padding:12px 12px 16px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#f6f8fb;border:1px solid {BORDE};border-radius:12px;">
-        <tr><td style="padding:18px 20px;">
+        <tr><td style="padding:16px 14px;">
           <div style="color:{TEXTO};font-size:15px;font-weight:700;margin-bottom:6px;">
             También tienes un panel
           </div>
-          <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.6;margin-bottom:14px;">
+          <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.55;margin-bottom:14px;">
             Ahí ves a quién le puedes vender y todavía no le vendes, cuánto gasta
             cada comprador en tus rubros y en qué quedó cada oportunidad que te
-            avisamos. <strong>Tienes 14 días con todo abierto.</strong>
+            avisamos. <strong>Tienes 15 días con todo abierto.</strong>
           </div>
           <a href="{PANEL}" style="display:inline-block;background:{NARANJO};
              color:{MARINO};text-decoration:none;font-size:14px;font-weight:700;
@@ -2314,9 +2358,9 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         else:
             bloque_panel = f"""
   <tr>
-    <td class="pad30" style="padding:4px 10px 22px 0;">
-      <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;
-                  border-left:3px solid {NARANJO};padding-left:13px;">
+    <td class="pad30" style="padding:12px 12px 16px;">
+      <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.55;
+                  border-left:3px solid {NARANJO};padding-left:12px;">
         <strong style="color:{TEXTO};">Dinos el RUT de tu empresa</strong> y estas
         alertas mejoran solas: sacamos qué vendes de lo que ya le has vendido al
         Estado, en vez de adivinarlo por palabras. Además te abrimos el panel.
@@ -2326,7 +2370,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
   </tr>"""
 
     # La franja de fin de prueba. Solo en el correo DIARIO: la bienvenida ya
-    # dice «tienes 14 dias con todo abierto» tres centimetros mas arriba, y
+    # dice «tienes 15 dias con todo abierto» tres centimetros mas arriba, y
     # repetirlo el primer dia suena a apuro por cobrar.
     #
     # Aparece a falta de 3 dias, no antes: una cuenta atras de tres semanas se
@@ -2337,14 +2381,14 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
         mas = recortada_de - 1
         bloque_prueba = f"""
   <tr>
-    <td class="pad30" style="padding:14px 10px 4px 0;">
+    <td class="pad30" style="padding:14px 12px 4px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#fff6ee;border:2px solid {NARANJO};border-radius:12px;">
-        <tr><td style="padding:18px 20px;">
+        <tr><td style="padding:16px 14px;">
           <div style="color:{TEXTO};font-size:16px;font-weight:700;margin-bottom:6px;">
             Quieres recibir las {recortada_de} oportunidades de hoy, completas
           </div>
-          <div style="color:{TEXTO_SUAVE};font-size:13.5px;line-height:1.65;margin-bottom:12px;">
+          <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.55;margin-bottom:14px;">
             Tu prueba gratis terminó, por eso hoy solo ves 1. Hay
             <strong>{mas} más</strong> esperando para ti. <strong>Adhiérete a un plan</strong>
             y vuelves a recibirlas todas, todos los días. Si prefieres que te
@@ -2381,17 +2425,17 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
                       "sigue llegando igual mientras tanto.</strong>")
         bloque_prueba = f"""
   <tr>
-    <td class="pad30" style="padding:14px 10px 4px 0;">
+    <td class="pad30" style="padding:14px 12px 4px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#fff6ee;border:1px solid {NARANJO};border-radius:12px;">
-        <tr><td style="padding:14px 18px;">
-          <div style="color:{TEXTO};font-size:14px;font-weight:700;margin-bottom:4px;">
+        <tr><td style="padding:14px 14px;">
+          <div style="color:{TEXTO};font-size:16px;font-weight:700;margin-bottom:4px;">
             {encabezado}
           </div>
-          <div style="color:{TEXTO_SUAVE};font-size:13px;line-height:1.6;margin-bottom:8px;">
+          <div style="color:{TEXTO_SUAVE};font-size:14px;line-height:1.55;margin-bottom:8px;">
             {cuerpo}
           </div>
-          <a href="{CONTRATAR}" style="color:{MARINO};font-size:13px;font-weight:700;
+          <a href="{CONTRATAR}" style="color:{MARINO};font-size:14px;font-weight:700;
              text-decoration:none;">Ver planes y contratar &rsaquo;</a>
         </td></tr>
       </table>
@@ -2413,7 +2457,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 </style>
 </head>
 <body style="margin:0;padding:0;background:{FONDO};font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 4px 14px 0;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:8px 0;">
 <tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" border="0"
        style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;
@@ -2425,18 +2469,18 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
        naranjo, titulo, cuantas oportunidades y la tarjeta de saludo de Terri
        con su avatar sobre una placa clara. -->
   <tr>
-    <td style="background:{MARINO};padding:14px 12px 16px;">
-      <div style="color:{NARANJO};font-size:12px;font-weight:700;letter-spacing:.02em;">
+    <td style="background:{MARINO};padding:16px 12px 16px;">
+      <div style="color:{NARANJO};font-size:13px;font-weight:700;letter-spacing:.02em;">
         Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
-      <div style="color:#ffffff;font-size:20px;font-weight:700;margin:3px 0 2px;">{titulo}</div>
-      <div style="color:#cbd5e1;font-size:12.5px;line-height:1.5;">{resumen}</div>
+      <div style="color:#ffffff;font-size:22px;font-weight:700;line-height:1.2;margin:4px 0 4px;">{titulo}</div>
+      <div style="color:#cbd5e1;font-size:14px;line-height:1.45;">{resumen}</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
         <tr>
           <td width="56" style="padding:8px 0 8px 10px;line-height:0;">
             <img src="{TERRI_URL}" alt="Terri" width="44" height="44"
                  style="display:block;border:0;background:#eaf2fb;border-radius:22px;"></td>
-          <td style="padding:8px 12px;color:#e6edf6;font-size:12.5px;line-height:1.45;">
+          <td style="padding:10px 12px;color:#e6edf6;font-size:14px;line-height:1.45;">
             {saludo}</td>
         </tr>
       </table>
@@ -2448,7 +2492,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 {bloque_puertas}
   <tr>
     <td style="padding:20px 12px 24px;border-top:1px solid {BORDE};">
-      <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
+      <div style="color:{TEXTO_SUAVE};font-size:12px;line-height:1.7;">
         Cifras calculadas sobre los <strong>datos públicos de ChileCompra</strong>,
         actualizados al {hoy}. Incluyen Convenio Marco, licitaciones, compras
         ágiles y trato directo.<br><br>
@@ -2896,20 +2940,20 @@ def armar_aviso_estado(suscriptor: dict, tipo: str, proximo: int | None) -> str:
 <style>body,table,td,div,p,span,a,strong{{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif}}</style>
 </head>
 <body style="margin:0;padding:0;background:{FONDO};">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:14px 4px 14px 0;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{FONDO};padding:8px 0;">
 <tr><td align="center">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
   <tr>
-    <td style="background:{MARINO};padding:14px 12px 16px;">
-      <div style="color:{NARANJO};font-size:12px;font-weight:700;letter-spacing:.02em;">
+    <td style="background:{MARINO};padding:16px 12px 16px;">
+      <div style="color:{NARANJO};font-size:13px;font-weight:700;letter-spacing:.02em;">
         Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
-      <div style="color:#ffffff;font-size:20px;font-weight:700;margin:3px 0 2px;">{titulo}</div>
-      <div style="color:#cbd5e1;font-size:12.5px;line-height:1.5;">{resumen}</div>
+      <div style="color:#ffffff;font-size:22px;font-weight:700;line-height:1.2;margin:4px 0 4px;">{titulo}</div>
+      <div style="color:#cbd5e1;font-size:14px;line-height:1.45;">{resumen}</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
         <tr>
           <td width="56" style="padding:8px 0 8px 10px;line-height:0;">
             <img src="{TERRI_URL}" alt="Terri" width="44" height="44" style="display:block;border:0;background:#eaf2fb;border-radius:22px;"></td>
-          <td style="padding:8px 12px;color:#e6edf6;font-size:12.5px;line-height:1.45;"><strong>{hola}</strong> Te cuento cómo va tu servicio hoy.</td>
+          <td style="padding:10px 12px;color:#e6edf6;font-size:14px;line-height:1.45;"><strong>{hola}</strong> Te cuento cómo va tu servicio hoy.</td>
         </tr>
       </table>
     </td>
@@ -2917,13 +2961,13 @@ def armar_aviso_estado(suscriptor: dict, tipo: str, proximo: int | None) -> str:
   <tr>
     <td style="padding:18px 12px 6px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff6ee;border:1px solid {NARANJO};border-radius:12px;">
-        <tr><td style="padding:16px 18px;color:{TEXTO};font-size:14px;line-height:1.65;">{cuerpo}{extra}</td></tr>
+        <tr><td style="padding:16px 14px;color:{TEXTO};font-size:14px;line-height:1.55;">{cuerpo}{extra}</td></tr>
       </table>
     </td>
   </tr>
   <tr>
     <td style="padding:20px 12px 24px;border-top:1px solid {BORDE};">
-      <div style="color:{TEXTO_SUAVE};font-size:11px;line-height:1.7;">
+      <div style="color:{TEXTO_SUAVE};font-size:12px;line-height:1.7;">
         <strong>No respondas este correo</strong>, nadie lo lee. ¿Necesitas soporte?
         <a href="https://wa.me/56967329214?text=Necesito%20soporte" style="color:{MARINO};font-weight:600;">Escríbenos por WhatsApp</a>.<br><br>
         Uplevel · {rut} · Santiago, Chile<br>
@@ -2951,7 +2995,7 @@ def avisar_estado(suscriptor: dict, tipo: str, proximo: int | None, guardar: str
 
 
 # --- La alerta por WhatsApp, ademas del correo (19-09-2026) -------------
-# Pedido de Serling: "si ofrecemos WhatsApp en los 7 dias de prueba y en
+# Pedido de Serling: "si ofrecemos WhatsApp en los dias de prueba y en
 # Plus/Premium, tiene que existir de verdad". El envio real -la plantilla
 # aprobada de Meta- vive en el bot (deploy-project/whatsapp-bot/server.js,
 # endpoint /tareas/enviar-alerta-whatsapp); esto solo decide QUIEN es
@@ -2980,12 +3024,12 @@ def whatsapp_elegible(suscriptor: dict) -> bool:
 
     # Respaldo si la columna aun no se lleno para esta fila (antes del
     # 19-09-2026, o si prueba-15-dias-tope-para-copiar.txt no se ha pegado
-    # todavia): los 7 dias de siempre desde que se inscribio.
+    # todavia): los 15 dias desde que se inscribio (eran 7 hasta el 12-10-2026).
     cuando = suscriptor.get("fecha_consentimiento")
     if cuando:
         try:
             inicio = datetime.fromisoformat(str(cuando)[:10])
-            return (datetime.now() - inicio).days < 7
+            return (datetime.now() - inicio).days < 15
         except ValueError:
             pass
     return False
