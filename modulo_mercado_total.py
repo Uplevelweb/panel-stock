@@ -68,7 +68,12 @@ def seccion_mercado_total() -> None:
         st.caption("Escribe al menos 3 letras. La marca solo se mide en Convenio Marco y se suma en la siguiente versión.")
         return
     hay = indice[indice["generico"].str.contains(q.strip(), case=False, na=False, regex=False)]
-    hay = hay.head(30)
+    # Primero los que tienen una PALABRA que empieza con lo escrito («ace» ->
+    # «Aceite…» antes que «Acetato…» en medio de otro nombre); dentro de cada
+    # grupo, mantiene el orden por monto del indice.
+    ql = q.strip().lower()
+    empieza = hay["generico"].str.lower().apply(lambda g: any(p.startswith(ql) for p in g.replace(",", " ").split()))
+    hay = pd.concat([hay[empieza], hay[~empieza]]).head(30)
     if hay.empty:
         st.warning("Sin coincidencias. Prueba con otra palabra.")
         return
