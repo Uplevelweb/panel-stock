@@ -52,6 +52,10 @@ jobs:
         run: |
           python bodeguero.py ${{ github.event.inputs.completo == 'true' && '--completo' || '' }}
 
+      - name: Bajar las marcas del catalogo de Convenio Marco (una vez por semana)
+        continue-on-error: true
+        run: python marcas_catalogo.py
+
       - name: Armar el indice de productos (buscador de Mercado total)
         run: python indice_productos.py
 
