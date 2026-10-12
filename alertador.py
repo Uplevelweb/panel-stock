@@ -440,7 +440,9 @@ def anotar_avisado(suscriptor: dict, elegidas: list[dict],
                 "suscriptor_id": suscriptor["id"],
                 "codigo_licitacion": o["codigo"],
                 "tipo": o.get("tipo") or "licitacion",
-                "rut": rut or None,
+                # Las puertas (tipo «puerta») van SIN rut: asi el embudo de
+                # Seguimiento, que filtra por rut, no las toma por oportunidades.
+                "rut": (None if o.get("tipo") == "puerta" else rut) or None,
                 "nombre": (o.get("nombre") or "")[:300] or None,
                 "comprador": (o.get("nombre_unidad") or o.get("organismo") or "")[:200] or None,
                 "region": (o.get("region") or "")[:120] or None,
@@ -3020,7 +3022,17 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
     if agiles:
         partes.append(f"{len(agiles)} compra{'s' if len(agiles) != 1 else ''} ágil{'es' if len(agiles) != 1 else ''}")
     desglose = " · ".join(partes) or "ninguna nueva"
-    n_cm = len(puertas or [])
+    # Una puerta es una meta DEL MES: se avisa una vez por mes y no se repite cada
+    # manana. Se anota en `envios` como PUERTA|tipo|unidad|AAAA-MM, SIN rut, para que
+    # el embudo de Seguimiento (que filtra por rut) no la vea como oportunidad.
+    mes = time.strftime("%Y-%m")
+    codigo_puerta = lambda p: f"PUERTA|{p.get('tipo')}|{p.get('unidad') or p.get('nombre')}|{mes}"
+    try:
+        ya = ya_avisado(suscriptor)
+    except Exception:
+        ya = set()
+    puertas_nuevas = [p for p in (puertas or []) if codigo_puerta(p) not in ya]
+    n_cm = len(puertas_nuevas)
     linea_cm = (f"Convenio Marco: {n_cm} puerta{'s' if n_cm != 1 else ''} para golpear" if n_cm
                 else "Convenio Marco: sin novedades hoy")
     parametros = [nombre, str(len(elegidas)), desglose, linea_cm]
@@ -3058,7 +3070,7 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
         "monto": plata(p.get("por_ganar")) if p.get("por_ganar") else "",
         "direccion": (p.get("direccion") or "")[:120],
         "cierre": "", "visita": "", "enlace": "",
-    } for p in (puertas or [])[:3]]
+    } for p in puertas_nuevas[:3]]
     mejores = [_resumen(o) for o in elegidas[:10 - len(acciones)]] + acciones
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros, "mejores": mejores}).encode("utf-8")
@@ -3070,6 +3082,10 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
         with urllib.request.urlopen(peticion, timeout=30) as respuesta:
             if respuesta.status == 200:
                 print(f"   [whatsapp] alerta mandada a {telefono}")
+                if puertas_nuevas[:3]:
+                    anotar_avisado(suscriptor, [{"codigo": codigo_puerta(p), "tipo": "puerta",
+                                                 "nombre": f"{p.get('tipo')} · {p.get('nombre') or ''}"}
+                                                for p in puertas_nuevas[:3]])
             else:
                 print(f"   [whatsapp] NO salio a {telefono} (codigo {respuesta.status})")
     except urllib.error.HTTPError as error:
