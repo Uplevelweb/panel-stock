@@ -3047,7 +3047,19 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
                        if es_lic and codigo else ""),
         }
     # De 5 a 10 en el WhatsApp (pedido de Serling): lo demas, con su detalle, en el panel y el correo.
-    mejores = [_resumen(o) for o in elegidas[:10]]
+    # Las acciones comerciales (puertas de Convenio Marco) van en su propio grupo, con su cupo dentro de los 10.
+    etiqueta = {"CRECER": "Vender más", "RECOMPRA": "Recomprar", "NUEVO": "Cliente nuevo"}
+    acciones = [{
+        "titulo": f"{etiqueta.get(p.get('tipo'), 'Oportunidad')} · Convenio Marco",
+        "tipo": "Acción comercial",
+        "codigo": "",
+        "comprador": (p.get("nombre") or p.get("unidad_nombre") or "")[:70],
+        "region": (p.get("comuna") or "")[:50],
+        "monto": plata(p.get("por_ganar")) if p.get("por_ganar") else "",
+        "direccion": (p.get("direccion") or "")[:120],
+        "cierre": "", "visita": "", "enlace": "",
+    } for p in (puertas or [])[:3]]
+    mejores = [_resumen(o) for o in elegidas[:10 - len(acciones)]] + acciones
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros, "mejores": mejores}).encode("utf-8")
     peticion = urllib.request.Request(
