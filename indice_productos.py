@@ -17,6 +17,8 @@ import pandas as pd
 AQUI = Path(__file__).parent
 DETALLE = AQUI / "bodega" / "detalle"
 SALIDA = AQUI / "bodega" / "indice_productos.parquet"
+MARCAS = AQUI / "bodega" / "marcas_cm.parquet"
+SALIDA_MARCAS = AQUI / "bodega" / "indice_marcas.parquet"
 VIAS = {"CM": "cm", "SE": "li", "LP": "li", "LQ": "li", "LE": "li", "AG": "ag", "TD": "td", "CD": "td", "C1": "td"}
 COLS = ["orden", "mecanismo", "onu", "generico", "rubro1", "total"]
 
@@ -46,7 +48,38 @@ def construir() -> pd.DataFrame:
     return a[["onu", "generico", "rubro1", "monto_cm", "monto_li", "monto_ag", "monto_td", "monto"]].sort_values("monto", ascending=False)
 
 
+def construir_marcas() -> pd.DataFrame:
+    """Por producto (ONU) y marca: cuanto se transo en Convenio Marco.
+    La marca sale del catalogo (`marcas_catalogo.py`) cruzado por ID de producto."""
+    cols = ["id_producto", "mecanismo", "onu", "total", "orden"]
+    if not MARCAS.exists():
+        return pd.DataFrame(columns=["onu", "marca", "monto", "ordenes"])
+    m = pd.read_parquet(MARCAS, columns=["id_producto", "marca"])
+    m = m[m["marca"].astype(str) != ""]
+    partes = []
+    for archivo in sorted(DETALLE.glob("20*.parquet")):
+        try:
+            t = pd.read_parquet(archivo, columns=cols, filters=[("mecanismo", "==", "CM")])
+        except Exception:
+            continue
+        t = t[t["id_producto"].astype(str) != ""].copy()
+        t["total"] = pd.to_numeric(t["total"], errors="coerce").fillna(0)
+        t["id_producto"] = t["id_producto"].astype(str)
+        t["onu"] = t["onu"].astype(str)
+        j = t.merge(m, on="id_producto", how="inner")
+        partes.append(j.groupby(["onu", "marca"], observed=True).agg(monto=("total", "sum"), ordenes=("orden", "nunique")).reset_index())
+    if not partes:
+        return pd.DataFrame(columns=["onu", "marca", "monto", "ordenes"])
+    return (pd.concat(partes).groupby(["onu", "marca"], observed=True)
+              .agg(monto=("monto", "sum"), ordenes=("ordenes", "sum")).reset_index()
+              .sort_values("monto", ascending=False))
+
+
 if __name__ == "__main__":
     r = construir()
     r.to_parquet(SALIDA, index=False, compression="zstd")
     print(f"{len(r):,} productos -> {SALIDA}")
+    rm = construir_marcas()
+    if len(rm):
+        rm.to_parquet(SALIDA_MARCAS, index=False, compression="zstd")
+        print(f"{len(rm):,} pares producto-marca -> {SALIDA_MARCAS}")

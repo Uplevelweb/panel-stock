@@ -31,15 +31,17 @@ def _indice(sello: float) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner="Leyendo las compras…", max_entries=20)
-def _detalle(onus: tuple[str, ...], sello: float) -> pd.DataFrame:
+def _detalle(onus: tuple[str, ...], sello: float, ids: tuple[str, ...] = ()) -> pd.DataFrame:
     """Líneas de esos productos, ya resumidas por comprador-vía-proveedor."""
     partes = []
     for archivo in sorted((BODEGA / "detalle").glob("20*.parquet")):
         try:
-            t = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor", "total", "orden", "onu"],
+            t = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor", "total", "orden", "onu", "id_producto"],
                                 filters=[("onu", "in", list(onus))])
         except Exception:
             continue  # mes sin la columna ONU (anterior al 12-10-2026)
+        if ids:
+            t = t[t["id_producto"].astype(str).isin(ids)]
         if t.empty:
             continue
         t["via"] = t["mecanismo"].astype(str).map(MECA)
@@ -50,6 +52,17 @@ def _detalle(onus: tuple[str, ...], sello: float) -> pd.DataFrame:
         return pd.DataFrame(columns=["unidad", "via", "proveedor", "total", "ordenes"])
     return (pd.concat(partes).groupby(["unidad", "via", "proveedor"], observed=True)
               .agg(total=("total", "sum"), ordenes=("ordenes", "sum")).reset_index())
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def _marcas(sello: float) -> pd.DataFrame:
+    return pd.read_parquet(BODEGA / "indice_marcas.parquet")
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _ids_de_marca(marca: str, sello: float) -> tuple[str, ...]:
+    m = pd.read_parquet(BODEGA / "marcas_cm.parquet", columns=["id_producto", "marca"])
+    return tuple(m.loc[m["marca"] == marca, "id_producto"].astype(str))
 
 
 def seccion_mercado_total() -> None:
@@ -74,16 +87,37 @@ def seccion_mercado_total() -> None:
     ql = q.strip().lower()
     empieza = hay["generico"].str.lower().apply(lambda g: any(p.startswith(ql) for p in g.replace(",", " ").split()))
     hay = pd.concat([hay[empieza], hay[~empieza]]).head(30)
-    if hay.empty:
+    nombre = {r.onu: f"{r.generico} · {r.rubro1}" for r in hay.itertuples()}
+    # La MARCA solo existe en Convenio Marco (catalogo). Se busca igual: elegir
+    # una marca deja la consulta solo en esa via.
+    rm = ruta.with_name("indice_marcas.parquet")
+    marcas_ok = rm.exists() and ruta.with_name("marcas_cm.parquet").exists()
+    if marcas_ok:
+        im = _marcas(rm.stat().st_mtime)
+        ms = (im[im["marca"].str.contains(q.strip(), case=False, na=False, regex=False)]
+              .groupby("marca")["monto"].sum().sort_values(ascending=False).head(8))
+        for mc in ms.index:
+            nombre["m:" + mc] = f"Marca {mc} · solo Convenio Marco"
+    if not nombre:
         st.warning("Sin coincidencias. Prueba con otra palabra.")
         return
-    nombre = {r.onu: f"{r.generico} · {r.rubro1}" for r in hay.itertuples()}
     elegidos = st.multiselect("Elige uno o más", list(nombre), default=list(nombre)[:1], format_func=nombre.get, key="mt_sel")
     if not vias or not elegidos:
         st.info("Elige al menos una vía y un producto.")
         return
-
-    d = _detalle(tuple(elegidos), ruta.stat().st_mtime)
+    onus = [e for e in elegidos if not e.startswith("m:")]
+    marcas_sel = [e[2:] for e in elegidos if e.startswith("m:")]
+    if marcas_sel:
+        ids = tuple(i for mc in marcas_sel for i in _ids_de_marca(mc, rm.stat().st_mtime))
+        onus_marca = tuple(im.loc[im["marca"].isin(marcas_sel), "onu"].unique())
+        if "cm" not in vias:
+            st.warning("La marca solo se mide en Convenio Marco: se activó esa vía.")
+            vias = vias + ["cm"]
+        d = _detalle(tuple(set(onus_marca) | set(onus)), ruta.stat().st_mtime, ids if not onus else ())
+        d = d[d["via"] == "cm"] if not onus else d
+        st.caption("Con una marca elegida solo se cuenta Convenio Marco: es la única vía donde la marca existe.")
+    else:
+        d = _detalle(tuple(onus), ruta.stat().st_mtime)
     d = d[d["via"].isin(vias)]
     if d.empty:
         st.info("Sin compras de ese producto en las vías elegidas.")
@@ -120,3 +154,13 @@ def seccion_mercado_total() -> None:
     p["Monto"] = p["total"].round(0).astype("Int64")
     st.dataframe(p[["proveedor", "Monto"]].rename(columns={"proveedor": "Proveedor"}), hide_index=True, width="stretch",
                  column_config={"Monto": st.column_config.NumberColumn(format="localized")})
+
+    if marcas_ok and onus:
+        sub = im[im["onu"].isin(onus)].groupby("marca")["monto"].sum().sort_values(ascending=False).head(8)
+        st.markdown("**Marcas (solo Convenio Marco)**")
+        if sub.empty:
+            st.caption("El catálogo no identifica marca para estos productos.")
+        else:
+            tot = sub.sum()
+            st.bar_chart((sub / 1e6).round(0))
+            st.caption(f"Participación dentro de Convenio Marco; la marca líder concentra el {sub.iloc[0] / tot:.0%} de lo que tiene marca.")
