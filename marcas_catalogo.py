@@ -42,6 +42,11 @@ def _valor(fila: dict, *nombres: str) -> str:
     return ""
 
 
+# Columnas candidatas para agrupar los productos de CM en familias (el codigo ONU
+# viene en 0 en CM): se guarda la primera que exista.
+FAMILIA = ("CATEGORÍA", "CATEGORIA", "FAMILIA", "SUBCATEGORÍA", "SUBCATEGORIA", "CLASE", "RUBRO", "LÍNEA", "LINEA", "TIPO DE PRODUCTO")
+
+
 def filas_de_zip(contenido: bytes) -> list[dict]:
     salida = []
     with zipfile.ZipFile(io.BytesIO(contenido)) as z:
@@ -50,7 +55,9 @@ def filas_de_zip(contenido: bytes) -> list[dict]:
                 continue
             with z.open(nombre) as f:
                 texto = io.TextIOWrapper(f, encoding="utf-8-sig", errors="replace")
-                for fila in csv.DictReader(texto):
+                lector = csv.DictReader(texto)
+                print("      columnas:", [str(c).strip() for c in (lector.fieldnames or [])][:40])
+                for fila in lector:
                     idp = _valor(fila, "ID PRODUCTO")
                     if not idp:
                         continue
@@ -58,7 +65,9 @@ def filas_de_zip(contenido: bytes) -> list[dict]:
                     salida.append({"id_producto": idp,
                                    "marca": "" if marca.upper() in SIN_MARCA else marca,
                                    "modelo": _valor(fila, "MODELO")[:120],
-                                   "convenio": _valor(fila, "CONVENIO MARCO")})
+                                   "convenio": _valor(fila, "CONVENIO MARCO"),
+                                   "producto": _valor(fila, "PRODUCTO")[:200],
+                                   "familia": next((v for v in (_valor(fila, n) for n in FAMILIA) if v), "")[:120]})
     return salida
 
 
@@ -80,12 +89,13 @@ def construir() -> pd.DataFrame:
             partes.append(t)
         print(f"   {url.split('/')[-1]}: {len(filas):,} filas")
     if not partes:
-        return pd.DataFrame(columns=["id_producto", "marca", "modelo", "convenio"])
+        return pd.DataFrame(columns=["id_producto", "marca", "modelo", "convenio", "producto", "familia"])
     return pd.concat(partes).sort_values("marca", ascending=False).drop_duplicates("id_producto")
 
 
 if __name__ == "__main__":
-    if SALIDA.exists() and "--forzar" not in sys.argv and time.time() - SALIDA.stat().st_mtime < SEMANA:
+    _viejo = pd.read_parquet(SALIDA, columns=None).columns.tolist() if SALIDA.exists() else []
+    if SALIDA.exists() and "familia" in _viejo and "--forzar" not in sys.argv and time.time() - SALIDA.stat().st_mtime < SEMANA:
         print("marcas_cm.parquet es de esta semana: no se vuelve a bajar.")
         sys.exit(0)
     t = construir()
