@@ -33,7 +33,11 @@ PRIMER_MES = (2025, 1)
 
 COLUMNAS = ["dia", "fecha", "orden", "estado", "unidad", "organismo", "mecanismo", "convenio",
             "convenio_marco", "contacto", "proveedor", "rut_proveedor",
-            "id_producto", "producto", "cantidad", "precio", "total"]
+            "id_producto", "producto", "cantidad", "precio", "total",
+            # 12-10-2026, Mercado total: el producto en el idioma de las seis vias.
+            # onu = codigoProductoONU (numero del rubro), generico = nombre generico
+            # del producto, rubro1/rubro3 = primer y tercer nivel de la clasificacion.
+            "onu", "generico", "rubro1", "rubro3"]
 
 
 def meses_hasta_hoy():
@@ -131,6 +135,10 @@ def filas_de_ordenes(archivo: Path):
                 "cantidad": fila.get("cantidad"),
                 "precio": fila.get("precioNeto"),
                 "total": fila.get("totalLineaNeto"),
+                "onu": str(fila.get("codigoProductoONU") or "").strip(),
+                "generico": str(fila.get("NombreroductoGenerico") or "").strip(),
+                "rubro1": str(fila.get("RubroN1") or "").strip(),
+                "rubro3": str(fila.get("RubroN3") or "").strip(),
             }
 
 

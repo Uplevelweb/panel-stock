@@ -52,6 +52,9 @@ jobs:
         run: |
           python bodeguero.py ${{ github.event.inputs.completo == 'true' && '--completo' || '' }}
 
+      - name: Armar el indice de productos (buscador de Mercado total)
+        run: python indice_productos.py
+
       - name: Guardar lo descargado en el repositorio
         run: |
           git config user.name "Bodeguero"
