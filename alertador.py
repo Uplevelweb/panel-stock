@@ -2451,6 +2451,14 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   body,table,td{{-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}}
+  /* Armonía móvil/tablet: textos corridos justificados, mismo ancho y sangría. */
+  td[style*="line-height:1.45"],td[style*="line-height:1.55"],div[style*="line-height:1.55"]{{text-align:justify;text-justify:inter-word;hyphens:auto}}
+  @media only screen and (min-width:481px) and (max-width:900px){{
+    table[style*="max-width:600px"]{{max-width:600px!important;margin:0 auto}}
+  }}
+  @media only screen and (max-width:480px){{
+    .pad30{{padding-left:14px!important;padding-right:14px!important}}
+  }}
   /* Misma letra que las conversaciones de WhatsApp de Terri. Outlook no
      hereda la fuente de la tabla hacia las celdas: hay que declararla en todas. */
   body,table,td,div,p,span,a,strong,b,small,h1,h2,h3,h4{{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',Arial,sans-serif}}
@@ -2472,7 +2480,7 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     <td style="background:{MARINO};padding:16px 12px 16px;">
       <div style="color:{NARANJO};font-size:13px;font-weight:700;letter-spacing:.02em;">
         Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
-      <div style="color:#ffffff;font-size:22px;font-weight:700;line-height:1.2;margin:4px 0 4px;">{titulo}</div>
+      <div style="color:#ffffff;font-size:18px;font-weight:700;line-height:1.25;margin:4px 0 4px;">{titulo}</div>
       <div style="color:#cbd5e1;font-size:14px;line-height:1.45;">{resumen}</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
              style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
@@ -2947,7 +2955,7 @@ def armar_aviso_estado(suscriptor: dict, tipo: str, proximo: int | None) -> str:
     <td style="background:{MARINO};padding:16px 12px 16px;">
       <div style="color:{NARANJO};font-size:13px;font-weight:700;letter-spacing:.02em;">
         Territorio · Sistema Inteligente de Alerta - Mercado Público</div>
-      <div style="color:#ffffff;font-size:22px;font-weight:700;line-height:1.2;margin:4px 0 4px;">{titulo}</div>
+      <div style="color:#ffffff;font-size:18px;font-weight:700;line-height:1.25;margin:4px 0 4px;">{titulo}</div>
       <div style="color:#cbd5e1;font-size:14px;line-height:1.45;">{resumen}</div>
       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#1a3d6b;border-radius:10px;margin-top:10px;">
         <tr>
@@ -3420,9 +3428,11 @@ def main():
         # Prueba gratis vencida: UNA sola oportunidad de muestra (06-10-2026).
         recortada_de = None
         if not args.bienvenidas and prueba_vencida(suscriptor, prueba.get(suscriptor.get("email"))):
-            recortada_de = len(elegidas)
-            elegidas = elegidas[:1]
-            print(f"   prueba vencida: se manda 1 de {recortada_de}")
+            # PAUSA (13-10-2026): quien terminó su prueba gratis no recibe correo
+            # hasta configurar el flujo de renovación. Para reactivar el aviso
+            # con muestra, borrar este bloque `continue`.
+            print("   prueba vencida: envío en pausa, no se manda.")
+            continue
 
         # Las tres puertas del mes. Falla abierto: si no se pueden calcular,
         # el correo sale igual, solo que sin ese bloque.
