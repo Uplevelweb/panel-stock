@@ -1,0 +1,32 @@
+name: rubros
+on:
+  workflow_run:
+    workflows: ["Bodega Mercado Público", "Bodega de Licitaciones"]
+    types: [completed]
+  workflow_dispatch:
+concurrency:
+  group: rubros
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  cifras:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            actualizar_rubros.py
+            bodega/licitaciones
+            bodega/detalle
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pandas pyarrow
+      - run: python actualizar_rubros.py --bodega bodega --salida bodega/rubros.json
+      - name: Subir rubros.json solo si cambió
+        run: |
+          git config user.name  "territorio-bot"
+          git config user.email "contacto@uplevelweb.art"
+          git add bodega/rubros.json
+          git diff --cached --quiet || (git commit -m "rubros: cifras del día" && git push)
