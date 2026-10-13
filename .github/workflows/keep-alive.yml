@@ -1,18 +1,22 @@
-name: Keep Streamlit app awake
-
+name: Mantener panel despierto
+# Sin `schedule:` a propósito: lo dispara el reloj de Supabase (pg_cron),
+# que sí es puntual. Un curl no sirve: Streamlit exige una sesión real.
 on:
-  schedule:
-    - cron: '*/30 * * * *'
-  workflow_dispatch: {}
-
+  workflow_dispatch:
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
 jobs:
-  ping:
+  despertar:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
-      - name: Ping panel-stock-uplevel.streamlit.app
-        run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 https://panel-stock-uplevel.streamlit.app/)
-          echo "HTTP status: $code"
-          if [ "$code" != "200" ]; then
-            echo "::warning::Streamlit app did not return 200 (got $code)"
-          fi
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: mantener_despierta.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - run: python mantener_despierta.py
