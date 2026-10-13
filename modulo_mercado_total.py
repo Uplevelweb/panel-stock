@@ -16,9 +16,9 @@ import streamlit as st
 
 AQUI = Path(__file__).parent
 BODEGA = AQUI / "bodega"
-VIAS = {"cm": "Convenio Marco", "li": "Licitaciones", "ag": "Compras ágiles", "td": "Trato directo"}
-MECA = {"CM": "cm", "SE": "li", "LP": "li", "LQ": "li", "LE": "li", "AG": "ag", "TD": "td", "CD": "td", "C1": "td"}
-COLOR = {"cm": "🟢", "li": "🟠", "ag": "🔵", "td": "🟣"}
+VIAS = {"cm": "Convenio Marco", "li": "Licitaciones", "ag": "Compras ágiles", "td": "Trato directo", "cc": "Compra coordinada"}
+MECA = {"CM": "cm", "SE": "li", "LP": "li", "LQ": "li", "LE": "li", "AG": "ag", "TD": "td", "CD": "td", "C1": "td", "CC": "cc"}
+COLOR = {"cm": "🟢", "li": "🟠", "ag": "🔵", "td": "🟣", "cc": "🟡"}
 
 
 def _mm(x: float) -> str:
