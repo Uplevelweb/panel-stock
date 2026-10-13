@@ -63,7 +63,7 @@ MODULOS = {
     # igual que el resto de los modulos: asi cualquiera que entre ve que la
     # herramienta existe, aunque todavia no la pueda usar.
     "mercado_publico": {
-        "nombre": "Comportamiento Mercado Público",
+        "nombre": "Estudio Mercado Público",
         "que_es": "Panorama de precios y oferta vigente en tu Convenio Marco: "
                   "qué se está vendiendo, a qué precio y dónde estás parado.",
         "extra": True,
