@@ -2,14 +2,14 @@
  "actualizado": "2026-10-13",
  "desde": "2026-01-01",
  "hasta": "2026-10-02",
- "total_lic": 68681,
+ "total_lic": 68690,
  "total_ag": 509655,
  "rubros_n": 58,
  "rubros": [
   {
    "rubro": "Insumos y equipamiento médico",
    "palabra": "insumos médicos",
-   "lic": 9254,
+   "lic": 9255,
    "ag": 89214
   },
   {
@@ -21,13 +21,13 @@
   {
    "rubro": "Servicios profesionales y consultorías",
    "palabra": "consultoría",
-   "lic": 7103,
+   "lic": 7104,
    "ag": 14927
   },
   {
    "rubro": "Medicamentos y farmacéuticos",
    "palabra": "medicamentos",
-   "lic": 3683,
+   "lic": 3684,
    "ag": 30705
   },
   {
@@ -69,7 +69,7 @@
   {
    "rubro": "Vehículos y equipamiento",
    "palabra": "vehículos",
-   "lic": 1932,
+   "lic": 1933,
    "ag": 12360
   },
   {
