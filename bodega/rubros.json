@@ -1,82 +1,82 @@
 {
  "actualizado": "2026-10-14",
  "desde": "2026-01-01",
- "hasta": "2026-10-02",
- "total_lic": 68690,
- "total_ag": 509862,
+ "hasta": "2026-10-08",
+ "total_lic": 69011,
+ "total_ag": 522829,
  "rubros_n": 58,
  "rubros": [
   {
    "rubro": "Insumos y equipamiento médico",
    "palabra": "insumos médicos",
-   "lic": 9255,
-   "ag": 89263
+   "lic": 9292,
+   "ag": 90971
   },
   {
    "rubro": "Construcción y mantenimiento",
    "palabra": "construcción",
-   "lic": 7318,
-   "ag": 12244
+   "lic": 7335,
+   "ag": 12506
   },
   {
    "rubro": "Servicios profesionales y consultorías",
    "palabra": "consultoría",
-   "lic": 7104,
-   "ag": 14927
+   "lic": 7156,
+   "ag": 15426
   },
   {
    "rubro": "Medicamentos y farmacéuticos",
    "palabra": "medicamentos",
-   "lic": 3684,
-   "ag": 30720
+   "lic": 3695,
+   "ag": 31364
   },
   {
    "rubro": "Tecnología y telecomunicaciones",
    "palabra": "tecnología",
-   "lic": 3495,
-   "ag": 23972
+   "lic": 3511,
+   "ag": 24629
   },
   {
    "rubro": "Transporte, almacenaje y correo",
    "palabra": "transporte",
-   "lic": 3447,
-   "ag": 15306
+   "lic": 3461,
+   "ag": 15811
   },
   {
    "rubro": "Materiales para obras",
    "palabra": "materiales de construcción",
-   "lic": 3104,
-   "ag": 23363
+   "lic": 3131,
+   "ag": 23977
   },
   {
    "rubro": "Equipamiento para laboratorios",
    "palabra": "laboratorio",
-   "lic": 3087,
-   "ag": 27250
+   "lic": 3102,
+   "ag": 27869
   },
   {
    "rubro": "Salud, servicios sanitarios y alimentación",
    "palabra": "alimentación",
-   "lic": 2760,
-   "ag": 8719
-  },
-  {
-   "rubro": "Limpieza industrial",
-   "palabra": "limpieza",
-   "lic": 1941,
-   "ag": 2830
+   "lic": 2769,
+   "ag": 8858
   },
   {
    "rubro": "Vehículos y equipamiento",
    "palabra": "vehículos",
-   "lic": 1933,
-   "ag": 12365
+   "lic": 1946,
+   "ag": 12677
+  },
+  {
+   "rubro": "Limpieza industrial",
+   "palabra": "limpieza",
+   "lic": 1945,
+   "ag": 2898
   },
   {
    "rubro": "Ropa y aseo personal",
    "palabra": "ropa",
-   "lic": 1828,
-   "ag": 19315
+   "lic": 1834,
+   "ag": 19878
   }
  ]
 }
