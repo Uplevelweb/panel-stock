@@ -3019,7 +3019,7 @@ def whatsapp_elegible(suscriptor: dict) -> bool:
         return False
 
     plan = (suscriptor.get("plan") or "").lower()
-    if plan in ("plus", "premium") and suscriptor.get("al_dia") is not False:
+    if plan in ("plus", "licitaciones", "premium") and suscriptor.get("al_dia") is not False:
         return True
 
     vence = suscriptor.get("prueba_vence")
