@@ -1,82 +1,82 @@
 {
- "actualizado": "2026-10-14",
+ "actualizado": "2026-10-15",
  "desde": "2026-01-01",
  "hasta": "2026-10-08",
  "total_lic": 69011,
- "total_ag": 522829,
+ "total_ag": 523757,
  "rubros_n": 58,
  "rubros": [
   {
    "rubro": "Insumos y equipamiento médico",
    "palabra": "insumos médicos",
    "lic": 9292,
-   "ag": 90971
+   "ag": 91117
   },
   {
    "rubro": "Construcción y mantenimiento",
    "palabra": "construcción",
    "lic": 7335,
-   "ag": 12506
+   "ag": 12526
   },
   {
    "rubro": "Servicios profesionales y consultorías",
    "palabra": "consultoría",
    "lic": 7156,
-   "ag": 15426
+   "ag": 15448
   },
   {
    "rubro": "Medicamentos y farmacéuticos",
    "palabra": "medicamentos",
    "lic": 3695,
-   "ag": 31364
+   "ag": 31440
   },
   {
    "rubro": "Tecnología y telecomunicaciones",
    "palabra": "tecnología",
    "lic": 3511,
-   "ag": 24629
+   "ag": 24678
   },
   {
    "rubro": "Transporte, almacenaje y correo",
    "palabra": "transporte",
    "lic": 3461,
-   "ag": 15811
+   "ag": 15836
   },
   {
    "rubro": "Materiales para obras",
    "palabra": "materiales de construcción",
    "lic": 3131,
-   "ag": 23977
+   "ag": 24023
   },
   {
    "rubro": "Equipamiento para laboratorios",
    "palabra": "laboratorio",
    "lic": 3102,
-   "ag": 27869
+   "ag": 27926
   },
   {
    "rubro": "Salud, servicios sanitarios y alimentación",
    "palabra": "alimentación",
    "lic": 2769,
-   "ag": 8858
+   "ag": 8878
   },
   {
    "rubro": "Vehículos y equipamiento",
    "palabra": "vehículos",
    "lic": 1946,
-   "ag": 12677
+   "ag": 12699
   },
   {
    "rubro": "Limpieza industrial",
    "palabra": "limpieza",
    "lic": 1945,
-   "ag": 2898
+   "ag": 2903
   },
   {
    "rubro": "Ropa y aseo personal",
    "palabra": "ropa",
    "lic": 1834,
-   "ag": 19878
+   "ag": 19912
   }
  ]
 }
