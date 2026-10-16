@@ -3798,11 +3798,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             if not rango_listo:
                 st.caption("Elige también la fecha de término.")
             elif usar_bodega:
-                cuando = estado_bodega().get("actualizado") or ""
-                sello = f" · datos al {cuando[8:10]}-{cuando[5:7]} a las {cuando[11:16]}" if cuando else ""
-                st.caption(
-                    f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}** · "
-                    f"**está todo en la bodega**{sello}.")
+                pass  # 16-10-2026: sin texto cuando todo esta en la bodega
             elif elegidas:
                 falta = del_rango - en_bodega
                 guardados = (f"La bodega tiene {en_bodega} de estos {del_rango} días"
@@ -3930,11 +3926,6 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     cuantas = len(unidades_c)
     quienes = ", ".join(unidades_c) if cuantas <= 2 else f"**{cuantas} unidades**"
     if resumen.get("desde_real") and resumen.get("hasta_real"):
-        origen = ("**leído de la bodega**, sin gastar consultas. "
-                  if resumen.get("de_bodega") else "")
-        st.caption(
-            f"{quienes} · {origen}{resumen.get('ordenes', 0)} órdenes entre "
-            f"**{resumen['desde_real']:%d-%m-%Y}** y **{resumen['hasta_real']:%d-%m-%Y}**.")
         if cuantas > 2:
             with st.expander(f"Ver las {cuantas} unidades de esta consulta"):
                 st.write(" · ".join(unidades_c))
@@ -4021,20 +4012,6 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # MI PRECIO se apaga por su cuenta: sale del catálogo del Drive, no de las
     # ofertas de la semana, así que puede faltar sin que falten las otras dos.
     sin_publicado = ["MI PRECIO"] if productos["MI PRECIO"].isna().all() else []
-
-    st.caption(
-        "Los precios son los que **pagó esta institución** en el período consultado, no "
-        "precios de mercado. " + (
-            "Ninguno de estos productos está en tus ofertas de la semana, así que "
-            "**MI OFERTA** y **DIF%** no se muestran. "
-            if sin_ofertas else
-            "**MI OFERTA** sale de tu catálogo y queda en blanco si ese ID "
-            "no tiene oferta. ") +
-        ("**MI PRECIO** es el tuyo publicado en Convenio Marco: al lado de P.MIN, "
-         "P. PROM y P.MAX se ve de una si entra o no. " if not sin_publicado else "") +
-        "Selecciona los productos para el PDF: clic en una fila, y con "
-        "**Shift** o arrastrando marcas varias de corrido. **Ctrl** para sumar sueltas. "
-        "En amarillo, las oportunidades que conviene aprovechar.")
 
     configuracion = {
         "PRODUCTO": st.column_config.TextColumn(width="large"),
