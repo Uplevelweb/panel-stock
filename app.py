@@ -1633,7 +1633,8 @@ def _meses_del_rango(desde: date, hasta: date) -> list[str]:
 
 @st.cache_data(max_entries=2, show_spinner=False)
 def leer_bodega(capa: str, meses: tuple[str, ...], sello: str,
-                codigos: tuple[str, ...] = ()) -> pd.DataFrame:
+                codigos: tuple[str, ...] = (),
+                columnas: tuple[str, ...] = ()) -> pd.DataFrame:
     """Lee los archivos mensuales de una capa. `sello` invalida la cache.
 
     ⚠️ SE FILTRA POR UNIDAD AL LEER, NO DESPUES. Esto tumbó el panel el
@@ -1662,13 +1663,13 @@ def leer_bodega(capa: str, meses: tuple[str, ...], sello: str,
             continue
         if buscadas:
             try:
-                trozo = filas_de(archivo, "unidad", buscadas)   # poca memoria
+                trozo = filas_de(archivo, "unidad", buscadas, columnas)   # poca memoria
             except Exception:
                 trozo = pd.read_parquet(archivo)
                 if "unidad" in trozo.columns:
                     trozo = trozo[trozo["unidad"].isin(buscadas)]
         else:
-            trozo = pd.read_parquet(archivo)
+            trozo = pd.read_parquet(archivo, columns=list(columnas) or None)
         if not trozo.empty:
             partes.append(trozo.copy())
         del trozo
@@ -1791,7 +1792,8 @@ def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
     una tabla que ya salio. Solo se puede leyendo la bodega: en una consulta en
     vivo el convenio no viene.
     """
-    detalle = leer_bodega("detalle", meses, sello, codigos)
+    detalle = leer_bodega("detalle", meses, sello, codigos,
+                          ("dia", "unidad", "convenio_marco"))
     if detalle.empty or "convenio_marco" not in detalle.columns:
         return []
     dias = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
@@ -1808,12 +1810,19 @@ def convenios_del_periodo(codigos: tuple[str, ...], meses: tuple[str, ...],
     return sorted({nombres.get(c, c) or SIN_CONVENIO for c in reales})
 
 
+# Solo lo que `compras_desde_bodega` usa: antes se traian 21 columnas (onu,
+# generico, rubro1, rubro3, organismo...) que nunca se miraban (16-10-2026).
+COLUMNAS_COMPRAS_BODEGA = ("dia", "fecha", "orden", "estado", "unidad", "id_producto",
+                           "producto", "cantidad", "precio", "total", "proveedor",
+                           "rut_proveedor", "convenio_marco")
+
+
 def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
                          hasta: date) -> pd.DataFrame:
     """Las compras guardadas, en el mismo formato que devuelve la consulta viva."""
     codigos = tuple(unidades["codigo_unidad"])
     detalle = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
-                          sello_bodega(), codigos)
+                          sello_bodega(), codigos, COLUMNAS_COMPRAS_BODEGA)
     if detalle.empty:
         return pd.DataFrame(columns=COLUMNAS_MP)
 
@@ -1827,7 +1836,8 @@ def compras_desde_bodega(unidades: pd.DataFrame, desde: date,
     dias_barridos = pd.to_datetime(detalle["dia"], errors="coerce").dt.date
     dentro = dias_barridos.between(desde, hasta)
     suyas = detalle["unidad"].isin(set(codigos))
-    elegidas = detalle[dentro.values & suyas.values].copy()
+    elegidas = detalle[dentro.values & suyas.values]
+    del detalle, dias_barridos, dentro, suyas   # soltar memoria apenas se puede
     if elegidas.empty:
         return pd.DataFrame(columns=COLUMNAS_MP)
 
@@ -3867,7 +3877,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 # Ya viene filtrado por unidad desde `leer_bodega`.
                 crudo = leer_bodega("detalle", tuple(_meses_del_rango(desde, hasta)),
                                     sello_bodega(),
-                                    tuple(elegidas_df["codigo_unidad"]))
+                                    tuple(elegidas_df["codigo_unidad"]),
+                                    ("unidad", "contacto"))
                 resumen = resumen_bodega(tabla, desde, hasta, crudo)
         else:
             barra = st.progress(0.0, text="Consultando Mercado Público...")
@@ -4096,33 +4107,35 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     if es_superadmin:  # 16-10-2026: solo el superadmin
         with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "
                          f"({len(vista)} líneas)"):
-            st.dataframe(
-                vista,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
-                                                         help="Fecha de creación de la orden"),
-                    "PRODUCTO": st.column_config.TextColumn(width="large"),
-                    "UNIDAD": st.column_config.TextColumn(width="medium"),
-                    "ORGANISMO": st.column_config.TextColumn(width="medium"),
-                    "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
-                                                             help="Quién ganó la venta"),
-                    "CANTIDAD": st.column_config.NumberColumn(format="localized"),
-                    "PRECIO": st.column_config.NumberColumn(format="localized",
-                                                            help="Precio unitario neto pagado"),
-                    "TOTAL": st.column_config.NumberColumn(format="localized",
-                                                           help="Total de la línea, en pesos"),
-                },
-                key="mp_tabla_ordenes",
-            )
-            st.download_button(
-                "⬇️ Descargar Excel de las órdenes",
-                data=a_excel(vista, nombre_hoja="Órdenes"),
-                file_name=f"MercadoPublico-ordenes-{nombre_base}-{desde_c:%d%m%Y}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="mp_xlsx_ordenes",
-            )
+            # 16-10-2026: con 300 mil lineas dibujar esto de oficio tumbaba la app (2,6 GB).
+            if st.checkbox("Cargar el detalle (pesado)", key="mp_ver_ordenes"):
+                st.dataframe(
+                    vista,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
+                                                             help="Fecha de creación de la orden"),
+                        "PRODUCTO": st.column_config.TextColumn(width="large"),
+                        "UNIDAD": st.column_config.TextColumn(width="medium"),
+                        "ORGANISMO": st.column_config.TextColumn(width="medium"),
+                        "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
+                                                                 help="Quién ganó la venta"),
+                        "CANTIDAD": st.column_config.NumberColumn(format="localized"),
+                        "PRECIO": st.column_config.NumberColumn(format="localized",
+                                                                help="Precio unitario neto pagado"),
+                        "TOTAL": st.column_config.NumberColumn(format="localized",
+                                                               help="Total de la línea, en pesos"),
+                    },
+                    key="mp_tabla_ordenes",
+                )
+                st.download_button(
+                    "⬇️ Descargar Excel de las órdenes",
+                    data=lambda: a_excel(vista, nombre_hoja="Órdenes"),  # se arma al apretar, no al dibujar
+                    file_name=f"MercadoPublico-ordenes-{nombre_base}-{desde_c:%d%m%Y}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="mp_xlsx_ordenes",
+                )
 
 
 # ===========================================================================

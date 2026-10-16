@@ -14,8 +14,8 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 
-def filas_de(archivo, columna: str, valores) -> pd.DataFrame:
-    """Filas de `archivo` cuya `columna` esta en `valores`, con todas sus columnas."""
+def filas_de(archivo, columna: str, valores, columnas=None) -> pd.DataFrame:
+    """Filas de `archivo` cuya `columna` esta en `valores`, con las `columnas` pedidas (todas si no se dice)."""
     pf = pq.ParquetFile(archivo)
     esquema = pf.schema_arrow
     if columna not in esquema.names:
@@ -23,7 +23,9 @@ def filas_de(archivo, columna: str, valores) -> pd.DataFrame:
     col = pf.read(columns=[columna]).column(0)
     idx = pc.indices_nonzero(pc.is_in(col, value_set=pa.array(list(valores), type=col.type)))
     del col
-    return con_indices(pf, esquema, idx)
+    if columnas:
+        columnas = [c for c in columnas if c in esquema.names]
+    return con_indices(pf, esquema, idx, columnas)
 
 
 def con_indices(pf: pq.ParquetFile, esquema, idx, columnas=None) -> pd.DataFrame:
