@@ -34,6 +34,7 @@ ESTILO = """<style>
 [data-testid="stButtonGroup"] button{font-weight:700!important;min-height:44px;background:#fff!important;color:#5b6b82!important;border:2px solid #cfd8e6!important}
 [data-testid="stButtonGroup"] button[aria-pressed="true"]{background:#0c2c57!important;color:#fff!important;border-color:#0c2c57!important}
 .mt-b{margin:0 0 14px}
+.mt-cat{font-size:.74rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f18c3f;margin:10px 0 2px}
 .mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:5px;line-height:1.25}
 .mt-b-et{font-weight:700;color:#0c2c57;overflow-wrap:anywhere}
 .mt-b-sub{display:block;font-weight:500;font-size:.78em;color:#5b6b82}
@@ -136,6 +137,30 @@ def _ids_de_marca(marca: str, sello: float) -> tuple[str, ...]:
     return tuple(m.loc[m["marca"] == marca, "id_producto"].astype(str))
 
 
+# 16-10-2026, pedido de Serling: la busqueda debe ir arrojando sugerencias a
+# medida que se escribe, sin apretar Enter. Streamlit solo envia el texto al
+# apretar Enter, asi que este script (una sola vez por pagina, delegado en el
+# documento) manda ese Enter solo, 300 ms despues de la ultima letra. El Enter
+# a mano sigue funcionando igual.
+BUSQUEDA_EN_VIVO = """<script>
+(function(){
+  if (window.__mtEnVivo) return; window.__mtEnVivo = true;
+  var t = null;
+  document.addEventListener('input', function(e){
+    var el = e.target;
+    if (!el || el.tagName !== 'INPUT' || el.getAttribute('aria-label') !== 'Producto') return;
+    clearTimeout(t);
+    t = setTimeout(function(){
+      var ev = {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true, cancelable:true};
+      el.dispatchEvent(new KeyboardEvent('keydown', ev));
+      el.dispatchEvent(new KeyboardEvent('keyup', ev));
+    }, 300);
+  }, true);
+})();
+</script>"""
+
+
+@st.fragment
 def seccion_mercado_total() -> None:
     ruta = BODEGA / "indice_productos.parquet"
     if not ruta.exists():
@@ -147,10 +172,14 @@ def seccion_mercado_total() -> None:
     st.markdown(ESTILO, unsafe_allow_html=True)
     vias = st.pills("Vías", list(VIAS), selection_mode="multi", default=["cm", "li", "ag"],
                     format_func=VIAS.get, key="mt_vias", label_visibility="collapsed") or []
-    st.markdown("**2 · Busca tu producto** (escribe 3 letras)")
+    st.markdown("**2 · Busca tu producto** (las sugerencias aparecen mientras escribes)")
     q = st.text_input("Producto", key="mt_q", placeholder="Ej: ace, arr, pap…", label_visibility="collapsed")
+    try:
+        st.html(BUSQUEDA_EN_VIVO, unsafe_allow_javascript=True)
+    except TypeError:  # Streamlit antiguo sin ese parametro: queda con Enter
+        pass
     if len(q.strip()) < 3:
-        st.caption("Escribe al menos 3 letras. La marca solo se mide en Convenio Marco y se suma en la siguiente versión.")
+        st.caption("Escribe al menos 3 letras y aparecen las sugerencias. La marca solo se mide en Convenio Marco.")
         return
     hay = indice[indice["generico"].str.contains(q.strip(), case=False, na=False, regex=False)]
     # Primero los que tienen una PALABRA que empieza con lo escrito («ace» ->
@@ -158,7 +187,8 @@ def seccion_mercado_total() -> None:
     # grupo, mantiene el orden por monto del indice.
     ql = q.strip().lower()
     empieza = hay["generico"].str.lower().apply(lambda g: any(p.startswith(ql) for p in g.replace(",", " ").split()))
-    hay = pd.concat([hay[empieza], hay[~empieza]]).head(30)
+    inicia = hay["generico"].str.lower().str.startswith(ql)
+    hay = pd.concat([hay[inicia], hay[empieza & ~inicia], hay[~empieza]]).head(30)
     nombre = {r.onu: f"{r.generico} · {r.rubro1}" for r in hay.itertuples()}
     # La MARCA solo existe en Convenio Marco (catalogo). Se busca igual: elegir
     # una marca deja la consulta solo en esa via.
@@ -173,16 +203,41 @@ def seccion_mercado_total() -> None:
     if not nombre:
         st.warning("Sin coincidencias. Prueba con otra palabra.")
         return
-    st.caption("Toca para marcar uno o más. Desliza la lista para ver más.")
-    primero = next(iter(nombre))
+    # Sugerencias agrupadas por CATEGORIA (rubro): la lista se va armando sola
+    # a medida que se escribe y cada producto cuelga de su categoria.
+    st.caption("Toca el producto que quieres analizar (puedes marcar varios). Desliza la lista para ver más.")
+    grupos: dict[str, list[tuple[str, str]]] = {}
+    vistos: set = set()
+    for r in hay.itertuples():
+        if r.onu in vistos:
+            continue
+        vistos.add(r.onu)
+        grupos.setdefault(r.rubro1, []).append((r.onu, r.generico))
     elegidos = []
     with st.container(height=300, border=True, key="mt_rueda"):
-        for k, t in nombre.items():
-            if st.checkbox(t, value=(k == primero), key=f"mt_sel_{k}"):
-                elegidos.append(k)
-    if not vias or not elegidos:
-        st.info("Elige al menos una vía y un producto.")
+        for k in nombre:
+            if k.startswith("m:"):
+                grupos.setdefault("Marcas (solo Convenio Marco)", []).append((k, nombre[k].replace("Marca ", "").replace(" · solo Convenio Marco", "")))
+        for rubro, items in grupos.items():
+            st.markdown(f'<div class="mt-cat">{rubro}</div>', unsafe_allow_html=True)
+            for k, t in items:
+                if st.checkbox(t, value=False, key=f"mt_sel_{k}"):
+                    elegidos.append(k)
+    if not vias:
+        st.info("Elige al menos una vía.")
         return
+    if not elegidos:
+        st.info("Marca arriba el producto que quieres analizar.")
+        return
+    # El resultado vive en un hueco propio que se VACIA apenas cambia la
+    # seleccion: antes, mientras «Leyendo las compras…», seguian a la vista (en
+    # gris) las cifras de la busqueda anterior y parecian las de esta.
+    zona = st.empty()
+    with zona.container():
+        _resultado(vias, elegidos, ruta, rm, marcas_ok, im if marcas_ok else None)
+
+
+def _resultado(vias, elegidos, ruta, rm, marcas_ok, im) -> None:
     onus = [e for e in elegidos if not e.startswith("m:")]
     marcas_sel = [e[2:] for e in elegidos if e.startswith("m:")]
     if marcas_sel:
