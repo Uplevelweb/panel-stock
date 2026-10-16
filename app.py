@@ -3933,12 +3933,6 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # innecesario»). Con una o dos se escriben, que ahí no estorban.
     from modulo_cuentas import es_soporte
     es_superadmin = es_soporte(st.session_state.get("yo", {}) or {})  # 16-10-2026: solo Uplevel ve lo tecnico
-    cuantas = len(unidades_c)
-    quienes = ", ".join(unidades_c) if cuantas <= 2 else f"**{cuantas} unidades**"
-    if resumen.get("desde_real") and resumen.get("hasta_real"):
-        if cuantas > 2 and es_superadmin:
-            with st.expander(f"Ver las {cuantas} unidades de esta consulta"):
-                st.write(" · ".join(unidades_c))
 
     # --- La tabla de trabajo: una fila por producto --------------------------
     # Los dias que dice el comentario son los que de verdad cubren las ordenes

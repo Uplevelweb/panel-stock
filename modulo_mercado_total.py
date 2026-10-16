@@ -35,15 +35,16 @@ ESTILO = """<style>
 [data-testid="stButtonGroup"] button[aria-pressed="true"]{background:#0c2c57!important;color:#fff!important;border-color:#0c2c57!important}
 .mt-b{margin:0 0 9px}
 .mt-cat{font-size:.74rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f18c3f;margin:10px 0 2px}
-/* 16-10-2026 UNIFORMIDAD: mismas barras que la demo de la landing y el correo
-   (riel #e6ebf0 de 5 px, punta de 3 px, relleno naranja, letra .82rem). */
-.mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px;line-height:1.3;font-size:.82rem}
-.mt-b-et{font-weight:600;color:#2c3e50;overflow-wrap:anywhere}
-.mt-b-sub{display:block;font-weight:400;font-size:.78rem;color:#6b7c8f}
-.mt-b-v{font-weight:700;color:#2c3e50;white-space:nowrap}
-.mt-b-v small{font-size:.78rem;font-weight:500;color:#6b7c8f;margin-left:6px}
+/* 16-10-2026 UNIFORMIDAD: IGUAL que la demo de la landing (.pn-b): riel #e6ebf0 de 5 px,
+   barras marino y la primera naranja, etiqueta .88rem 700, monto 800. */
+.mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:4px;line-height:1.25}
+.mt-b-et{font-weight:700;color:#0c2c57;font-size:.88rem;overflow-wrap:anywhere}
+.mt-b-sub{display:block;font-weight:500;font-size:.76rem;color:#6b7c8f}
+.mt-b-v{font-weight:800;color:#0c2c57;font-size:.88rem;white-space:nowrap}
+.mt-b-v small{font-size:.74rem;font-weight:500;color:#6b7c8f;margin-left:5px}
 .mt-b-pista{height:5px;border-radius:3px;background:#e6ebf0;overflow:hidden}
-.mt-b-barra{height:100%;border-radius:3px;background:#f18c3f}
+.mt-b-barra{height:100%;border-radius:3px;background:#0c2c57}
+.mt-b.top .mt-b-barra{background:#f18c3f}
 .st-key-mt_rueda [data-testid="stCheckbox"]{min-height:52px;display:flex;align-items:center;padding:4px 6px;
   border-bottom:1px solid #e3eaf3;scroll-snap-align:center}
 .st-key-mt_rueda [data-testid="stCheckbox"]:has(input:checked){background:#fff3e8;border-radius:10px}
