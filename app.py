@@ -47,6 +47,7 @@ from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 from fpdf import FPDF
+from lectura_parquet import filas_de
 from fpdf.fonts import FontFace
 
 # ===========================================================================
@@ -1659,9 +1660,15 @@ def leer_bodega(capa: str, meses: tuple[str, ...], sello: str,
         archivo = RUTA_BODEGA / capa / f"{mes}.parquet"
         if not archivo.exists():
             continue
-        trozo = pd.read_parquet(archivo)
-        if buscadas and "unidad" in trozo.columns:
-            trozo = trozo[trozo["unidad"].isin(buscadas)]
+        if buscadas:
+            try:
+                trozo = filas_de(archivo, "unidad", buscadas)   # poca memoria
+            except Exception:
+                trozo = pd.read_parquet(archivo)
+                if "unidad" in trozo.columns:
+                    trozo = trozo[trozo["unidad"].isin(buscadas)]
+        else:
+            trozo = pd.read_parquet(archivo)
         if not trozo.empty:
             partes.append(trozo.copy())
         del trozo
@@ -3517,9 +3524,9 @@ ESTILO_INSTITUCION = """<style>
 .st-key-mp_filtros [data-testid="stWidgetLabel"] p,.st-key-mp_filtros label p{font-size:.74rem!important;font-weight:700!important;color:#5b6b82!important;margin:0 0 1px}
 .st-key-mp_filtros [data-baseweb="select"] input,.st-key-mp_filtros [data-baseweb="select"] div[value]{font-size:.85rem}
 .st-key-mp_filtros [data-baseweb="select"]>div{min-height:38px}
-.st-key-mp_filtros [data-testid="stMultiSelect"] span[data-tag],.st-key-mp_filtros span[data-tag]{background:#0c2c57!important;background-color:#0c2c57!important;background-image:none!important;color:#fff!important;border-radius:999px!important;min-height:30px;padding:2px 6px 2px 12px!important;font-weight:700;font-size:.82rem;border:0!important;box-shadow:none!important}
+.st-key-mp_filtros [data-testid="stMultiSelect"] span[data-tag],.st-key-mp_filtros span[data-tag]{background:#0c2c57!important;background-color:#0c2c57!important;background-image:none!important;color:#fff!important;border-radius:999px!important;min-height:26px;padding:1px 6px 1px 11px!important;font-weight:400!important;font-size:.72rem!important;border:0!important;box-shadow:none!important}
 .st-key-mp_filtros span[data-tag]::before,.st-key-mp_filtros span[data-tag]::after{display:none!important}
-.st-key-mp_filtros span[data-tag] *{color:#fff!important;fill:#fff!important;background:transparent!important}
+.st-key-mp_filtros span[data-tag] *{font-weight:400!important;font-size:.72rem!important;color:#fff!important;fill:#fff!important;background:transparent!important}
 .st-key-mp_filtros [data-testid="stRadio"] label p{font-size:.82rem!important;font-weight:600!important;color:#0c2c57!important}
 .st-key-mp_filtros [data-testid="stCaptionContainer"]{font-size:.8rem}
 .st-key-mp_consultar button{background:#E8944A!important;border:0!important;color:#0b1c30!important;border-radius:999px!important;min-height:46px;font-weight:800;box-shadow:0 6px 16px rgba(232,148,74,.32)}

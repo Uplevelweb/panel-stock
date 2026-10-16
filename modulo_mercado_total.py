@@ -33,16 +33,17 @@ def _mm(x: float) -> str:
 ESTILO = """<style>
 [data-testid="stButtonGroup"] button{font-weight:700!important;min-height:44px;background:#fff!important;color:#5b6b82!important;border:2px solid #cfd8e6!important}
 [data-testid="stButtonGroup"] button[aria-pressed="true"]{background:#0c2c57!important;color:#fff!important;border-color:#0c2c57!important}
-.mt-b{margin:0 0 14px}
+.mt-b{margin:0 0 9px}
 .mt-cat{font-size:.74rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#f18c3f;margin:10px 0 2px}
-.mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:5px;line-height:1.25}
-.mt-b-et{font-weight:700;color:#0c2c57;overflow-wrap:anywhere}
-.mt-b-sub{display:block;font-weight:500;font-size:.78em;color:#5b6b82}
-.mt-b-v{font-weight:800;color:#0c2c57;white-space:nowrap}
-.mt-b-v small{font-size:.78em;font-weight:700;color:#5b6b82;margin-left:6px}
-.mt-b-pista{height:14px;border-radius:99px;background:#e3eaf3;overflow:hidden}
-.mt-b-barra{height:100%;border-radius:99px;background:#0c2c57}
-.mt-b.top .mt-b-barra{background:#f18c3f}
+/* 16-10-2026 UNIFORMIDAD: mismas barras que la demo de la landing y el correo
+   (riel #e6ebf0 de 5 px, punta de 3 px, relleno naranja, letra .82rem). */
+.mt-b-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:3px;line-height:1.3;font-size:.82rem}
+.mt-b-et{font-weight:600;color:#2c3e50;overflow-wrap:anywhere}
+.mt-b-sub{display:block;font-weight:400;font-size:.78rem;color:#6b7c8f}
+.mt-b-v{font-weight:700;color:#2c3e50;white-space:nowrap}
+.mt-b-v small{font-size:.78rem;font-weight:500;color:#6b7c8f;margin-left:6px}
+.mt-b-pista{height:5px;border-radius:3px;background:#e6ebf0;overflow:hidden}
+.mt-b-barra{height:100%;border-radius:3px;background:#f18c3f}
 .st-key-mt_rueda [data-testid="stCheckbox"]{min-height:52px;display:flex;align-items:center;padding:4px 6px;
   border-bottom:1px solid #e3eaf3;scroll-snap-align:center}
 .st-key-mt_rueda [data-testid="stCheckbox"]:has(input:checked){background:#fff3e8;border-radius:10px}
@@ -94,28 +95,42 @@ def _detalle(onus: tuple[str, ...], sello: float, ids: tuple[str, ...] = ()) -> 
         ids_cm |= {i for i, c in _mapa(sello).items() if c in conceptos}
     ids_cm = tuple(ids_cm)
     partes = []
+    import pyarrow.parquet as pq
+    from lectura_parquet import con_indices
+    import pyarrow as pa
+    import pyarrow.compute as pc
     for archivo in sorted((BODEGA / "detalle").glob("20*.parquet")):
         try:
-            t = pd.read_parquet(archivo, columns=["unidad", "mecanismo", "proveedor", "total", "orden", "onu", "id_producto", "generico"])
+            pf = pq.ParquetFile(archivo)
+            esq = pf.schema_arrow
+            if "onu" not in esq.names:
+                continue  # mes sin la columna ONU (anterior al 12-10-2026)
+            # Se decide con columnas livianas y despues se traen las demas solo
+            # para las filas pedidas (antes: 8 columnas de las 390.000 lineas).
+            sel = pf.read(columns=["mecanismo", "onu", "id_producto"]).to_pandas()
         except Exception:
-            continue  # mes sin la columna ONU (anterior al 12-10-2026)
-        es_cm = t["mecanismo"].astype(str) == "CM"
-        pedido = pd.Series(False, index=t.index)
+            continue
+        es_cm = sel["mecanismo"].astype(str) == "CM"
+        pedido = pd.Series(False, index=sel.index)
         if normales:
-            pedido |= (~es_cm) & t["onu"].astype(str).isin(normales)
+            pedido |= (~es_cm) & sel["onu"].astype(str).isin(normales)
         if ids_cm:
-            pedido |= es_cm & t["id_producto"].astype(str).isin(ids_cm)
+            pedido |= es_cm & sel["id_producto"].astype(str).isin(ids_cm)
         if conceptos:
             # Productos vendidos que ya no estan en el catalogo vigente: se les
             # asigna concepto por el nombre de la linea (igual que el indice).
             from indice_productos import concepto_cm
-            nombres = t.loc[es_cm & ~pedido, "generico"].astype(str).unique()
+            gen = pf.read(columns=["generico"]).column(0).to_pandas().astype(str)
+            nombres = gen[es_cm & ~pedido].unique()
             buenos = {n for n in nombres if concepto_cm(n) in conceptos}
             if buenos:
-                pedido |= es_cm & t["generico"].astype(str).isin(buenos)
-        t = t[pedido]
-        if t.empty:
+                pedido |= es_cm & gen.isin(buenos)
+            del gen
+        del sel
+        idx = pa.array(pedido.to_numpy().nonzero()[0])
+        if len(idx) == 0:
             continue
+        t = con_indices(pf, esq, idx, ["unidad", "mecanismo", "proveedor", "total", "orden"])
         t["via"] = t["mecanismo"].astype(str).map(MECA)
         t["total"] = pd.to_numeric(t["total"], errors="coerce").fillna(0)
         partes.append(t.dropna(subset=["via"]).groupby(["unidad", "via", "proveedor"], observed=True)
@@ -270,7 +285,7 @@ def _resultado(vias, elegidos, ruta, rm, marcas_ok, im) -> None:
     comp = comp.merge(u, left_on="unidad", right_on="codigo_unidad", how="left")
     comp["Institución"] = comp["nombre_organismo"].fillna(comp["unidad"])
     comp["Unidad"] = comp["nombre_unidad"].fillna("")
-    comp["Región"] = comp["region"].fillna("")
+    comp["Región"] = comp["region"].fillna("").replace("", "Sin región")
     a, b = st.columns(2)
     with a:
         st.markdown("**Dónde más se compra**")
