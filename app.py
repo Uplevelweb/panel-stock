@@ -3362,6 +3362,18 @@ def precios_publicados(url_catalogo: str) -> dict[str, float]:
             if p is not None and not pd.isna(p)}
 
 
+def titulo_mp(trazos: str, texto: str) -> None:
+    """Titulo de seccion con icono minimalista, igual al de «Institución a consultar»."""
+    st.markdown(
+        '<div class="mp-tit" style="font-size:1.25rem;margin:.6rem 0 .3rem"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" '
+        'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" '
+        f'aria-hidden="true">{trazos}</svg><span>{texto}</span></div>', unsafe_allow_html=True)
+
+
+ICONO_COPA = '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5v1a3 3 0 0 0 3 3M16 6h3v1a3 3 0 0 1-3 3"/><path d="M12 13v4M9 20h6" stroke="#E8944A"/>'
+ICONO_CALENDARIO = '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/><path d="M8.5 14h2M13.5 14h2" stroke="#E8944A"/>'
+
+
 def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
                              precios_oferta: dict[str, float],
                              institucion: str = "", contacto: str = "") -> None:
@@ -3382,21 +3394,10 @@ def seccion_quien_compra_que(vista: pd.DataFrame, productos: pd.DataFrame,
     """
     tabla, columnas_unidad, otras = tabla_por_institucion(vista, productos)
 
-    st.markdown("#### 🗓️ Quién compra qué, y en qué meses")
+    titulo_mp(ICONO_CALENDARIO, "Quién compra qué, y en qué meses")
     if tabla.empty:
         st.info("Ninguno de los productos de tu catálogo aparece en esta consulta.")
         return
-
-    st.caption(
-        f"Solo lo que **está en tu catálogo**: {len(tabla)} productos, ordenados por monto. "
-        "En cada casilla van los **meses** en que esa unidad lo compró (`MAR×2` es dos "
-        "órdenes en marzo). El número del encabezado es **cuántas órdenes** tuvo esa unidad. "
-        + (f"Salen las **{len(columnas_unidad) - (1 if otras else 0)}** que más compran; las "
-           f"otras **{otras}** van juntas en la última columna, y sus compras **sí** están "
-           "sumadas en MONTO, OC y P. PROM." if otras else "")
-        + " Toca ⛶ arriba a la derecha de la tabla para verla en grande. "
-        "**Marca las filas** que quieras cotizar —clic, y con **Shift** varias "
-        "de corrido— y abajo sale el PDF y el correo.")
 
     configuracion = {
         "ID": st.column_config.TextColumn("ID", width=ancho_fijo(80)),
@@ -3491,11 +3492,7 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
     top["MONTO"] = _numeros_de_columna(top["MONTO"])
     top["% DEL TOTAL"] = (top["MONTO"] / top["MONTO"].sum() * 100).round(1)
 
-    st.markdown("#### 🏆 Quién compra más")
-    st.caption(
-        f"Las **{len(top)}** unidades de la consulta, por plata. Sigue el filtro de "
-        "**Estado** de arriba: hoy suma lo que gastaron en los productos que quedaron "
-        "a la vista, no todo lo que compraron.")
+    titulo_mp(ICONO_COPA, "Quién compra más")
     st.dataframe(
         top, width="stretch", hide_index=True, height=ALTO_15_FILAS,
         column_config={
@@ -3923,10 +3920,12 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     # renglones antes de llegar a los números. Se dice cuántas son y los nombres
     # quedan a un clic (pedido de Serling el 03-09-2026: «oculta texto
     # innecesario»). Con una o dos se escriben, que ahí no estorban.
+    from modulo_cuentas import es_soporte
+    es_superadmin = es_soporte(st.session_state.get("yo", {}) or {})  # 16-10-2026: solo Uplevel ve lo tecnico
     cuantas = len(unidades_c)
     quienes = ", ".join(unidades_c) if cuantas <= 2 else f"**{cuantas} unidades**"
     if resumen.get("desde_real") and resumen.get("hasta_real"):
-        if cuantas > 2:
+        if cuantas > 2 and es_superadmin:
             with st.expander(f"Ver las {cuantas} unidades de esta consulta"):
                 st.write(" · ".join(unidades_c))
 
@@ -4094,35 +4093,36 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                              resumen.get("contacto", ""))
 
     # --- El detalle, por si quiere ver orden por orden -----------------------
-    with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "
-                     f"({len(vista)} líneas)"):
-        st.dataframe(
-            vista,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
-                                                     help="Fecha de creación de la orden"),
-                "PRODUCTO": st.column_config.TextColumn(width="large"),
-                "UNIDAD": st.column_config.TextColumn(width="medium"),
-                "ORGANISMO": st.column_config.TextColumn(width="medium"),
-                "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
-                                                         help="Quién ganó la venta"),
-                "CANTIDAD": st.column_config.NumberColumn(format="localized"),
-                "PRECIO": st.column_config.NumberColumn(format="localized",
-                                                        help="Precio unitario neto pagado"),
-                "TOTAL": st.column_config.NumberColumn(format="localized",
-                                                       help="Total de la línea, en pesos"),
-            },
-            key="mp_tabla_ordenes",
-        )
-        st.download_button(
-            "⬇️ Descargar Excel de las órdenes",
-            data=a_excel(vista, nombre_hoja="Órdenes"),
-            file_name=f"MercadoPublico-ordenes-{nombre_base}-{desde_c:%d%m%Y}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="mp_xlsx_ordenes",
-        )
+    if es_superadmin:  # 16-10-2026: solo el superadmin
+        with st.expander(f"Ver el detalle de las {int(vista['ORDEN'].nunique())} órdenes "
+                         f"({len(vista)} líneas)"):
+            st.dataframe(
+                vista,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "FECHA": st.column_config.DateColumn("FECHA", format="DD-MM-YYYY",
+                                                         help="Fecha de creación de la orden"),
+                    "PRODUCTO": st.column_config.TextColumn(width="large"),
+                    "UNIDAD": st.column_config.TextColumn(width="medium"),
+                    "ORGANISMO": st.column_config.TextColumn(width="medium"),
+                    "PROVEEDOR": st.column_config.TextColumn("PROVEEDOR", width="medium",
+                                                             help="Quién ganó la venta"),
+                    "CANTIDAD": st.column_config.NumberColumn(format="localized"),
+                    "PRECIO": st.column_config.NumberColumn(format="localized",
+                                                            help="Precio unitario neto pagado"),
+                    "TOTAL": st.column_config.NumberColumn(format="localized",
+                                                           help="Total de la línea, en pesos"),
+                },
+                key="mp_tabla_ordenes",
+            )
+            st.download_button(
+                "⬇️ Descargar Excel de las órdenes",
+                data=a_excel(vista, nombre_hoja="Órdenes"),
+                file_name=f"MercadoPublico-ordenes-{nombre_base}-{desde_c:%d%m%Y}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="mp_xlsx_ordenes",
+            )
 
 
 # ===========================================================================
