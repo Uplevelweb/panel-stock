@@ -3504,6 +3504,33 @@ def top_de_unidades(vista: pd.DataFrame, productos: pd.DataFrame) -> None:
         key="mp_top_unidades")
 
 
+# 16-10-2026, pedido de Serling: la vista «Institución» con el mismo lenguaje de
+# las capsulas de «Producto o marca»: lo marcado va en capsula azul marino con
+# letra blanca, el boton de consultar en capsula naranja con lupa minimalista,
+# etiquetas mas chicas y menos aire entre filas (habia espacios muertos).
+ESTILO_INSTITUCION = """<style>
+.mp-tit{display:flex;align-items:center;gap:9px;font-weight:800;font-size:1.05rem;color:#0c2c57;margin:0 0 2px}
+.mp-tit svg{flex:none;color:#0c2c57}
+.st-key-mp_filtros{padding:.55rem .8rem .7rem!important}
+.st-key-mp_filtros [data-testid="stVerticalBlock"]{gap:.45rem}
+.st-key-mp_filtros [data-testid="stHorizontalBlock"]{gap:.7rem}
+.st-key-mp_filtros [data-testid="stWidgetLabel"] p,.st-key-mp_filtros label p{font-size:.74rem!important;font-weight:700!important;color:#5b6b82!important;margin:0 0 1px}
+.st-key-mp_filtros [data-baseweb="select"] input,.st-key-mp_filtros [data-baseweb="select"] div[value]{font-size:.85rem}
+.st-key-mp_filtros [data-baseweb="select"]>div{min-height:38px}
+.st-key-mp_filtros [data-testid="stMultiSelect"] span[data-tag],.st-key-mp_filtros span[data-tag]{background:#0c2c57!important;background-color:#0c2c57!important;background-image:none!important;color:#fff!important;border-radius:999px!important;min-height:30px;padding:2px 6px 2px 12px!important;font-weight:700;font-size:.82rem;border:0!important;box-shadow:none!important}
+.st-key-mp_filtros span[data-tag]::before,.st-key-mp_filtros span[data-tag]::after{display:none!important}
+.st-key-mp_filtros span[data-tag] *{color:#fff!important;fill:#fff!important;background:transparent!important}
+.st-key-mp_filtros [data-testid="stRadio"] label p{font-size:.82rem!important;font-weight:600!important;color:#0c2c57!important}
+.st-key-mp_filtros [data-testid="stCaptionContainer"]{font-size:.8rem}
+.st-key-mp_consultar button{background:#E8944A!important;border:0!important;color:#0b1c30!important;border-radius:999px!important;min-height:46px;font-weight:800;box-shadow:0 6px 16px rgba(232,148,74,.32)}
+.st-key-mp_consultar button:hover{background:#d27f33!important}
+.st-key-mp_consultar button:disabled{background:#f1cfaa!important;box-shadow:none;color:#5b6b82!important}
+.st-key-mp_consultar button span[data-testid="stIconMaterial"]{font-size:1.25rem}
+.st-key-mp_filtros [data-testid="stMultiSelectTagsContainer"]::before,.st-key-mp_filtros [data-testid="stMultiSelectTagsContainer"]::after{display:none!important}
+.aire-antes-del-boton{height:0!important}
+</style>"""
+
+
 def seccion_mercado_publico(precios_oferta: dict[str, float],
                             catalogo_propio: dict[str, str],
                             url_catalogo: str = "") -> None:
@@ -3536,8 +3563,14 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
     vistas.barra_de_vistas(yo, "mercado")
 
     # --- Filtros -------------------------------------------------------------
-    with st.container(border=True):
-        st.markdown("##### 🏛️ Institución a consultar")
+    st.markdown(ESTILO_INSTITUCION, unsafe_allow_html=True)
+    with st.container(border=True, key="mp_filtros"):
+        st.markdown(
+            '<div class="mp-tit"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" '
+            'stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" '
+            'aria-hidden="true"><path d="M3 10 12 4l9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/>'
+            '<path d="M3 20h18" stroke="#E8944A"/></svg><span>Institución a consultar</span></div>',
+            unsafe_allow_html=True)
 
         # El convenio va PRIMERO, antes de region (pedido de Serling el
         # 03-09-2026): ella parte de «quiero ver Alimentos» y recien despues
@@ -3569,7 +3602,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         vigentes_cm = [c for c in st.session_state.get("mp_convenios", []) if c in opciones_cm]
         if vigentes_cm != list(st.session_state.get("mp_convenios", [])):
             st.session_state["mp_convenios"] = vigentes_cm
-        st.multiselect(
+        c_conv, f1, fc, f2 = st.columns([1.5, 1, 1, 1.5])
+        c_conv.multiselect(
             "Convenio Marco a consultar", opciones_cm, key="mp_convenios",
             placeholder=TODOS_CONVENIOS,
             # Lo que se guarda es el nombre pelado, porque es con el que se
@@ -3585,7 +3619,6 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # interregional —Valparaíso y Metropolitana— y antes había que hacer dos
         # consultas y sumarlas a mano. Vacío significa «todas», que es lo que
         # dice el placeholder: así no hace falta una opción «Todas» en la lista.
-        f1, fc, f2 = st.columns([1, 1, 2])
         # Las sin region van al final de la lista, no primeras por el parentesis.
         nombradas = sorted(r for r in catalogo["region"].unique() if r and r != SIN_REGION)
         if (catalogo["region"] == SIN_REGION).any():
@@ -3622,7 +3655,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         candidatas = (por_region if not elegidos_organismo
                       else por_region[por_region["nombre_organismo"].isin(elegidos_organismo)])
 
-        busqueda = st.text_input(
+        cb, cu = st.columns([1, 2.2])
+        busqueda = cb.text_input(
             "Buscar por institución o unidad", key="mp_busqueda",
             placeholder="Ej: escuela naval, municipalidad valparaíso, hospital",
             help="Se puede escribir sin tildes, en minúsculas y con palabras sueltas.")
@@ -3666,7 +3700,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # se caiga: cuando se cae, ya no está en `etiquetas`.
         st.session_state["mp_etiquetas_previas"] = dict(etiquetas)
 
-        elegidas = st.multiselect(
+        elegidas = cu.multiselect(
             f"Unidades compradoras ({len(etiquetas)} para elegir)",
             options=list(etiquetas),
             format_func=lambda codigo: etiquetas.get(codigo, codigo),
@@ -3707,7 +3741,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         # Atajos de período: se habían quitado el 17-08 para dejar solo el
         # calendario, y ella los pidió de vuelta. Conviven: el atajo mueve las
         # fechas y «Libre» deja el calendario tal como estaba.
-        atajo = st.radio("Período a consultar", list(ATAJOS_PERIODO),
+        ra, p1, p2 = st.columns([2.6, 1.7, 1.7])
+        atajo = ra.radio("Período a consultar", list(ATAJOS_PERIODO),
                          horizontal=True, key="mp_atajo",
                          index=list(ATAJOS_PERIODO).index("Libre"),
                          help="Los atajos terminan en el último día que tiene la "
@@ -3728,7 +3763,6 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
             # antes de donde llega Mercado Público.
             st.session_state["mp_periodo"] = (
                 max(PRIMERA_FECHA_MP, tope - timedelta(days=DIAS_SUGERIDOS - 1)), tope)
-        p1, p2 = st.columns([1, 2])
         elegido = p1.date_input(
             "Fechas",
             min_value=PRIMERA_FECHA_MP, max_value=hoy,
@@ -3761,8 +3795,7 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
                 sello = f" · datos al {cuando[8:10]}-{cuando[5:7]} a las {cuando[11:16]}" if cuando else ""
                 st.caption(
                     f"Del **{desde:%d-%m-%Y}** al **{hasta:%d-%m-%Y}** · "
-                    f"**está todo en la bodega**{sello}. La consulta es inmediata y no "
-                    "gasta ninguna consulta del ticket.")
+                    f"**está todo en la bodega**{sello}.")
             elif elegidas:
                 falta = del_rango - en_bodega
                 guardados = (f"La bodega tiene {en_bodega} de estos {del_rango} días"
@@ -3818,7 +3851,8 @@ def seccion_mercado_publico(precios_oferta: dict[str, float],
         st.markdown('<div class="aire-antes-del-boton"></div>',
                     unsafe_allow_html=True)
         consultar = st.button(
-            "🔎 Consultar Mercado Público", type="primary", width="stretch",
+            "Consultar Mercado Público", type="primary", width="stretch",
+            icon=":material/search:",
             disabled=not elegidas or not rango_listo or (not hay_ticket and not usar_bodega),
             key="mp_consultar",
             help=None if elegidas else "Marca primero al menos una unidad.")
