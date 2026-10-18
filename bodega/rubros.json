@@ -1,16 +1,16 @@
 {
- "actualizado": "2026-10-17",
+ "actualizado": "2026-10-18",
  "desde": "2026-01-01",
  "hasta": "2026-10-09",
  "total_lic": 70411,
- "total_ag": 524955,
+ "total_ag": 524965,
  "rubros_n": 58,
  "rubros": [
   {
    "rubro": "Insumos y equipamiento médico",
    "palabra": "insumos médicos",
    "lic": 9482,
-   "ag": 91386
+   "ag": 91387
   },
   {
    "rubro": "Construcción y mantenimiento",
@@ -34,13 +34,13 @@
    "rubro": "Tecnología y telecomunicaciones",
    "palabra": "tecnología",
    "lic": 3597,
-   "ag": 24725
+   "ag": 24726
   },
   {
    "rubro": "Transporte, almacenaje y correo",
    "palabra": "transporte",
    "lic": 3515,
-   "ag": 15857
+   "ag": 15858
   },
   {
    "rubro": "Materiales para obras",
