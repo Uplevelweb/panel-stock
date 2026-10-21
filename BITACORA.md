@@ -1,3 +1,36 @@
+## 21-10-2026 · Se activa la lectura de fotos del Cotizador (crédito de USD 100)
+
+Hay crédito para la API de Claude: USD 100. Queda sin efecto el «no se activa por ahora»
+del 07-09. Antes de cargar la clave se arreglaron tres cosas del código de ese día, que
+**nunca se había probado contra la API real**:
+
+1. **El modelo**: decía `claude-sonnet-5`. Ahora `MODELO_FOTOS = "claude-opus-5-5"`. Una foto
+   de pedido cuesta del orden de **USD 0,02 a 0,05**: con USD 100 alcanza para unos dos mil
+   pedidos.
+2. ⚠️ **Se pagaba una vez POR CLIC, no por foto.** Streamlit vuelve a correr toda la página
+   con cada casilla o fila marcada, y la lectura estaba suelta en ese camino: armar una
+   cotización desde una foto eran diez o veinte consultas pagadas, y la lista podía cambiar
+   entre un clic y otro, soltando la selección. Ahora lo leído se guarda en
+   `st.session_state["reg_fotos_leidas"]` por la huella (sha256) de la foto. Los errores no
+   se guardan, para que reintentar sirva.
+3. **La foto se achica antes de mandarla** (`achicar_foto`, lado mayor 1.568 px, JPEG): una
+   foto de celular pasa los 5 MB que acepta la API. Falla abierto: si Pillow no la abre, va
+   tal cual.
+
+También: usa la librería oficial `anthropic` (agregada a `requirements.txt`, así que
+Streamlit tarda 3 a 5 minutos en rearmar el ambiente), con mensajes claros para clave
+inválida, crédito agotado, respuesta cortada y rechazo. Si el modelo declina la imagen, la
+API reintenta sola con otro modelo (`fallbacks="default"`).
+
+**Sigue sin techo diario.** Con la caché por foto el gasto es por foto nueva, no por clic,
+y el crédito prepagado es el techo: si se acaba, sale «se quedó sin crédito» y Excel/CSV
+sigue igual. Si se suma otro usuario del Cotizador, ahí sí conviene un tope.
+
+Probado con un cliente de mentira (pedido armado, JSON con bloque de código, rechazo, sin
+clave, foto de 4.000 px). **Falta la prueba con una foto real**, apenas esté la clave.
+
+---
+
 ## 08-09-2026 · Por qué la inscripción de alertas no manda nada, y un arreglo que nunca se subió
 
 **1. El ORGANISMO salía vacío porque el arreglo del 07-09 se quedó en la carpeta.**

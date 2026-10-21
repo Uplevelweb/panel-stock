@@ -30,6 +30,7 @@ Ejecutar:  streamlit run app.py
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import re
@@ -4713,6 +4714,30 @@ def _candidato(catalogo_region: pd.DataFrame, posicion: int, precios: dict[str, 
     }
 
 
+# El modelo que lee las fotos del Cotizador. Una foto de pedido cuesta del
+# orden de USD 0,02 a 0,05 (medido por tokens: ~1.600 de imagen + la lista
+# de vuelta).
+MODELO_FOTOS = "claude-opus-5-5"
+# Lado mayor con que se manda la foto. Más grande no se lee mejor —la API la
+# achica igual— y sí pesa más: una foto de celular trae 4.000 px y 5 MB, y la
+# API rechaza las de más de 5 MB.
+LADO_FOTO = 1568
+
+
+def achicar_foto(datos: bytes, tipo_mime: str) -> tuple[bytes, str]:
+    """La foto con su lado mayor en `LADO_FOTO`, como JPEG. Falla abierto:
+    si Pillow no puede abrirla, se manda tal cual vino."""
+    try:
+        from PIL import Image, ImageOps
+        imagen = ImageOps.exif_transpose(Image.open(io.BytesIO(datos)))
+        imagen.thumbnail((LADO_FOTO, LADO_FOTO))
+        salida = io.BytesIO()
+        imagen.convert("RGB").save(salida, format="JPEG", quality=88)
+        return salida.getvalue(), "image/jpeg"
+    except Exception:
+        return datos, tipo_mime
+
+
 def clave_anthropic() -> str:
     """La clave de la API de Claude, para leer requerimientos que llegan
     como foto. Mismo criterio que `ticket_mp` y `clave_envio`: vive en los
@@ -4753,41 +4778,54 @@ def extraer_productos_de_imagen(datos: bytes, tipo_mime: str) -> tuple[pd.DataFr
         "(número entero; si no se indica, usa 1). No inventes productos que "
         "no estén en la imagen."
     )
-    cuerpo = json.dumps({
-        "model": "claude-sonnet-5",
-        "max_tokens": 4096,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": tipo_mime,
-                                             "data": base64.b64encode(datos).decode("ascii")}},
-                {"type": "text", "text": instrucciones},
-            ],
-        }],
-    }).encode("utf-8")
-
-    peticion = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=cuerpo, method="POST",
-        headers={
-            "x-api-key": clave,
-            "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
-            # Mismo motivo que en `alertador.enviar_por_resend`: sin un
-            # User-Agent propio, algunos proveedores bloquean el que pone
-            # urllib por defecto.
-            "User-Agent": "Mozilla/5.0 (panel-oportunidades-emergenza)",
-        })
+    datos, tipo_mime = achicar_foto(datos, tipo_mime)
     try:
-        with urllib.request.urlopen(peticion, timeout=60) as respuesta:
-            salida = json.loads(respuesta.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detalle = error.read().decode("utf-8", "replace")[:300]
-        return pd.DataFrame(), f"La IA no pudo leer la imagen ({error.code}): {detalle}"
-    except Exception as error:
-        return pd.DataFrame(), f"No se pudo consultar la IA: {error}"
+        import anthropic
+        cliente = anthropic.Anthropic(api_key=clave, timeout=120.0)
+        salida = cliente.beta.messages.create(
+            model=MODELO_FOTOS,
+            max_tokens=16000,
+            output_config={"effort": "medium"},
+            # Si el modelo declina la imagen, la API la reintenta sola con
+            # otro modelo dentro de la misma consulta.
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": tipo_mime,
+                        "data": base64.standard_b64encode(datos).decode("ascii")}},
+                    {"type": "text", "text": instrucciones},
+                ],
+            }],
+        )
+    except ImportError:
+        return pd.DataFrame(), "Falta la librería «anthropic» en requirements.txt."
+    except anthropic.AuthenticationError:
+        return pd.DataFrame(), ("La clave de la API de Claude no es válida. Revisa la "
+                                "sección [anthropic] de los Secrets de Streamlit.")
+    except anthropic.PermissionDeniedError:
+        return pd.DataFrame(), ("La clave de Claude no tiene permiso o la cuenta se quedó "
+                                "sin crédito (console.anthropic.com ▸ Billing).")
+    except anthropic.BadRequestError as error:
+        if "credit" in str(error).lower():
+            return pd.DataFrame(), ("La cuenta de Claude se quedó sin crédito "
+                                    "(console.anthropic.com ▸ Billing).")
+        return pd.DataFrame(), f"La IA no aceptó la imagen: {str(error)[:300]}"
+    except anthropic.RateLimitError:
+        return pd.DataFrame(), "La IA está ocupada. Espera un minuto y vuelve a subir la foto."
+    except anthropic.APIStatusError as error:
+        return pd.DataFrame(), f"La IA no pudo leer la imagen ({error.status_code})."
+    except anthropic.APIConnectionError:
+        return pd.DataFrame(), "No se pudo conectar con la IA. Revisa la conexión y reintenta."
 
-    texto = "".join(b.get("text", "") for b in salida.get("content", [])
-                    if b.get("type") == "text").strip()
+    if salida.stop_reason == "refusal":
+        return pd.DataFrame(), "La IA no quiso leer esta imagen. Sube la planilla en Excel o CSV."
+    if salida.stop_reason == "max_tokens":
+        return pd.DataFrame(), ("El pedido es demasiado largo para una sola foto. "
+                                "Pártelo en dos fotos o sube la planilla.")
+    texto = "".join(b.text for b in salida.content if b.type == "text").strip()
     # Por si la respuesta viene con un bloque de código a pesar de haberlo
     # pedido sin eso.
     if texto.startswith("```"):
@@ -5317,9 +5355,21 @@ def seccion_cotizacion_regional(url_ofertas: str, precios_oferta: dict[str, floa
     if archivo is not None:
         es_imagen = (archivo.type or "").startswith("image/")
         if es_imagen:
-            with st.spinner("Leyendo la foto con IA…"):
-                requerimiento, error = extraer_productos_de_imagen(
-                    archivo.getvalue(), archivo.type)
+            # Streamlit vuelve a correr todo con cada clic (una casilla, una
+            # fila marcada), y cada lectura de la foto se paga. Se guarda lo
+            # leído por la huella de la foto: se paga una vez por foto, y la
+            # lista no cambia sola entre un clic y otro. Los errores NO se
+            # guardan, para que reintentar sirva.
+            huella = hashlib.sha256(archivo.getvalue()).hexdigest()
+            leidas = st.session_state.setdefault("reg_fotos_leidas", {})
+            if huella in leidas:
+                requerimiento, error = leidas[huella], ""
+            else:
+                with st.spinner("Leyendo la foto con IA…"):
+                    requerimiento, error = extraer_productos_de_imagen(
+                        archivo.getvalue(), archivo.type)
+                if not error:
+                    leidas[huella] = requerimiento
         else:
             requerimiento, error = leer_requerimiento(archivo)
         if error:
