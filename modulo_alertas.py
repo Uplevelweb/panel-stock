@@ -559,10 +559,11 @@ def seccion_alertas():
     st.caption(
         f"Queda activa y el correo llega **cada día a las {hora_envio}:00**, de "
         "lunes a viernes. El día que no haya nada que calce, no se envía. "
-        "Además te mandamos **la primera ahora mismo**, para que la veas sin "
-        "esperar a mañana; eso tarda hasta un minuto.")
+        "Además te mandamos **las primeras ahora mismo**, para que las veas sin "
+        "esperar a mañana. Según cuántas oportunidades haya, llegan en un solo "
+        "correo o en varios (las licitaciones siempre completas); eso tarda hasta un minuto.")
 
-    guardar = st.button("Activar la alerta y mandarme la primera ahora",
+    guardar = st.button("Activar la alerta y mandarme las primeras ahora",
                         type="primary", width="stretch", key="al_guardar")
 
     if guardar:
@@ -759,11 +760,17 @@ def enviar_ahora(config: dict, oc, aviso=None) -> tuple[bool, str]:
         return False, ("Hoy no hay nada que calce con lo tuyo. No se manda un correo "
                        "vacío: el silencio también es información." + pista)
 
-    html = alertador.armar_correo(
+    # Los mismos correos que arma el envío real: si las licitaciones completas no
+    # caben bajo el límite de Gmail, salen en varios (nunca se resume una licitación).
+    partes = alertador.armar_correos(
         {**config, "token_baja": "prueba", "rut_empresa": config.get("rut_proveedor")},
         elegidas)
-    asunto = f"{len(elegidas)} oportunidades de hoy · Uplevel"
-
-    if alertador.enviar(alertador.destinatarios(config), asunto, html):
-        return True, f"Enviado a {config['email']} · {len(elegidas)} oportunidades."
-    return False, "Resend no aceptó el envío. Revisa la clave."
+    n_tot = len(elegidas)
+    cuantas = "oportunidad" if n_tot == 1 else "oportunidades"
+    base = f"{n_tot} {cuantas} de hoy · Uplevel"
+    for i, (html, _grupo) in enumerate(partes, 1):
+        asunto = base if len(partes) == 1 else f"{base} · correo {i} de {len(partes)}"
+        if not alertador.enviar(alertador.destinatarios(config), asunto, html):
+            return False, "Resend no aceptó el envío. Revisa la clave."
+    n_correos = "" if len(partes) == 1 else f" en {len(partes)} correos"
+    return True, f"Enviado a {config['email']} · {n_tot} {cuantas}{n_correos}."
