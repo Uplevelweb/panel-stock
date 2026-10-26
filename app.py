@@ -5752,7 +5752,7 @@ def main() -> None:
     with pestanas["agenda"]:
         if abierta("agenda"):
             from modulo_agenda import seccion_agenda
-            seccion_agenda()
+            seccion_agenda(yo)
     with pestanas["oportunidades"]:
         if abierta("oportunidades"):
             # Vive en su propio archivo: no comparte nada con las otras y asi

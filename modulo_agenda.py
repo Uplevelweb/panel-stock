@@ -34,7 +34,29 @@ import streamlit as st
 URL_AGENDA = "https://uplevelweb.art/agenda/"
 
 
-def seccion_agenda() -> None:
+def _url_agenda(yo: dict | None) -> str:
+    """La direccion de la Agenda, con la llave adentro si es Serling.
+
+    26-10-2026, pedido de Serling: que la Agenda entre sola, sin pedir la
+    llave. Los dias, notas y ajustes viven atados a SU llave (llave_hash en
+    agenda_dias/agenda_notas/agenda_ajustes), asi que una llave nueva la
+    dejaria con la agenda vacia: hay que pasar la de siempre. Viene de los
+    secretos de Streamlit (`[agenda] llave`), nunca del codigo -el repo es
+    publico-, y solo se usa con el superadmin. La Agenda ya acepta
+    `?llave=` desde el 14-09-2026: la guarda y la borra de la direccion.
+    """
+    from modulo_cuentas import es_soporte
+    if not yo or not es_soporte(yo):
+        return URL_AGENDA
+    try:
+        llave = str(st.secrets["agenda"]["llave"]).strip()
+    except Exception:
+        return URL_AGENDA
+    return f"{URL_AGENDA}?llave={llave}" if llave else URL_AGENDA
+
+
+def seccion_agenda(yo: dict | None = None) -> None:
+    url = _url_agenda(yo)
     st.subheader("🗓️ Agenda")
     st.caption(
         "Tu día: la ruta de visitas, el horario y las notas por institución. "
@@ -43,7 +65,7 @@ def seccion_agenda() -> None:
 
     izquierda, derecha = st.columns([3, 1])
     with derecha:
-        st.link_button("Abrir en pestaña nueva ↗", URL_AGENDA, width="stretch",
+        st.link_button("Abrir en pestaña nueva ↗", url, width="stretch",
                         help="Por si el recuadro de abajo no carga bien en tu "
                              "pantalla, o prefieres verla más grande.")
 
@@ -55,7 +77,7 @@ def seccion_agenda() -> None:
     # 800px: suficiente para ver el día sin scroll doble (el de la página y el
     # del iframe). El iframe se desplaza por dentro si el contenido no entra.
     st.markdown(
-        f'<iframe src="{URL_AGENDA}" width="100%" height="800" '
+        f'<iframe src="{url}" width="100%" height="800" '
         f'style="border:1px solid rgba(128,128,128,.25);border-radius:12px;" '
         f'loading="lazy"></iframe>',
         unsafe_allow_html=True,
