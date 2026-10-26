@@ -543,9 +543,8 @@ def seccion_alertas():
                              column_config={"Gasto 24m": st.column_config.NumberColumn(
                                  format="localized")})
                 if len(elegidas) > 20:
-                    st.caption(f"y {len(elegidas) - 20} más. El correo manda "
-                               f"máximo {alertador.MAXIMO_POR_CORREO} por vez, "
-                               "las de mejor prioridad.")
+                    st.caption(f"y {len(elegidas) - 20} más. El correo las lleva "
+                               "todas: las de mejor prioridad primero.")
 
     st.divider()
 
@@ -751,7 +750,6 @@ def enviar_ahora(config: dict, oc, aviso=None) -> tuple[bool, str]:
                          "clase": clase, "enlace": alertador.enlace(op)})
 
     elegidas.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
-    elegidas = elegidas[:alertador.MAXIMO_POR_CORREO]
 
     if not elegidas:
         pista = ""

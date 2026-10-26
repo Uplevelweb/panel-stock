@@ -97,14 +97,34 @@ V2 = "https://api2.mercadopublico.cl/v2/compra-agil"
 # se anota aqui y (1) queda como alerta visible en el registro de GitHub,
 # (2) el correo avisa al cliente, (3) nada se da por «vacio» sin decirlo.
 FALLAS_API: list[str] = []
+PENDIENTES_POR_TOPE: list[str] = []   # quienes se quedaron sin correo por el tope diario de Resend
 ESPERA_V1 = 2.0
 HILOS_AGILES = 12            # paginas pedidas a la vez (medido 09-10-2026: 12 paginas en 15 s)
 TAMANO_PAGINA_AGILES = 10   # ver leer_paginas_agiles: con 50 la API da 504, y 10 es lo mas parejo
 
 # Resend en plan gratis: 100 correos al dia. Al 101 se cae el envio, asi que
 # el tope se respeta desde aca y no se descubre a mitad de la tanda.
-TOPE_DIARIO = 100
-MAXIMO_POR_CORREO = 15
+# Se sube con la variable TOPE_DIARIO_CORREOS al pasar a un plan de Resend sin limite diario
+# (Pro: 50.000 correos al mes, sin tope por dia). Con el plan gratis es 100.
+TOPE_DIARIO = int(os.environ.get("TOPE_DIARIO_CORREOS", "100") or 100)
+# Al llegar a este porcentaje del tope diario se avisa por correo al administrador.
+AVISO_CUOTA_PORCENTAJE = 80
+AVISO_ADMIN_CORREO = os.environ.get("AVISO_ADMIN_CORREO", "webuplevel@gmail.com")
+# 25-10-2026 (pedido de Serling): SIN TOPE de oportunidades por correo -el cliente
+# repasa 15, 20 o las que sean y decide en cual participar; un tope podia dejar
+# fuera una buena-. Lo que SI tiene limite es el peso del HTML: Gmail recorta
+# sobre ~102 KB (medido: cada tarjeta completa pesa ~8 KB, o sea que con 15 ya
+# se pasaba). Por eso las primeras llevan la ficha completa y, al agotarse este
+# presupuesto, el resto sale como fila compacta (titulo, comprador, cierre, monto,
+# visita y enlace). Entran todas; no se corta ninguna.
+MAXIMO_POR_CORREO = None            # None = sin tope (se conserva el nombre por compatibilidad)
+# El correo completo debe quedar bajo este peso (Gmail recorta sobre ~102 KB; se deja margen para
+# los reenvios, que agregan encabezado). Se arma primero TODO en filas compactas y la holgura que
+# queda se gasta en fichas completas, de arriba hacia abajo (ver armar_correo).
+LIMITE_CORREO_BYTES = 95_000
+# Cuantos proveedores se muestran en «Quien se lo lleva hoy» de cada ficha completa (0 = no mostrarlo;
+# queda entonces para el informe expandido del panel y el analisis de Terri). Hasta el 25-10-2026: 5.
+MAX_QUIEN_SE_LO_LLEVA = 3   # decidido el 26-10-2026 (antes 5)
 # La paleta es la de uplevelweb.art, no la del documento de cierre: ahi quedo
 # anotada una que el sitio no usa.
 MARINO = "#0c2c57"
@@ -1992,10 +2012,10 @@ def tarjeta(op: dict) -> str:
     ficha = (cabecera + '<table width="100%" cellpadding="0" cellspacing="0" border="0">'
              + "".join(filas) + '</table>')
 
-    # ---- quien se lo lleva hoy (hasta 5, igual que la muestra) ----
+    # ---- quien se lo lleva hoy (hasta MAX_QUIEN_SE_LO_LLEVA = 3) ----
     quien = ""
-    if proveedores:
-        proveedores = proveedores[:5]
+    if proveedores and MAX_QUIEN_SE_LO_LLEVA > 0:
+        proveedores = proveedores[:MAX_QUIEN_SE_LO_LLEVA]
         suma = sum(m for _, m, _ in proveedores) or 1
         filas = []
         for i, (nombre, monto, rut) in enumerate(proveedores, 1):
@@ -2090,6 +2110,40 @@ def tarjeta(op: dict) -> str:
 {aviso_visita}
           {ficha}{quien}{evaluar}{sin_datos}{monto}
           {boton}
+        </td></tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def fila_compacta(op: dict) -> str:
+    """La misma oportunidad en ~1 KB, para cuando el correo ya llego a su
+    presupuesto de peso (ver LIMITE_CORREO_BYTES). Conserva lo que
+    decide si vale la pena abrirla: de que se trata, quien compra, cuando
+    cierra, cuanto, si exige visita a terreno y el enlace directo."""
+    donde = titulo_legible(op.get("nombre_unidad") or op.get("organismo") or "")
+    datos = [f"N° {op.get('codigo')}" if op.get("codigo") else "",
+             f"Cierra {op.get('cierre')}" if op.get("cierre") else "",
+             plata(op.get("monto")) if op.get("monto") else ""]
+    linea = " · ".join(d for d in datos if d)
+    visita = ""
+    if op.get("visita"):
+        visita = (f'<div style="color:#8a4b12;font-size:12px;font-weight:700;margin-top:3px;">'
+                  f'Visita a terreno obligatoria: {op["visita"]}</div>')
+    elif op.get("mencion_visita"):
+        visita = (f'<div style="color:#8a4b12;font-size:12px;margin-top:3px;">'
+                  f'Menciona visita a terreno: revisa las bases</div>')
+    return f"""
+  <tr>
+    <td class="pad30" style="padding:0 12px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="border-bottom:1px solid {BORDE};">
+        <tr><td style="padding:9px 0 10px;">
+          <a href="{op['enlace']}" style="color:{MARINO};font-size:14px;font-weight:700;
+             line-height:1.3;text-decoration:none;">{titulo_legible(op['nombre'][:120])}</a>
+          <div style="color:{TEXTO_SUAVE};font-size:12px;margin-top:2px;">{donde[:70]}</div>
+          <div style="color:{TEXTO};font-size:12px;margin-top:2px;">{linea}</div>
+          {visita}
         </td></tr>
       </table>
     </td>
@@ -2257,12 +2311,131 @@ def bloque_de_puertas(puertas: list[dict]) -> str:
             + "".join(tarjetas))
 
 
+def _tarjetas_con_presupuesto(ops: list[dict], estado: list[int]) -> list[str]:
+    """Solo para COMPRAS AGILES (las licitaciones nunca se resumen).
+    `estado` = [fichas_completas_que_quedan, aviso_ya_puesto (0/1)].
+    Las primeras salen con ficha completa; las demas, como fila compacta. Siempre sale
+    TODA la lista, en el mismo orden. Antes de la primera fila compacta se invita a abrir
+    el detalle expandido en el panel."""
+    salida = []
+    for o in ops:
+        if estado[0] > 0:
+            salida.append(tarjeta(o))
+            estado[0] -= 1
+        else:
+            if not estado[1]:
+                estado[1] = 1
+                salida.append(f"""
+  <tr>
+    <td class="pad30" style="padding:10px 12px 4px;">
+      <div style="background:#eef3f9;border-radius:8px;padding:10px 12px;color:{TEXTO};
+                  font-size:13px;line-height:1.45;">
+        <strong>Estas compras ágiles van resumidas.</strong> En tu panel ves el detalle
+        expandido de cada una: quién se lo lleva, cómo se reparte entre proveedores,
+        con qué te van a evaluar, y puedes analizarla con Terri.
+        <a href="{PANEL}" style="color:{MARINO};font-weight:700;">Abrir mi panel</a>
+      </div>
+    </td>
+  </tr>""")
+            salida.append(fila_compacta(o))
+    return salida
+
+
 def armar_correo(suscriptor: dict, oportunidades: list[dict],
                  bienvenida: bool = False, quedan: int | None = None,
                  puertas: list[dict] | None = None,
-                 recortada_de: int | None = None) -> str:
+                 recortada_de: int | None = None,
+                 total: int | None = None,
+                 parte: tuple[int, int] | None = None) -> str:
+    """El correo diario con TODAS las oportunidades.
+
+    REGLA (Serling, 25-10-2026): las LICITACIONES siempre van con ficha completa. Solo las compras
+    agiles pueden resumirse, y solo cuando hace falta para no pasar de LIMITE_CORREO_BYTES
+    (Gmail recorta sobre ~102 KB). Se arma primero con todas las compras agiles en fila compacta y
+    la holgura que queda se usa en dejarlas completas, en orden."""
+    kwargs = dict(bienvenida=bienvenida, quedan=quedan, puertas=puertas, recortada_de=recortada_de,
+                  total=total, parte=parte)
+    base = _armar_correo(suscriptor, oportunidades, n_completas=0, **kwargs)
+    holgura = LIMITE_CORREO_BYTES - len(base.encode("utf-8"))
+    agiles = [o for o in oportunidades if o["tipo"] == "compra_agil"]
+    n = 0
+    for o in agiles:
+        extra = len(tarjeta(o).encode("utf-8")) - len(fila_compacta(o).encode("utf-8"))
+        if n == 0:
+            extra -= 800   # el aviso del panel solo aparece si queda al menos una compacta
+        if extra > holgura:
+            break
+        holgura -= max(extra, 0)
+        n += 1
+    html = _armar_correo(suscriptor, oportunidades, n_completas=n, **kwargs)
+    peso = len(html.encode("utf-8"))
+    n_lic = sum(1 for o in oportunidades if o["tipo"] != "compra_agil")
+    print(f"   [correo] {n_lic} licitaciones completas + {len(agiles)} compras ágiles "
+          f"({n} completas, {len(agiles) - n} compactas) · {peso // 1024} KB")
+    if peso > 102_000:
+        print("   [correo] ⚠️ pasa de ~102 KB: Gmail lo va a recortar. Hay demasiadas licitaciones "
+              "para un solo correo.")
+    return html
+
+
+def partir_en_correos(suscriptor: dict, oportunidades: list[dict], **kwargs) -> list[list[dict]]:
+    """Reparte las oportunidades en los correos necesarios para que NINGUNO pase de
+    LIMITE_CORREO_BYTES y ninguna licitacion se resuma. Las licitaciones van en orden (la de mejor
+    encaje primero); las compras agiles van al final, en el ultimo correo con espacio o en uno propio."""
+    lic = [o for o in oportunidades if o["tipo"] != "compra_agil"]
+    agi = [o for o in oportunidades if o["tipo"] == "compra_agil"]
+    esqueleto = len(_armar_correo(suscriptor, [], n_completas=0, **kwargs).encode("utf-8"))
+    margen = LIMITE_CORREO_BYTES - esqueleto - 2500    # encabezados de grupo + aviso de «correo i de N»
+    grupos: list[list[dict]] = []
+    actual: list[dict] = []
+    peso = 0
+    for o in lic:
+        t = len(tarjeta(o).encode("utf-8"))
+        if actual and peso + t > margen:
+            grupos.append(actual)
+            actual, peso = [], 0
+        actual.append(o)
+        peso += t
+    compactas = sum(len(fila_compacta(o).encode("utf-8")) for o in agi)
+    if agi and actual and peso + compactas > margen:
+        grupos.append(actual)
+        actual, peso = [], 0
+    if actual or agi:
+        grupos.append(actual + agi)
+    return grupos or [[]]
+
+
+def armar_correos(suscriptor: dict, oportunidades: list[dict],
+                  bienvenida: bool = False, quedan: int | None = None,
+                  puertas: list[dict] | None = None,
+                  recortada_de: int | None = None) -> list[tuple[str, list[dict]]]:
+    """Los correos del dia: [(html, oportunidades_de_ese_correo), ...]. Casi siempre es uno solo;
+    si las licitaciones completas no caben bajo el limite de Gmail, se parten en varios.
+    El primero lleva todo lo especial (bienvenida, fin de prueba, puertas del mes)."""
+    base = dict(bienvenida=bienvenida, quedan=quedan, puertas=puertas, recortada_de=recortada_de)
+    grupos = partir_en_correos(suscriptor, oportunidades, **base)
+    total = len(oportunidades)
+    salida = []
+    for i, grupo in enumerate(grupos, 1):
+        if len(grupos) == 1:
+            html = armar_correo(suscriptor, grupo, **base)
+        else:
+            extra = base if i == 1 else dict(bienvenida=False, quedan=None, puertas=None, recortada_de=None)
+            html = armar_correo(suscriptor, grupo, total=total, parte=(i, len(grupos)), **extra)
+        salida.append((html, grupo))
+    return salida
+
+
+def _armar_correo(suscriptor: dict, oportunidades: list[dict],
+                  bienvenida: bool = False, quedan: int | None = None,
+                  puertas: list[dict] | None = None,
+                  recortada_de: int | None = None,
+                  n_completas: int = 0,
+                  total: int | None = None,
+                  parte: tuple[int, int] | None = None) -> str:
     hoy = datetime.now().strftime("%d-%m-%Y")
-    n = len(oportunidades)
+    # Con el correo partido en varios, el saludo habla del total del dia, no de lo que trae esta parte.
+    n = total if total is not None else len(oportunidades)
     nombre = (suscriptor.get("nombre") or "").strip()
     # Terri SIEMPRE se presenta, en todos los correos.
     presentacion = (f"Hola {nombre}, soy Terri, el Asistente Inteligente de Territorio."
@@ -2277,16 +2450,20 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
     # Orden de la regla de premisa (03-10-2026): licitaciones primero (la
     # mayor parte del monto), luego compra agil, y al final Convenio Marco.
     bloques = []
+    presupuesto = [n_completas, 0]   # fichas completas que quedan / aviso del panel ya puesto
     if licitaciones:
         bloques.append(encabezado_grupo(
             "Licitaciones", "Con plazo para preparar la oferta.",
             "licitacion", len(licitaciones)))
+        # REGLA DE SERLING (25-10-2026): las licitaciones NUNCA se resumen, siempre ficha completa;
+        # resumir una licitacion seria hacer trabajar al cliente, y el producto promete automatizar eso.
+        # Solo las compras agiles pueden ir resumidas cuando el correo se acerca al limite de peso.
         bloques += [tarjeta(o) for o in licitaciones]
     if agiles:
         bloques.append(encabezado_grupo(
             "Compra Ágil", "Cotizaciones que cierran pronto: 24 a 72 horas. Si vas, es hoy.",
             "compra_agil", len(agiles)))
-        bloques += [tarjeta(o) for o in agiles]
+        bloques += _tarjetas_con_presupuesto(agiles, presupuesto)
     tarjetas = "".join(bloques)
 
     # El primer correo se presenta: quien lo recibe todavia no sabe que es
@@ -2311,6 +2488,16 @@ def armar_correo(suscriptor: dict, oportunidades: list[dict],
             saludo = (f"<strong>{presentacion}</strong> Tu prueba gratis terminó. "
                       f"Hoy encontré <strong>{recortada_de}</strong> oportunidades "
                       f"para lo que vendes y te dejo <strong>solo 1 como muestra</strong>.")
+
+    # Correo partido en varios (25-10-2026): Gmail recorta sobre ~102 KB y las licitaciones nunca
+    # se resumen, asi que si no caben en uno van en dos o mas correos del mismo dia.
+    if parte:
+        i, total_partes = parte
+        resto = ("Las licitaciones siguen en el correo siguiente: llegan todas completas."
+                 if i < total_partes else "Este es el último correo de hoy.")
+        saludo += (f'<br><span style="color:{TEXTO_SUAVE};font-size:13px;">'
+                   f'<strong>Correo {i} de {total_partes}.</strong> {resto}</span>')
+        resumen = f"Correo {i} de {total_partes} · {resumen}"
 
     # Si una API de ChileCompra fallo hoy, el cliente tiene que saberlo: sin
     # esto un dia con falla se lee como «hoy no hubo compras agiles».
@@ -3110,8 +3297,10 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
             "enlace": (f"https://www.mercadopublico.cl/Procurement/Modules/RFB/DetailsAcquisition.aspx?idlicitacion={codigo}"
                        if es_lic and codigo else ""),
         }
-    # De 5 a 10 en el WhatsApp (pedido de Serling): lo demas, con su detalle, en el panel y el correo.
-    # Las acciones comerciales (puertas de Convenio Marco) van en su propio grupo, con su cupo dentro de los 10.
+    # 25-10-2026 (pedido de Serling): lo que llega al correo llega tambien al WhatsApp, SIN tope de
+    # oportunidades (antes eran maximo 10). El resumen diario sigue siendo corto; el detalle completo
+    # se pide con el boton y el bot lo manda numerado, en varios mensajes si hace falta.
+    # Las acciones comerciales (puertas de Convenio Marco) van en su propio grupo.
     etiqueta = {"CRECER": "Vender más", "RECOMPRA": "Recomprar", "NUEVO": "Cliente nuevo"}
     acciones = [{
         "titulo": f"{etiqueta.get(p.get('tipo'), 'Oportunidad')} · Convenio Marco",
@@ -3123,7 +3312,7 @@ def enviar_alerta_whatsapp(suscriptor: dict, elegidas: list[dict], quedan: int |
         "direccion": (p.get("direccion") or "")[:120],
         "cierre": "", "visita": "", "enlace": "",
     } for p in puertas_nuevas[:3]]
-    mejores = [_resumen(o) for o in elegidas[:10 - len(acciones)]] + acciones
+    mejores = [_resumen(o) for o in elegidas] + acciones
 
     cuerpo = json.dumps({"telefono": telefono, "parametros": parametros, "mejores": mejores}).encode("utf-8")
     peticion = urllib.request.Request(
@@ -3154,6 +3343,27 @@ def enlace(op: dict) -> str:
     if op["tipo"] == "compra_agil":
         return f"https://www.mercadopublico.cl/CompraAgil/Cotizacion/{op['codigo']}"
     return f"http://www.mercadopublico.cl/fichaLicitacion.html?idLicitacion={op['codigo']}"
+
+
+def avisar_cuota(enviados_hoy: int) -> None:
+    """Avisa por correo al administrador cuando el dia se acerca al tope de Resend, o cuando alguien
+    se quedo sin su correo por el tope. Un tope alcanzado en silencio es un cliente sin alerta."""
+    if not enviados_hoy:
+        return
+    uso = enviados_hoy * 100 // max(TOPE_DIARIO, 1)
+    if uso < AVISO_CUOTA_PORCENTAJE and not PENDIENTES_POR_TOPE:
+        return
+    cuerpo = (f"<p>Hoy se enviaron <strong>{enviados_hoy}</strong> correos de un tope diario de "
+              f"<strong>{TOPE_DIARIO}</strong> ({uso}%).</p>")
+    if PENDIENTES_POR_TOPE:
+        cuerpo += (f"<p><strong>{len(set(PENDIENTES_POR_TOPE))} cliente(s) se quedaron sin su correo</strong> "
+                   "por el tope. Sube de plan en Resend (Pro: sin limite diario) y define la variable "
+                   "TOPE_DIARIO_CORREOS en GitHub Actions.</p>")
+    cuerpo += "<p>Plan gratis de Resend: 100 al dia y 3.000 al mes. Pro: 50.000 al mes, sin tope diario.</p>"
+    print(f"[cuota] {enviados_hoy}/{TOPE_DIARIO} ({uso}%): se avisa a {AVISO_ADMIN_CORREO}")
+    # Este aviso es un correo mas: solo sale si queda cupo (si no, queda en el registro).
+    if enviados_hoy < TOPE_DIARIO:
+        enviar([AVISO_ADMIN_CORREO], f"Territorio: correos de hoy al {uso}% del tope", cuerpo)
 
 
 def main():
@@ -3389,7 +3599,7 @@ def main():
             salida.sort(key=lambda x: (x["encaje"], x["nota"]), reverse=True)
             return salida
 
-        elegidas = escoger(minimo)[:MAXIMO_POR_CORREO]
+        elegidas = escoger(minimo)   # sin tope (25-10-2026)
 
         # Un primer correo vacio mata la impresion. Si nada alcanza el minimo
         # exigido, se baja el liston UNA vez y van las mejores cinco.
@@ -3443,34 +3653,40 @@ def main():
                 f"{p['tipo']} {p.get('nombre') or p['unidad']}" for p in puertas))
         print("[tiempo] puertas del mes: %.0f s" % (time.perf_counter() - marca_puertas))
 
-        html = armar_correo(suscriptor, elegidas, bienvenida=args.bienvenidas,
-                            quedan=prueba.get(suscriptor.get("email")),
-                            puertas=puertas, recortada_de=recortada_de)
-        # La palabra concuerda con el numero: con una sola decia
-        # «1 oportunidades», y se vio en un correo real (31-08-2026).
-        cuantas = "oportunidad" if len(elegidas) == 1 else "oportunidades"
-        if args.bienvenidas:
-            asunto = (f"Tu cuenta quedó lista · {len(elegidas)} "
-                      f"{cuantas} para partir")
-        else:
-            asunto = f"{len(elegidas)} {cuantas} de hoy · Terri"
-            if recortada_de:
-                asunto = (f"Tu prueba terminó: 1 oportunidad de muestra "
-                          f"(hoy había {recortada_de}) · Terri")
+        partes = armar_correos(suscriptor, elegidas, bienvenida=args.bienvenidas,
+                               quedan=prueba.get(suscriptor.get("email")),
+                               puertas=puertas, recortada_de=recortada_de)
+        if len(partes) > 1:
+            print(f"   las licitaciones no caben en un solo correo (limite de Gmail): van en {len(partes)} correos")
+
+        def asunto_de(grupo: list[dict], i: int) -> str:
+            # La palabra concuerda con el numero: con una sola decia
+            # «1 oportunidades», y se vio en un correo real (31-08-2026).
+            n_tot = len(elegidas)
+            cuantas = "oportunidad" if n_tot == 1 else "oportunidades"
+            if args.bienvenidas:
+                base = f"Tu cuenta quedó lista · {n_tot} {cuantas} para partir"
+            elif recortada_de:
+                base = (f"Tu prueba terminó: 1 oportunidad de muestra "
+                        f"(hoy había {recortada_de}) · Terri")
+            else:
+                base = f"{n_tot} {cuantas} de hoy · Terri"
+            return base if len(partes) == 1 else f"{base} · correo {i} de {len(partes)}"
 
         if args.guardar:
-            Path(args.guardar).write_text(html, encoding="utf-8")
-            print(f"   correo escrito en {args.guardar}")
+            for i, (html_i, _) in enumerate(partes, 1):
+                ruta = Path(args.guardar)
+                if i > 1:
+                    ruta = ruta.with_name(f"{ruta.stem}_{i}{ruta.suffix}")
+                ruta.write_text(html_i, encoding="utf-8")
+                print(f"   correo {i} de {len(partes)} escrito en {ruta}")
             con_alerta.add(suscriptor.get("email"))
         elif args.enviar:
-            if enviados_hoy >= TOPE_DIARIO:
-                print(f"   TOPE de {TOPE_DIARIO} correos alcanzado. Queda pendiente.")
-                continue
             a_quienes = destinatarios(suscriptor)
             print(f"   va a: {', '.join(a_quienes)}")
             # El adjunto es el mismo formato de la plantilla de seguimiento,
-            # ya cargado con lo de hoy. Falla abierto: si algo revienta
-            # armando el Excel, el correo sale igual, solo que sin el
+            # ya cargado con lo de hoy (TODAS las oportunidades, va en el primer correo). Falla
+            # abierto: si algo revienta armando el Excel, el correo sale igual, solo que sin el
             # adjunto -no vale la pena perder la alerta por eso-.
             adjunto = None
             try:
@@ -3478,25 +3694,37 @@ def main():
                 adjunto = (f"Oportunidades de hoy - {datetime.now():%d-%m-%Y}.xlsx", xlsx)
             except Exception as error:
                 print(f"   no se pudo armar el adjunto xlsx: {error}")
-            if enviar(a_quienes, asunto, html, adjunto=adjunto):
-                enviados_hoy += 1
-                con_alerta.add(suscriptor.get("email"))
-                # Se anota DESPUES de que salio, nunca antes: si el envio
-                # falla, esas oportunidades tienen que poder salir manana.
-                anotar_avisado(suscriptor, elegidas, bolsa)
-                # La marca va DESPUES del envio, igual que lo anotado: si
-                # el correo no sale, esta persona sigue esperando el suyo.
-                if args.bienvenidas:
-                    marcar_bienvenida(suscriptor)
-                # WhatsApp es un canal aparte del correo: si falla, no le
-                # quita nada a lo de arriba, que ya salio.
-                if whatsapp_elegible(suscriptor):
-                    enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")), puertas)
+            for i, (html_i, grupo_i) in enumerate(partes, 1):
+                if enviados_hoy >= TOPE_DIARIO:
+                    print(f"   TOPE de {TOPE_DIARIO} correos alcanzado. Queda pendiente "
+                          f"(correo {i} de {len(partes)}).")
+                    PENDIENTES_POR_TOPE.append(suscriptor.get("email") or "")
+                    break
+                if enviar(a_quienes, asunto_de(grupo_i, i), html_i, adjunto=adjunto if i == 1 else None):
+                    enviados_hoy += 1
+                    con_alerta.add(suscriptor.get("email"))
+                    # Se anota DESPUES de que salio, nunca antes: si el envio
+                    # falla, esas oportunidades tienen que poder salir manana.
+                    # Va por correo: si falla el 2 de 2, solo esas quedan para otro envio.
+                    anotar_avisado(suscriptor, grupo_i, bolsa)
+                    if i == 1:
+                        # La marca va DESPUES del envio, igual que lo anotado: si
+                        # el correo no sale, esta persona sigue esperando el suyo.
+                        if args.bienvenidas:
+                            marcar_bienvenida(suscriptor)
+                        # WhatsApp es un canal aparte del correo: si falla, no le
+                        # quita nada a lo de arriba, que ya salio.
+                        if whatsapp_elegible(suscriptor):
+                            enviar_alerta_whatsapp(suscriptor, elegidas, prueba.get(suscriptor.get("email")), puertas)
+                else:
+                    print(f"   el correo {i} de {len(partes)} no salio.")
+                    break
         else:
             print("   (ni --guardar ni --enviar: no se hizo nada con el correo)")
 
     cerrar_corrida(con_alerta)
     print(f"\nListo. Correos enviados: {enviados_hoy}")
+    avisar_cuota(enviados_hoy)
     if FALLAS_API:
         # Resumen visible en la pagina de la corrida en GitHub (no solo en el log).
         resumen_gh = os.environ.get("GITHUB_STEP_SUMMARY")
