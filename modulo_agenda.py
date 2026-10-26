@@ -28,7 +28,10 @@ habría que agregar esa confirmación.
 """
 import streamlit as st
 
-URL_AGENDA = "https://agenda.uplevelweb.art/"
+# 26-10-2026: el subdominio agenda.uplevelweb.art quedo sin certificado en
+# Hostinger ("envio una respuesta no valida"). Es la misma carpeta
+# public_html/agenda, servida desde el dominio principal, que si tiene SSL.
+URL_AGENDA = "https://uplevelweb.art/agenda/"
 
 
 def seccion_agenda() -> None:
