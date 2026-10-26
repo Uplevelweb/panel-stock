@@ -37,21 +37,24 @@ URL_AGENDA = "https://uplevelweb.art/agenda/"
 def _url_agenda(yo: dict | None) -> str:
     """La direccion de la Agenda, con la llave adentro si es Serling.
 
-    26-10-2026, pedido de Serling: que la Agenda entre sola, sin pedir la
-    llave. Los dias, notas y ajustes viven atados a SU llave (llave_hash en
-    agenda_dias/agenda_notas/agenda_ajustes), asi que una llave nueva la
-    dejaria con la agenda vacia: hay que pasar la de siempre. Viene de los
-    secretos de Streamlit (`[agenda] llave`), nunca del codigo -el repo es
-    publico-, y solo se usa con el superadmin. La Agenda ya acepta
-    `?llave=` desde el 14-09-2026: la guarda y la borra de la direccion.
+    26-10-2026, pedido de Serling: "quiero ingresar automaticamente y solo
+    tener acceso una vez logueada", sin pegar llave en ningun lado. Los dias,
+    notas y ajustes viven atados a una llave (llave_hash), asi que la base
+    genero una llave interna para ella, le mudo sus datos y la guarda en
+    `agenda_llave_auto`, que solo lee la clave secreta del servidor
+    (`agenda_llave_automatica`, ver agenda-entrada-automatica-para-copiar.txt).
+    Aqui se pide SOLO para el superadmin ya identificado; la Agenda acepta
+    `?llave=` desde el 14-09-2026, la guarda y la borra de la direccion.
     """
-    from modulo_cuentas import es_soporte
+    from modulo_cuentas import es_soporte, _pedir
     if not yo or not es_soporte(yo):
         return URL_AGENDA
-    try:
-        llave = str(st.secrets["agenda"]["llave"]).strip()
-    except Exception:
-        return URL_AGENDA
+    llave = st.session_state.get("_agenda_llave_auto")
+    if not llave:
+        respuesta = _pedir("rpc/agenda_llave_automatica", metodo="POST", cuerpo={})
+        llave = respuesta.strip() if isinstance(respuesta, str) else ""
+        if llave:
+            st.session_state["_agenda_llave_auto"] = llave
     return f"{URL_AGENDA}?llave={llave}" if llave else URL_AGENDA
 
 
