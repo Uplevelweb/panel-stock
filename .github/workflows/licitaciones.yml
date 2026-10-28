@@ -67,3 +67,12 @@ jobs:
             git pull --rebase --autostash origin main || true
             git push
           fi
+
+      # CupidoLicita: lo que cada cliente oferto y gano, para el tablero de ROI.
+      # Va al final y no puede tumbar la bodega: si falla, lo de arriba ya quedo.
+      - name: Llevar las adjudicaciones a Supabase
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python adjudicador.py
