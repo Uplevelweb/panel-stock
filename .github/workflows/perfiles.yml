@@ -1,0 +1,29 @@
+# Perfiles de organismos para CupidoLicita (perfilador.py), sin bajar licitaciones.
+# Lo normal es que corra como ultimo paso de «Bodega de Licitaciones» cada mañana;
+# este workflow es para lanzarlo a mano. No escribe en el repositorio.
+name: Perfiles de organismos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  perfiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Bajar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar lo necesario
+        run: pip install pandas pyarrow
+
+      - name: Llevar los perfiles a Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python perfilador.py

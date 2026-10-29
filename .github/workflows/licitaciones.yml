@@ -76,3 +76,13 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: python adjudicador.py
+
+      # CupidoLicita: la «Ficha de la institucion» (que compra y a quien le adjudica
+      # cada unidad) y el resumen de Convenio Marco de los RUT cliente.
+      # Tambien se puede lanzar solo con el workflow «Perfiles de organismos».
+      - name: Llevar los perfiles de organismos a Supabase
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python perfilador.py
