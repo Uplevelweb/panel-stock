@@ -365,8 +365,8 @@ def pruebas_movil(navegador, s):
         def radar():
             p.ir("#/")
             p.listo("radar")
-            if p.page.locator("#barraRadar.oculto").count() or p.page.locator(".menu-radar a").count() != 4:
-                raise RuntimeError("no se ve la barra con los 4 modulos")
+            if p.page.locator("#barraRadar.oculto").count() or p.page.locator(".menu-radar a").count() != 5:
+                raise RuntimeError("no se ve la barra con los 5 modulos")
             if p.page.locator(".menu-radar a[aria-current='page']").inner_text().strip() != "Radar de Oportunidades":
                 raise RuntimeError("el modulo activo no es el Radar")
             p.sin_desborde()
