@@ -2,7 +2,7 @@
 AGENTE DE QA DE CUPIDOLICITA
 ============================
 
-Prueba la version PUBLICADA de https://territorio.uplevelweb.art/cupido/ como lo
+Prueba la version PUBLICADA de https://cupidolicita.com/cupido/ como lo
 haria una persona, con una cuenta propia de prueba que vive en su propia empresa
 («Empresa de Prueba QA»): nunca toca datos de clientes ni manda correos.
 
@@ -40,7 +40,7 @@ from datetime import date, timedelta
 
 from playwright.sync_api import sync_playwright
 
-SITIO = "https://territorio.uplevelweb.art"
+SITIO = "https://cupidolicita.com"
 CUPIDO = SITIO + "/cupido/"
 PUBLICA = "sb_publishable_kgLRqlc49ebATAS4DWt7Xg_IBtzSoZr"
 CORREO = "qa-agente@qa.cupidolicita.invalid"
@@ -151,10 +151,10 @@ class Pantalla:
         self.ctx = navegador.new_context(viewport={"width": ancho, "height": alto}, locale="es-CL",
                                          timezone_id="America/Santiago")
         guardada = json.dumps({**s, "expires_at": s.get("expires_at") or int(time.time()) + int(s.get("expires_in", 3600))})
-        # La sesion se pone antes de que corra la pagina, en la misma llave que usa el panel.
+        # La sesion se pone antes de que corra la pagina, en la llave propia de CupidoLicita.
         self.ctx.add_init_script(
-            "if (location.host === 'territorio.uplevelweb.art' && !sessionStorage.getItem('qa_puesta')) {"
-            f" localStorage.setItem('territorio_auth', {json.dumps(guardada)}); sessionStorage.setItem('qa_puesta', '1'); }}")
+            "if (location.host === 'cupidolicita.com' && !sessionStorage.getItem('qa_puesta')) {"
+            f" localStorage.setItem('cupidolicita_auth', {json.dumps(guardada)}); sessionStorage.setItem('qa_puesta', '1'); }}")
         self.page = self.ctx.new_page()
         self.errores = []
         self.page.on("pageerror", lambda e: self.errores.append("pageerror: " + str(e)))
@@ -164,7 +164,7 @@ class Pantalla:
         self.ancho = ancho
 
     def _respuesta(self, r):
-        if r.status >= 400 and ("supabase.co" in r.url or "uplevelweb.art" in r.url):
+        if r.status >= 400 and ("supabase.co" in r.url or "cupidolicita.com" in r.url):
             self.errores.append(f"HTTP {r.status} {r.request.method} {r.url.split('?')[0]}")
 
     def ir(self, hash_):
@@ -271,12 +271,68 @@ def pruebas_cache(navegador, s):
             v = p.page.evaluate("window.cupidoQA && cupidoQA.version")
             if version_publicada and v != version_publicada:
                 raise RuntimeError(f"version vieja en el navegador: {v} (publicada {version_publicada})")
-            if not p.page.evaluate("localStorage.getItem('territorio_auth')"):
-                raise RuntimeError("la limpieza borro la sesion del panel")
+            if not p.page.evaluate("localStorage.getItem('cupidolicita_auth')"):
+                raise RuntimeError("la limpieza borro la sesion")
             p.sin_errores()
         finally:
             p.ctx.close()
     limpiar()
+
+    class SinSeguir(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+
+    def pedir_sin_seguir(url):
+        try:
+            r = urllib.request.build_opener(SinSeguir).open(
+                urllib.request.Request(url, headers={"User-Agent": "qa-cupido"}), timeout=30)
+            return r.status, None
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get("Location")
+
+    @prueba("dominio", "cupidolicita.com/cupido/ responde 200 sin redirigir")
+    def directo():
+        st, destino = pedir_sin_seguir(CUPIDO + "?qa=" + CORRIDA)
+        if st != 200:
+            raise RuntimeError(f"respondio {st} -> {destino}")
+    directo()
+
+    @prueba("dominio", "la direccion vieja manda con 301 a cupidolicita.com")
+    def vieja():
+        for url in ("https://territorio.uplevelweb.art/cupido/", "https://www.cupidolicita.com/cupido/", "https://cupidolicita.com/"):
+            st, destino = pedir_sin_seguir(url)
+            if st != 301 or not (destino or "").startswith("https://cupidolicita.com/cupido/"):
+                raise RuntimeError(f"{url} respondio {st} -> {destino}")
+    vieja()
+
+    @prueba("dominio", "entrada propia: enlace de un solo uso abre la app sin otra sesion")
+    def entrada():
+        st, r, _ = servicio("POST", "/auth/v1/admin/generate_link", {"type": "magiclink", "email": CORREO})
+        token_hash = r.get("hashed_token") or (r.get("properties") or {}).get("hashed_token")
+        if st >= 300 or not token_hash:
+            raise RuntimeError(f"generate_link: {st}")
+        ctx = navegador.new_context(viewport={"width": 375, "height": 812}, locale="es-CL")
+        try:
+            pg = ctx.new_page()
+            errores = []
+            pg.on("pageerror", lambda e: errores.append(str(e)))
+            pg.goto(CUPIDO + "#entrar=" + token_hash, wait_until="domcontentloaded")
+            pg.wait_for_function("() => document.getElementById('vista').dataset.listo === 'si'", timeout=20000)
+            if pg.evaluate("location.hash") != "#/":
+                raise RuntimeError("el enlace quedo en la barra: " + pg.evaluate("location.hash"))
+            if not pg.evaluate("localStorage.getItem('cupidolicita_auth')"):
+                raise RuntimeError("no quedo sesion guardada")
+            # Sin sesion se ve el formulario de correo, no un salto a otro dominio.
+            pg.evaluate("localStorage.clear()")
+            pg.goto(CUPIDO + "?qa=sin#/", wait_until="domcontentloaded")
+            pg.wait_for_selector("#correoEntrar", timeout=15000)
+            if not pg.url.startswith(CUPIDO):
+                raise RuntimeError("sin sesion salto a " + pg.url)
+            if errores:
+                raise RuntimeError("; ".join(errores[:3]))
+        finally:
+            ctx.close()
+    entrada()
 
 
 # ---------------------------------------------------------------- 2. flujo completo en el telefono
