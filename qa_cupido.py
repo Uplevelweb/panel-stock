@@ -429,7 +429,10 @@ def pruebas_movil(navegador, s):
         def roi():
             p.ir("#/roi")
             p.page.wait_for_selector(".cifra, main .aviso", timeout=20000)
-            if p.page.locator("img.cupi").count() == 0:
+            # Cupi va como imagen (cifras) o de fondo en la alerta coral (falta el RUT).
+            hay_cupi = p.page.evaluate("""() => !!document.querySelector('main img.cupi') ||
+                [...document.querySelectorAll('main .aviso')].some(a => getComputedStyle(a).backgroundImage.includes('svg'))""")
+            if not hay_cupi:
                 raise RuntimeError("no aparecio Cupi")
             p.sin_desborde()
         roi() or p.captura("roi")
