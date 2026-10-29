@@ -120,7 +120,7 @@ def leer_licitaciones(meses: int = 24):
             continue
         hay = set(pq.read_schema(archivo).names)
         pedidas = [c for c in ["unidad", "codigo", "estado", "n_oferentes", "proveedor", "rut_proveedor",
-                               "seleccionada", "monto_adjudicado", "nombre_unidad", "nombre_organismo"] if c in hay]
+                               "seleccionada", "monto_adjudicado", "nombre_unidad", "nombre_organismo", "comuna", "region"] if c in hay]
         if "unidad" not in pedidas or "codigo" not in pedidas:
             continue
         d = pd.read_parquet(archivo, columns=pedidas)
@@ -137,7 +137,12 @@ def leer_licitaciones(meses: int = 24):
             n["nombre"] = _texto(d["nombre_organismo"])
             if "nombre_unidad" in d:
                 n["nombre"] = (n["nombre"] + " - " + _texto(d["nombre_unidad"])).str.strip(" -")
-            nombres.append(n[n["nombre"] != ""].groupby("unidad", sort=False)["nombre"].last().reset_index())
+            # Comuna y region del organismo: con eso el Mapa de Calor ubica cada oportunidad.
+            for col in ("comuna", "region"):
+                n[col] = _texto(d[col]) if col in d else ""
+            n = n.replace({"nan": ""})
+            n["nombre"] = n["nombre"].str.replace(r"^nan\s*-\s*|\s*-\s*nan$", "", regex=True)
+            nombres.append(n[n["nombre"] != ""].groupby("unidad", sort=False)[["nombre", "comuna", "region"]].last().reset_index())
         if "seleccionada" in d and "proveedor" in d:
             g = d[d["seleccionada"].astype(str).str.strip().str.lower() == "seleccionada"].copy()
             g["prov"] = _texto(g["proveedor"])
@@ -151,7 +156,7 @@ def leer_licitaciones(meses: int = 24):
         gan = (gan.groupby(["unidad", "prov"], sort=False)
                   .agg(ganadas=("codigo", "nunique"), monto=("monto", "sum")).reset_index())
     nom = (pd.concat(nombres, ignore_index=True).groupby("unidad").last().reset_index()
-           if nombres else pd.DataFrame(columns=["unidad", "nombre"]))
+           if nombres else pd.DataFrame(columns=["unidad", "nombre", "comuna", "region"]))
     return lic, gan, nom
 
 
@@ -170,7 +175,12 @@ def armar_perfiles() -> list[dict]:
         if any(ch.isalpha() for ch in str(f.organismo)) and str(f.organismo) != "nan":
             perfil(f.unidad)["nombre"] = str(f.organismo)[:150]
     for f in nom.itertuples(index=False):
-        perfil(f.unidad)["nombre"] = str(f.nombre)[:150]
+        p = perfil(f.unidad)
+        p["nombre"] = str(f.nombre)[:150]
+        if f.comuna:
+            p["datos"]["comuna"] = str(f.comuna)[:80]
+        if f.region:
+            p["datos"]["region"] = str(f.region)[:80]
     for u, t in vias.groupby("unidad", sort=False):
         p = perfil(u)["datos"]
         p["monto_12m"] = int(round(t["monto"].sum()))
