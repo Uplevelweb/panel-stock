@@ -1,0 +1,53 @@
+# Agente de QA de CupidoLicita: prueba la version publicada de
+# territorio.uplevelweb.art/cupido/ con una cuenta de prueba aislada.
+#
+# Sin `schedule:` a proposito, igual que keep-alive: lo dispara el reloj de
+# Supabase (pg_cron, tarea «qa-cupido»), que si es puntual. Tambien se puede
+# correr a mano con «Run workflow».
+#
+# Si alguna prueba falla, el workflow termina en ROJO y GitHub avisa por correo.
+# Las fallas quedan ademas en la tabla qa_eventos, y las capturas de pantalla
+# de lo que fallo se guardan como artefacto «capturas-qa».
+name: Agente QA CupidoLicita
+
+on:
+  workflow_dispatch:
+    inputs:
+      estres:
+        description: "Incluir la prueba de estres"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: qa-cupido
+  cancel-in-progress: false
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            qa_cupido.py
+            qa
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - name: Probar CupidoLicita publicada
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python qa_cupido.py ${{ github.event.inputs.estres == 'false' && '--sin-estres' || '' }}
+      - name: Guardar capturas de lo que fallo
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-qa
+          path: qa_capturas/
+          if-no-files-found: ignore
+          retention-days: 14
