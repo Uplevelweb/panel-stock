@@ -114,13 +114,13 @@ def leer_ordenes(meses: int = 12):
 
 def leer_licitaciones(meses: int = 24):
     corte = (date.today() - timedelta(days=meses * 31)).strftime("%Y-%m")
-    resumen, ganadores = [], []
+    resumen, ganadores, nombres = [], [], []
     for archivo in sorted(BODEGA_LIC.glob("*.parquet")):
         if archivo.stem < corte:
             continue
         hay = set(pq.read_schema(archivo).names)
         pedidas = [c for c in ["unidad", "codigo", "estado", "n_oferentes", "proveedor", "rut_proveedor",
-                               "seleccionada", "monto_adjudicado", "nombre_unidad"] if c in hay]
+                               "seleccionada", "monto_adjudicado", "nombre_unidad", "nombre_organismo"] if c in hay]
         if "unidad" not in pedidas or "codigo" not in pedidas:
             continue
         d = pd.read_parquet(archivo, columns=pedidas)
@@ -132,6 +132,12 @@ def leer_licitaciones(meses: int = 24):
             adjudicada=("adjudicada", "max"), desierta=("desierta", "max"),
             oferentes=("n_oferentes", "max") if "n_oferentes" in d else ("adjudicada", "size")).reset_index()
         resumen.append(por_lic)
+        if "nombre_organismo" in d:
+            n = d[["unidad"]].copy()
+            n["nombre"] = _texto(d["nombre_organismo"])
+            if "nombre_unidad" in d:
+                n["nombre"] = (n["nombre"] + " - " + _texto(d["nombre_unidad"])).str.strip(" -")
+            nombres.append(n[n["nombre"] != ""].groupby("unidad", sort=False)["nombre"].last().reset_index())
         if "seleccionada" in d and "proveedor" in d:
             g = d[d["seleccionada"].astype(str).str.strip().str.lower() == "seleccionada"].copy()
             g["prov"] = _texto(g["proveedor"])
@@ -144,12 +150,14 @@ def leer_licitaciones(meses: int = 24):
     if not gan.empty:
         gan = (gan.groupby(["unidad", "prov"], sort=False)
                   .agg(ganadas=("codigo", "nunique"), monto=("monto", "sum")).reset_index())
-    return lic, gan
+    nom = (pd.concat(nombres, ignore_index=True).groupby("unidad").last().reset_index()
+           if nombres else pd.DataFrame(columns=["unidad", "nombre"]))
+    return lic, gan, nom
 
 
 def armar_perfiles() -> list[dict]:
     vias, rubros, productos, proveedores, nombres = leer_ordenes()
-    lic, gan = leer_licitaciones()
+    lic, gan, nom = leer_licitaciones()
     print(f"  ordenes: {vias['unidad'].nunique()} unidades · licitaciones: {lic['unidad'].nunique()} unidades")
 
     perfiles: dict[str, dict] = {}
@@ -158,8 +166,11 @@ def armar_perfiles() -> list[dict]:
         return perfiles.setdefault(u, {"unidad": u, "nombre": None, "datos": {}})
 
     for f in nombres.itertuples(index=False):
-        if str(f.organismo) not in ("", "nan"):
+        # En las ordenes "organismo" suele venir como codigo: solo sirve si trae letras.
+        if any(ch.isalpha() for ch in str(f.organismo)) and str(f.organismo) != "nan":
             perfil(f.unidad)["nombre"] = str(f.organismo)[:150]
+    for f in nom.itertuples(index=False):
+        perfil(f.unidad)["nombre"] = str(f.nombre)[:150]
     for u, t in vias.groupby("unidad", sort=False):
         p = perfil(u)["datos"]
         p["monto_12m"] = int(round(t["monto"].sum()))
