@@ -647,6 +647,48 @@ def pruebas_seguridad(s, uid, otro):
             raise RuntimeError("qa_salud respondio a una cuenta comun")
     rpc_ajenas()
 
+    @prueba("seguridad", "modo Match: no ve ni decide oportunidades de otra empresa")
+    def match_ajeno():
+        st, r, _ = http("POST", "/rest/v1/rpc/cupido_oportunidades", token=tok, cuerpo={"p_owner": otro})
+        if st == 200 and r.get("ok") is not False:
+            raise RuntimeError("cupido_oportunidades de otra empresa respondio datos")
+        st, r, _ = http("GET", f"/rest/v1/oportunidad_decisiones?select=*&owner_id=eq.{otro}&limit=1", token=tok)
+        if not vacio_o_negado(st, r):
+            raise RuntimeError(f"ve decisiones ajenas: {st}")
+        st, r, _ = http("POST", "/rest/v1/oportunidad_decisiones", token=tok, extra={"Prefer": "return=minimal"},
+                        cuerpo={"owner_id": otro, "codigo": "QA-INTRUSO", "decision": "descartada", "decidido_por": uid})
+        if st < 400:
+            servicio("DELETE", f"/rest/v1/oportunidad_decisiones?owner_id=eq.{otro}&codigo=eq.QA-INTRUSO")
+            raise RuntimeError(f"acepto una decision en otra empresa ({st})")
+    match_ajeno()
+
+    @prueba("seguridad", "modo Match: guarda y borra su propia decision")
+    def match_propio():
+        codigo = "QA-MATCH-" + CORRIDA
+        st, r, _ = http("POST", "/rest/v1/oportunidad_decisiones", token=tok, extra={"Prefer": "return=minimal"},
+                        cuerpo={"owner_id": uid, "codigo": codigo, "decision": "guardada", "decidido_por": uid})
+        if st >= 400:
+            raise RuntimeError(f"no pudo guardar su decision: {st} {r}")
+        st, r, _ = http("DELETE", f"/rest/v1/oportunidad_decisiones?owner_id=eq.{uid}&codigo=eq.{codigo}", token=tok,
+                        extra={"Prefer": "return=representation"})
+        if st >= 400 or not r:
+            servicio("DELETE", f"/rest/v1/oportunidad_decisiones?owner_id=eq.{uid}&codigo=eq.{codigo}")
+            raise RuntimeError(f"no pudo borrar su decision: {st}")
+    match_propio()
+
+    @prueba("espejo", "cupido-espejo: pide sesion, valida el codigo y no raspa compras agiles")
+    def espejo_funcion():
+        st, r, _ = http("POST", "/functions/v1/cupido-espejo", cuerpo={"codigo": "1-1-LE26"})
+        if st != 401:
+            raise RuntimeError(f"sin sesion respondio {st}")
+        st, r, _ = http("POST", "/functions/v1/cupido-espejo", token=tok, cuerpo={"codigo": "<script>"})
+        if st != 400:
+            raise RuntimeError(f"codigo invalido respondio {st}")
+        st, r, _ = http("POST", "/functions/v1/cupido-espejo", token=tok, cuerpo={"codigo": "1-1-COT26"})
+        if st != 200 or r.get("soportado") is not False:
+            raise RuntimeError(f"compra agil: {st} {str(r)[:120]}")
+    espejo_funcion()
+
     @prueba("seguridad", "el estado no se cambia escribiendo directo")
     def estado_directo():
         st, r, _ = http("POST", "/rest/v1/postulaciones", token=tok, extra={"Prefer": "return=representation"},
