@@ -1437,6 +1437,34 @@ def guardar_fichas(fichas: list[dict]) -> None:
         print(f"   no se pudieron guardar las fichas: {_por_que_fallo(error)}")
 
 
+def guardar_agiles(agiles: list[dict]) -> None:
+    """Todas las compras agiles abiertas que se leyeron hoy, para el Mapa de Calor
+    de CupidoLicita. Se borran las ya cerradas. Si falla no pasa nada."""
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    clave = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not (url and clave):
+        return
+    cabeceras = {"apikey": clave, "Authorization": f"Bearer {clave}",
+                 "Content-Type": "application/json",
+                 "Prefer": "resolution=merge-duplicates,return=minimal"}
+    filas = [{"codigo": a["codigo"], "nombre": a["nombre"][:200], "organismo": a["organismo"],
+              "unidad": a["unidad"], "region": a["region"], "cierre": a["cierre"],
+              "monto": a["monto"] or None} for a in agiles if a.get("codigo")]
+    # Una misma compra repetida en dos paginas haria fallar el lote entero.
+    filas = list({f["codigo"]: f for f in filas}.values())
+    try:
+        for i in range(0, len(filas), 500):
+            urllib.request.urlopen(urllib.request.Request(
+                f"{url}/rest/v1/agiles_abiertas", method="POST", headers=cabeceras,
+                data=json.dumps(filas[i:i + 500]).encode("utf-8")), timeout=60).read()
+        urllib.request.urlopen(urllib.request.Request(
+            f"{url}/rest/v1/agiles_abiertas?cierre=lt.{date.today().isoformat()}",
+            method="DELETE", headers=cabeceras), timeout=60).read()
+        print(f"  {len(filas)} compras agiles guardadas para el Mapa de Calor")
+    except Exception as error:
+        print(f"   no se pudieron guardar las compras agiles: {_por_que_fallo(error)}")
+
+
 def _por_que_fallo(error: Exception) -> str:
     """El codigo HTTP y lo que contesto el servidor, no solo el nombre.
 
@@ -1536,6 +1564,9 @@ def licitaciones_abiertas(ticket: str, bolsa_comun: set[str], techo: int = 400) 
             "comuna": str(comprador.get("ComunaUnidad") or ""),
             # Respaldo por si el listado no trajo la fecha de cierre.
             "cierre": str(_campo(d, "Fechas.FechaCierre") or "")[:10],
+            # Para el Mapa de Calor de CupidoLicita. El correo no lo usa: ahi
+            # las licitaciones siguen saliendo sin monto, como siempre.
+            "monto": float(d.get("MontoEstimado") or 0) or None,
         }
         guardadas[codigo] = ficha
         nuevas.append(ficha)
@@ -3543,6 +3574,7 @@ def main():
             ticket, dias=dias_agiles, habiles=args.bienvenidas,
             techo_paginas=250 if args.bienvenidas else 200)
         print("[tiempo] compras agiles: %.0f s" % (time.perf_counter() - marca))
+        guardar_agiles(agi)
 
         universo = lic + agi
 

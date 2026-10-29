@@ -1,0 +1,27 @@
+# Una sola vez (29-10-2026): completa el monto estimado de las licitaciones
+# abiertas guardadas antes de que el radar lo guardara. No envia correos.
+name: Rellenar montos de licitaciones
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: montos
+  cancel-in-progress: false
+
+jobs:
+  montos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Pedir los montos
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          TICKET_MP: ${{ secrets.TICKET_MP }}
+        run: python rellenar_montos.py
