@@ -344,7 +344,7 @@ def pruebas_movil(navegador, s):
     try:
         @prueba(g, "tablero carga")
         def tablero():
-            p.page.goto(CUPIDO + "#/", wait_until="domcontentloaded")
+            p.page.goto(CUPIDO + "#/tablero", wait_until="domcontentloaded")
             p.listo("licitaciones")
             if "Empresa de Prueba QA" not in p.page.inner_text("main"):
                 raise RuntimeError("no entro a la empresa de prueba")
@@ -360,6 +360,26 @@ def pruebas_movil(navegador, s):
             p.page.wait_for_selector(".cifras", timeout=15000)
             p.sin_desborde()
         oportunidades() or p.captura("oportunidades")
+
+        @prueba(g, "radar: la raiz abre el Radar dual con la barra de modulos")
+        def radar():
+            p.ir("#/")
+            p.listo("radar")
+            if p.page.locator("#barraRadar.oculto").count() or p.page.locator(".menu-radar a").count() != 4:
+                raise RuntimeError("no se ve la barra con los 4 modulos")
+            if p.page.locator(".menu-radar a[aria-current='page']").inner_text().strip() != "Radar de Oportunidades":
+                raise RuntimeError("el modulo activo no es el Radar")
+            p.sin_desborde()
+        radar() or p.captura("radar")
+
+        for ruta, vista in [("#/mapa", "mapa"), ("#/convenio", "convenio"), ("#/equipo", "equipo")]:
+            @prueba(g, f"{ruta} carga a 375 px")
+            def modulo():
+                p.ir(ruta)
+                p.listo(vista)
+                p.sin_desborde()
+            modulo() or p.captura("modulo-" + vista)
+        p.ir("#/tablero")
 
         @prueba(g, "crear licitacion desde «+ Nueva»")
         def nueva():
@@ -515,7 +535,8 @@ def pruebas_escritorio(navegador, s):
     try:
         p.page.goto(CUPIDO + "#/", wait_until="domcontentloaded")
         p.listo()
-        for ruta, vista in [("#/", "licitaciones"), ("#/chat", "chat"), ("#/boveda", "boveda"), ("#/roi", "roi")]:
+        for ruta, vista in [("#/", "radar"), ("#/tablero", "licitaciones"), ("#/mapa", "mapa"), ("#/convenio", "convenio"),
+                            ("#/equipo", "equipo"), ("#/chat", "chat"), ("#/boveda", "boveda"), ("#/roi", "roi")]:
             @prueba("escritorio", f"{ruta} carga a 1280 px")
             def cargar():
                 antes = len(p.errores)
