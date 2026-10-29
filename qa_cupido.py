@@ -353,6 +353,14 @@ def pruebas_movil(navegador, s):
             p.captura("tablero")
             return
 
+        @prueba(g, "oportunidades: abre por defecto con el radar del dia")
+        def oportunidades():
+            if p.page.locator(".pestanas button[aria-pressed='true']").inner_text().strip() != "Oportunidades":
+                raise RuntimeError("el tablero no abre en Oportunidades")
+            p.page.wait_for_selector(".cifras", timeout=15000)
+            p.sin_desborde()
+        oportunidades() or p.captura("oportunidades")
+
         @prueba(g, "crear licitacion desde «+ Nueva»")
         def nueva():
             p.boton("+ Nueva").click()
